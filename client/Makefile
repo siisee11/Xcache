@@ -2,10 +2,7 @@ CONFIG_MODULE_SIG=n
 TARGET_MODULE := pmdfc_client
 #obj-m := $(TARGET_MODULE).o
 
-obj-m := pmdfc_client.o
-#obj-m += pmdfc_server.o
 pmdfc_client-objs := sync_pmdfc.o tcp.o bloom_filter.o nodemanager.o
-#pmdfc_server-objs := pm_server.o tcp.o nodemanager.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD     := $(shell pwd)

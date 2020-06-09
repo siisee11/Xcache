@@ -40,6 +40,7 @@
 #define PMNET_MSG_SUCCESS	(4)
 #define PMNET_MSG_GETPAGE 	(5)
 #define PMNET_MSG_SENDPAGE 	(6)
+#define PMNET_MSG_NOTEXIST	(7)
 
 #ifndef PAGE_SIZE
 # define PAGE_SIZE 4096
@@ -80,9 +81,9 @@ static unsigned int inet_addr(const char *str)
 }
 
 
-int pmnet_send_message(u32 msg_type, u32 key, void *data, u32 len,
+int pmnet_send_message(u32 msg_type, u32 key, u32, void *data, u32 len,
 		       u8 target_node, int *status);
-int pmnet_send_message_vec(u32 msg_type, u32 key, struct kvec *vec,
+int pmnet_send_message_vec(u32 msg_type, u32 key, u32, struct kvec *vec,
 			   size_t veclen, u8 target_node, int *status);
 int pmnet_recv_message(u32 msg_type, u32 key, void *data, u32 len,
 		       u8 target_node, int *status);

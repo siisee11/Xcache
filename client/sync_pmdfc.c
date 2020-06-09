@@ -58,12 +58,9 @@ static void pmdfc_cleancache_put_page(int pool_id,
 				(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 		coid = oid;
 		tmem_oid_print(&coid);
-
+		
+		/* get page virtual address */
 		pg_from = page_address(page);
-		pg_to = page_address(page_pool);
-
-		/* TODO: sizeof(struct page) or 4096 */
-		memcpy(pg_to, pg_from, PAGE_SIZE);
 
 		/* get page from server */
 		memset(&reply, 0, 1024);
@@ -72,7 +69,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		/* Send page to server */
 
 		pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
-		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], pg_from, PAGE_SIZE,
+		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, pg_from, PAGE_SIZE,
 		       0, &status);
 
 		pr_info("%s: pmnet_recv_message start\n", __func__);
@@ -134,23 +131,19 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		memset(&reply, 0, 1024);
 		strcat(reply, "GETPAGE"); 
 
-		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], &reply, sizeof(reply),
+		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, &reply, sizeof(reply),
 		       0, &status);
 
 		ret = pmnet_recv_message(PMNET_MSG_SENDPAGE, 0, &response, PAGE_SIZE,
 			0, &status);
 
-//		to_va = kmap_atomic(page);
-//		from_va = kmap_atomic(page_pool);
+		if (status != 0) {
+			/* get page failed */
+			goto out;
+		}
+		/* copy page content from message */
 		to_va = page_address(page);
-
-		// TODO: copy sizeof(struct page) or 4096 
 		memcpy(to_va, response, PAGE_SIZE);
-//		memcpy(to_va, from_va, sizeof(struct page));
-//		memcpy(to_va, from_va, PAGE_SIZE);
-
-//		kunmap_atomic(to_va);
-//		kunmap_atomic(from_va);
 
 		printk(KERN_INFO "pmdfc: GET PAGE success\n");
 
@@ -165,7 +158,17 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index)
 {
-	//	printk(KERN_INFO "pmdfc: FLUSH PAGE: pool_id: %d\n", pool_id);
+	struct tmem_oid oid = *(struct tmem_oid *)&key;
+	char response[1024];
+
+	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
+
+	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, &reply, sizeof(reply),
+		   0, &status);
+
+	pmnet_recv_message(PMNET_MSG_SUCCESS, 0, &response, 1024,
+		0, &status);
 }
 
 static void pmdfc_cleancache_flush_inode(int pool_id,
@@ -279,3 +282,4 @@ module_init(pmdfc_init);
 module_exit(pmdfc_exit);
 
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("NAM JAEYOUN");

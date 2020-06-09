@@ -29,17 +29,17 @@ struct pmnet_sock_container {
 	struct work_struct	sc_rx_work;
 	struct work_struct	sc_connect_work;
 	/* shutdown work is triggered in two ways.  the simple way is
-	 ** for a code path calls ensure_shutdown which gets a lock, removes
-	 ** the sc from the nn, and queues the work.  in this case the
-	 ** work is single-shot.  the work is also queued from a sock
-	 ** callback, though, and in this case the work will find the sc
-	 ** still on the nn and will call ensure_shutdown itself.. this
-	 ** ends up triggering the shutdown work again, though nothing
-	 ** will be done in that second iteration.  so work queue teardown
-	 ** has to be careful to remove the sc from the nn before waiting
-	 ** on the work queue so that the shutdown work doesn't remove the
-	 ** sc and rearm itself.
-	 **/
+	 * for a code path calls ensure_shutdown which gets a lock, removes
+	 * the sc from the nn, and queues the work.  in this case the
+	 * work is single-shot.  the work is also queued from a sock
+	 * callback, though, and in this case the work will find the sc
+	 * still on the nn and will call ensure_shutdown itself.. this
+	 * ends up triggering the shutdown work again, though nothing
+	 * will be done in that second iteration.  so work queue teardown
+	 * has to be careful to remove the sc from the nn before waiting
+	 * on the work queue so that the shutdown work doesn't remove the
+	 * sc and rearm itself.
+	 */
 	struct work_struct	sc_shutdown_work;
 
 	struct timer_list	sc_idle_timeout;
@@ -99,7 +99,8 @@ struct pmnet_node {
 	 * itself if a connect attempt fails and so can be self-arming.
 	 * shutdown is careful to first mark the nn such that no connects will
 	 * be attempted before canceling delayed connect work and flushing the
-	 * queue. */
+	 * queue. 
+	 */
 	struct delayed_work		nn_connect_work;
 	unsigned long			nn_last_connect_attempt;
 

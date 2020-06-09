@@ -462,7 +462,7 @@ static void pmnet_sendpage(struct pmnet_sock_container *sc,
 	}
 }
 
-static void pmnet_init_msg(struct pmnet_msg *msg, u16 data_len, u16 msg_type, u32 key)
+static void pmnet_init_msg(struct pmnet_msg *msg, u16 data_len, u16 msg_type, u32 key, u32 index)
 {
 	memset(msg, 0, sizeof(struct pmnet_msg));
 	msg->magic = cpu_to_be16(PMNET_MSG_MAGIC);
@@ -698,7 +698,7 @@ int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
 		goto out;
 	}
 
-	*status = 0;
+	*status = -1;
 
 	sc = nn->nn_sc;
 	if (sc == NULL)
@@ -752,6 +752,8 @@ read_again:
 		{
 			pr_info("recv_message: msg_type matched\n");
 			*status = 1;
+		} else {
+			pr_info("recv_message: msg_type not matched\n");
 		}
 
 		if (ret < 0)
@@ -828,7 +830,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			memset(&reply, 0, 1024);
 			strcat(reply, "HOLASI"); 
 
-			ret = pmnet_send_message(PMNET_MSG_HOLASI, 0, &reply, sizeof(reply),
+			ret = pmnet_send_message(PMNET_MSG_HOLASI, 0, 0, &reply, sizeof(reply),
 				1, &status);
 			pr_info("SERVER-->CLIENT: PMNET_MSG_HOLASI(%d)\n", ret);
 			break;
@@ -848,7 +850,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			pr_info("CLIENT-->SERVER: PMNET_MSG_GETPAGE\n");
 
 			data = page_address(sc->sc_clean_page);
-			ret = pmnet_send_message(PMNET_MSG_SENDPAGE, 0, data, sizeof(struct page),
+			ret = pmnet_send_message(PMNET_MSG_SENDPAGE, 0, 0, data, sizeof(struct page),
 				1, &status);
 			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			break;
@@ -1015,7 +1017,7 @@ static void pmnet_sc_connect_completed(struct work_struct *work)
 	strcat(reply, "HOLA"); 
 
 	pr_info("CLIENT-->SERVER: PMNET_MSG_HOLA\n");
-	tmp_ret = pmnet_send_message(PMNET_MSG_HOLA, 0, &reply, sizeof(reply),
+	tmp_ret = pmnet_send_message(PMNET_MSG_HOLA, 0, 0, &reply, sizeof(reply),
 		0, &status);
 	if (tmp_ret < 0)
 		pr_info("error: pmnet_send_message\n");
