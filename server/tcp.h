@@ -40,6 +40,7 @@
 #define PMNET_MSG_SUCCESS 	4
 #define PMNET_MSG_GETPAGE 	5
 #define PMNET_MSG_SENDPAGE 	6
+#define PMNET_MSG_NOTEXIST 	7
 
 #ifndef PAGE_SIZE
 # define PAGE_SIZE 4096

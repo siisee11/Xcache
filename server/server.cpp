@@ -143,39 +143,55 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 
 		case PMNET_MSG_PUTPAGE: {
 			printf("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
+			/* TODO: 4byte key and index should be change on demand */
 			key = ntohl(hdr->key);
 			index = ntohl(hdr->index);
 			printf("GOT PAGE with key=%lu, index=%lu\n", key, index);
+			/* derive big key (8byte) */
 			key = key << 32;
 			key |= index;
 			printf("SEND PAGE with long key=%llu\n", key);
-			hashTable->Insert(key, values[9]);
+
+			/* copy page from message to local memory */
 			from_va = msg_in->page;
 			memcpy(saved_page, from_va, PAGE_SIZE);
+
+			/* Insert received page into hash */
+			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
 			memset(&reply, 0, 1024);
 			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
 				reply, 1024);
 			printf("SERVER-->CLIENT: PMNET_MSG_SUCCESS(%d)\n", ret);
-			auto value = hashTable->Get(key);
-			printf("HASH PUT: value =%d\n", value);
+			printf("<Inserted %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
 			break;
 			}
 
 		case PMNET_MSG_GETPAGE:{
 			printf("CLIENT-->SERVER: PMNET_MSG_GETPAGE\n");
+
+			/* key */
 			key = ntohl(hdr->key);
 			index = ntohl(hdr->index);
 			printf("SEND PAGE with key=%lu, index=%lu\n", key, index);
 			key = key << 32;
 			key |= index;
 			printf("SEND PAGE with long key=%llu\n", key);
-			auto value = hashTable->Get(key);
-			printf("HASH GET: value =%d\n", value);
-			ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
-				saved_page, PAGE_SIZE);
-			printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
-			break;
+
+			printf("<Got %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
+			ret = hashTable->load_page(hashTable->Get(key), (char *)saved_page, 4096);
+
+			if (ret != 0) {
+				/* page not exists */
+				memset(&reply, 0, 1024);
+				ret = pmnet_send_message(sockfd, PMNET_MSG_NOTEXIST, 0, 
+					reply, 1024);
+			} else {
+				/* page exists */
+				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
+					saved_page, PAGE_SIZE);
+				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
+			break;
 
 		case PMNET_MSG_SENDPAGE:
 			printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE\n");

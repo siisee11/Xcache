@@ -22,13 +22,19 @@ constexpr size_t kSegmentSize = (1 << kSegmentBits) * 16 * 4;
 constexpr size_t kNumPairPerCacheLine = 4;
 constexpr size_t kNumCacheLine = 4;
 
+constexpr size_t page_size = 4096;
 POBJ_LAYOUT_BEGIN(CCEH_LAYOUT);
 POBJ_LAYOUT_ROOT(CCEH_LAYOUT, struct CCEH_pmem);
 POBJ_LAYOUT_TOID(CCEH_LAYOUT, struct Directory_pmem);
 POBJ_LAYOUT_TOID(CCEH_LAYOUT, struct Segment_pmem);
 POBJ_LAYOUT_TOID(CCEH_LAYOUT, TOID(struct Segment_pmem));
+POBJ_LAYOUT_TOID(CCEH_LAYOUT, struct page_pmem);
 POBJ_LAYOUT_TOID(CCEH_LAYOUT, Pair);
 POBJ_LAYOUT_END(CCEH_LAYOUT);
+
+struct page_pmem{
+	char data[page_size];
+};
 
 struct Segment_pmem{
 	size_t pair_size;
@@ -64,6 +70,7 @@ struct Segment {
     return ret;
   }
 
+  
   int Insert(Key_t&, Value_t, size_t, size_t);
   void Insert4split(Key_t&, Value_t, size_t);
   bool Put(Key_t&, Value_t, size_t);
@@ -220,34 +227,58 @@ class CCEH {
 */
     TOID(struct CCEH_pmem) cceh_pmem;
     TOID(struct Directory_pmem) dir_pmem;
+    PMEMoid oid;
     PMEMobjpool *pop;
     Directory* dir;
     size_t global_depth;
-    int init_pmem(const char* path){
 
-	if(access(path, F_OK) != 0){
-          pop = pmemobj_create(path, LAYOUT, PMEMOBJ_MIN_POOL*10, 0666);
-          if(pop==NULL){
-   		perror(path);
-   		exit(-1);
-          }
-  	  cceh_pmem = POBJ_ROOT(pop, struct CCEH_pmem);
-	  POBJ_ALLOC(pop, &dir_pmem, struct Directory_pmem, sizeof(struct Directory_pmem), NULL,NULL);
-	  D_RW(cceh_pmem)->directories = dir_pmem;
-	  return 1;
-	}else{
-   	  pop = pmemobj_open(path, LAYOUT);
-	  if(pop==NULL){
-	    perror(path);
-	    exit(-1);	
-	  }
-	  cceh_pmem = POBJ_ROOT(pop, struct CCEH_pmem);
-	  global_depth = D_RO(cceh_pmem)->global_depth;
-	  dir_pmem = D_RO(cceh_pmem)->directories;
-          dir = new Directory();
-	  dir->load_pmem(pop, dir_pmem);
-	  return 0;
-	}
+
+    TOID(struct page_pmem) save_page(char* data){
+	TOID(struct page_pmem) tmp;
+	POBJ_ALLOC(pop, &tmp, struct page_pmem, sizeof(struct page_pmem), NULL,NULL);
+		for(int i=0;i<page_size; i++)
+			D_RW(tmp)->data[i] = data[i];
+		return tmp;
+    }
+    int load_page(uint64_t off, char* dst, size_t byte){
+		if (off==NONE) {
+			return -1;
+		}
+		TOID(struct page_pmem) tmp;
+		tmp.oid = oid;
+		tmp.oid.off = off;
+		for(size_t i=0;i<byte;i++)
+			dst[i] = D_RO(tmp)->data[i];
+
+		return 0;
+    }
+
+	int init_pmem(const char* path){
+		if(access(path, F_OK) != 0){
+			pop = pmemobj_create(path, LAYOUT, PMEMOBJ_MIN_POOL*10, 0666);
+			if(pop==NULL){
+				perror(path);
+				exit(-1);
+			}
+			cceh_pmem = POBJ_ROOT(pop, struct CCEH_pmem);
+			POBJ_ALLOC(pop, &dir_pmem, struct Directory_pmem, sizeof(struct Directory_pmem), NULL,NULL);
+			D_RW(cceh_pmem)->directories = dir_pmem;
+			oid = dir_pmem.oid;
+			return 1;
+		}else{
+			pop = pmemobj_open(path, LAYOUT);
+			if(pop==NULL){
+				perror(path);
+				exit(-1);	
+			}
+			cceh_pmem = POBJ_ROOT(pop, struct CCEH_pmem);
+			global_depth = D_RO(cceh_pmem)->global_depth;
+			dir_pmem = D_RO(cceh_pmem)->directories;
+			dir = new Directory();
+			dir->load_pmem(pop, dir_pmem);
+			oid = dir_pmem.oid;
+			return 0;
+		}
     }
 
     void constructor(size_t global_depth_){
