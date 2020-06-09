@@ -93,7 +93,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 {
 	int ret = 0;
 	int status;
-	char reply[1024];
+	char reply[4096];
 	void *data;
 	size_t datalen;
 	void *to_va, *from_va;
@@ -182,9 +182,9 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 
 			if (ret != 0) {
 				/* page not exists */
-				memset(&reply, 0, 1024);
+				memset(&reply, 0, PAGE_SIZE);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_NOTEXIST, 0, 
-					reply, 1024);
+					reply, PAGE_SIZE);
 			} else {
 				/* page exists */
 				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
