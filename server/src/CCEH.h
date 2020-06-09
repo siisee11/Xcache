@@ -56,158 +56,158 @@ struct CCEH_pmem{
 	TOID(struct Directory_pmem) directories;	
 };
 struct Segment {
-  static const size_t kNumSlot = kSegmentSize/sizeof(Pair);
+	static const size_t kNumSlot = kSegmentSize/sizeof(Pair);
 
-  void* operator new(size_t size) {
-    void* ret;
-    posix_memalign(&ret, 64, size);
-    return ret;
-  }
+	void* operator new(size_t size) {
+		void* ret;
+		posix_memalign(&ret, 64, size);
+		return ret;
+	}
 
-  void* operator new[](size_t size) {
-    void* ret;
-    posix_memalign(&ret, 64, size);
-    return ret;
-  }
-
-  
-  int Insert(Key_t&, Value_t, size_t, size_t);
-  void Insert4split(Key_t&, Value_t, size_t);
-  bool Put(Key_t&, Value_t, size_t);
-  int Delete(Key_t& key, size_t loc, size_t key_hash);
-  Segment** Split(PMEMobjpool* pop);
-
-//  Pair _[kNumSlot];
-  size_t local_depth;
-  int64_t sema = 0;
-  size_t pattern = 0;
-  
-  TOID(struct Segment_pmem) seg_pmem;
-  TOID(Pair) pairs;
+	void* operator new[](size_t size) {
+		void* ret;
+		posix_memalign(&ret, 64, size);
+		return ret;
+	}
 
 
-  
-  Segment(PMEMobjpool *pop, size_t depth)
-  :local_depth{depth}
-  {
-    POBJ_ALLOC(pop, &seg_pmem, struct Segment_pmem, sizeof(struct Segment_pmem),NULL, NULL);
-    D_RW(seg_pmem)->local_depth = local_depth;
-    D_RW(seg_pmem)->sema = sema;
-    D_RW(seg_pmem)->pattern = pattern;
-    D_RW(seg_pmem)->pair_size = kNumSlot;
+	int Insert(Key_t&, Value_t, size_t, size_t);
+	void Insert4split(Key_t&, Value_t, size_t);
+	bool Put(Key_t&, Value_t, size_t);
+	int Delete(Key_t& key, size_t loc, size_t key_hash);
+	Segment** Split(PMEMobjpool* pop);
 
-    POBJ_ALLOC(pop, &pairs, Pair, sizeof(Pair)*kNumSlot, NULL, NULL);
-    D_RW(seg_pmem)->pairs = pairs; 
-    for(int i=0;i<kNumSlot;i++){
-	D_RW(pairs)[i].key = -1;
-    }
-  }
-  Segment(){
-  }
-  void set_pattern_pmem(size_t pattern){
-    D_RW(seg_pmem)->pattern = pattern;
-  }
-  Key_t get_key(size_t y){
-    return D_RO(D_RO(seg_pmem)->pairs)[y].key;
-  }
-  Value_t get_value(size_t y){
-    return D_RO(D_RO(seg_pmem)->pairs)[y].value;
-  }
-  void pair_insert_pmem(size_t y, Key_t key, Value_t value){
-	D_RW(D_RW(seg_pmem)->pairs)[y].key = key;	
-	D_RW(D_RW(seg_pmem)->pairs)[y].value = value;
-  }
-  void load_pmem(PMEMobjpool* pop,TOID(struct Segment_pmem)  seg_pmem_){
-	seg_pmem = seg_pmem_;
-	pairs = D_RO(seg_pmem)->pairs;
-	sema = D_RO(seg_pmem)->sema;
-	pattern = D_RO(seg_pmem)->pattern;
-	local_depth = D_RO(seg_pmem)->local_depth;
-//	kNumSlot = D_RO(seg_pmem)->pair_size;
-	
-  }
-  ~Segment(void) {
-  }
-  size_t numElem(void); 
+	//  Pair _[kNumSlot];
+	size_t local_depth;
+	int64_t sema = 0;
+	size_t pattern = 0;
+
+	TOID(struct Segment_pmem) seg_pmem;
+	TOID(Pair) pairs;
+
+
+	  
+	Segment(PMEMobjpool *pop, size_t depth)
+	:local_depth{depth}
+	{
+		POBJ_ALLOC(pop, &seg_pmem, struct Segment_pmem, sizeof(struct Segment_pmem),NULL, NULL);
+		D_RW(seg_pmem)->local_depth = local_depth;
+		D_RW(seg_pmem)->sema = sema;
+		D_RW(seg_pmem)->pattern = pattern;
+		D_RW(seg_pmem)->pair_size = kNumSlot;
+
+		POBJ_ALLOC(pop, &pairs, Pair, sizeof(Pair)*kNumSlot, NULL, NULL);
+		D_RW(seg_pmem)->pairs = pairs; 
+		for(int i=0;i<kNumSlot;i++){
+		D_RW(pairs)[i].key = -1;
+		}
+	}
+	Segment(){
+	}
+	void set_pattern_pmem(size_t pattern){
+		D_RW(seg_pmem)->pattern = pattern;
+	}
+	Key_t get_key(size_t y){
+		return D_RO(D_RO(seg_pmem)->pairs)[y].key;
+	}
+	Value_t get_value(size_t y){
+		return D_RO(D_RO(seg_pmem)->pairs)[y].value;
+	}
+	void pair_insert_pmem(size_t y, Key_t key, Value_t value){
+		D_RW(D_RW(seg_pmem)->pairs)[y].key = key;	
+		D_RW(D_RW(seg_pmem)->pairs)[y].value = value;
+	}
+	void load_pmem(PMEMobjpool* pop,TOID(struct Segment_pmem)  seg_pmem_){
+		seg_pmem = seg_pmem_;
+		pairs = D_RO(seg_pmem)->pairs;
+		sema = D_RO(seg_pmem)->sema;
+		pattern = D_RO(seg_pmem)->pattern;
+		local_depth = D_RO(seg_pmem)->local_depth;
+		//	kNumSlot = D_RO(seg_pmem)->pair_size;
+
+	}
+	~Segment(void) {
+	}
+	size_t numElem(void); 
 };
 
 struct Directory {
 public:
-  static const size_t kDefaultDepth = 10;
-  Segment** _;
-  size_t capacity;
-  size_t depth;
-  int sema = 0 ;
-  bool lock;
-  PMEMobjpool *pop;
-  TOID(struct Directory_pmem) dir_pmem;
-  TOID_ARRAY(TOID(struct Segment_pmem)) segments;
-  
-  Directory(PMEMobjpool *pop_, size_t depth_, TOID(struct Directory_pmem) dir_pmem_){
-    dir_pmem = dir_pmem_;
-    capacity = pow(2,depth_);
-    depth = depth_;
-    sema = 0;
-    lock = false;
-    pop=pop_;
-    _ = new Segment*[capacity];
-    D_RW(dir_pmem)->depth = depth;
-    D_RW(dir_pmem)->capacity = capacity;
-    D_RW(dir_pmem)->lock = lock;
-    D_RW(dir_pmem)->sema = sema;
+	static const size_t kDefaultDepth = 10;
+	Segment** _;
+	size_t capacity;
+	size_t depth;
+	int sema = 0 ;
+	bool lock;
+	PMEMobjpool *pop;
+	TOID(struct Directory_pmem) dir_pmem;
+	TOID_ARRAY(TOID(struct Segment_pmem)) segments;
 
-    POBJ_ALLOC(pop, &segments, TOID(struct Segment_pmem), sizeof(TOID(struct Segment_pmem))*capacity, NULL,NULL);  
-    D_RW(dir_pmem)->segments = segments;
-  }
-   Directory(){
+	Directory(PMEMobjpool *pop_, size_t depth_, TOID(struct Directory_pmem) dir_pmem_){
+	dir_pmem = dir_pmem_;
+	capacity = pow(2,depth_);
+	depth = depth_;
+	sema = 0;
+	lock = false;
+	pop=pop_;
+	_ = new Segment*[capacity];
+	D_RW(dir_pmem)->depth = depth;
+	D_RW(dir_pmem)->capacity = capacity;
+	D_RW(dir_pmem)->lock = lock;
+	D_RW(dir_pmem)->sema = sema;
 
-   }
-  ~Directory(void){
-
-  }
-  void doubling_pmem(){
-    D_RW(dir_pmem)->capacity = capacity;
-    printf("Doubling to %d\n",capacity); fflush(stdout);
-    POBJ_REALLOC(pop, &segments, TOID(struct Segment_pmem),capacity*sizeof(TOID(struct Segment_pmem)));
-    D_RW(dir_pmem)->segments = segments;
-    for(size_t i=capacity/2; i<capacity; i++){
-	D_RW(D_RW(dir_pmem)->segments)[i] = D_RO(D_RO(dir_pmem)->segments)[i-capacity/2];
-    }
-  } 
-  void segment_bind_pmem(size_t dir_index, struct Segment* s){
-    D_RW(D_RW(dir_pmem)->segments)[dir_index] = s->seg_pmem;
-  }
-  void load_pmem(PMEMobjpool* pop_, TOID(struct Directory_pmem) dir_pmem_){
-    pop = pop_;
-    dir_pmem = dir_pmem_;
-    capacity = D_RO(dir_pmem)->capacity;
-    sema = D_RO(dir_pmem)->sema;
-    lock = D_RO(dir_pmem)->lock;
-    depth = D_RO(dir_pmem)->depth;
-    _ = new Segment*[capacity];
-    segments = D_RO(dir_pmem)->segments;
-    for(size_t i=0;i<capacity;i++){
-	TOID(struct Segment_pmem) seg_pmem = D_RO(segments)[i];
-        if(i == D_RO(seg_pmem)->pattern){
-	  _[i] = new Segment();
-	  _[i]->load_pmem(pop, seg_pmem);
-	}else{
-	  _[i] = _[D_RO(seg_pmem)->pattern];
+	POBJ_ALLOC(pop, &segments, TOID(struct Segment_pmem), sizeof(TOID(struct Segment_pmem))*capacity, NULL,NULL);  
+		D_RW(dir_pmem)->segments = segments;
 	}
-    }
-  } 
-  bool Acquire(void) {
-    bool unlocked = false;
-    return CAS(&lock, &unlocked, true);
-  }
+	Directory(){
 
-  bool Release(void) {
-    bool locked = true;
-    return CAS(&lock, &locked, false);
-  }
-  
-  void SanityCheck(void*);
-  void LSBUpdate(int, int, int, int, Segment**);
+	}
+	~Directory(void){
+
+	}
+	void doubling_pmem(){
+		D_RW(dir_pmem)->capacity = capacity;
+		printf("Doubling to %d\n",capacity); fflush(stdout);
+		POBJ_REALLOC(pop, &segments, TOID(struct Segment_pmem),capacity*sizeof(TOID(struct Segment_pmem)));
+		D_RW(dir_pmem)->segments = segments;
+		for(size_t i=capacity/2; i<capacity; i++){
+			D_RW(D_RW(dir_pmem)->segments)[i] = D_RO(D_RO(dir_pmem)->segments)[i-capacity/2];
+		}
+	} 
+	void segment_bind_pmem(size_t dir_index, struct Segment* s){
+		D_RW(D_RW(dir_pmem)->segments)[dir_index] = s->seg_pmem;
+	}
+	void load_pmem(PMEMobjpool* pop_, TOID(struct Directory_pmem) dir_pmem_){
+		pop = pop_;
+		dir_pmem = dir_pmem_;
+		capacity = D_RO(dir_pmem)->capacity;
+		sema = D_RO(dir_pmem)->sema;
+		lock = D_RO(dir_pmem)->lock;
+		depth = D_RO(dir_pmem)->depth;
+		_ = new Segment*[capacity];
+		segments = D_RO(dir_pmem)->segments;
+		for(size_t i=0;i<capacity;i++){
+		TOID(struct Segment_pmem) seg_pmem = D_RO(segments)[i];
+			if(i == D_RO(seg_pmem)->pattern){
+				_[i] = new Segment();
+				_[i]->load_pmem(pop, seg_pmem);
+			}else{
+				_[i] = _[D_RO(seg_pmem)->pattern];
+			}
+		}
+	} 
+	bool Acquire(void) {
+		bool unlocked = false;
+		return CAS(&lock, &unlocked, true);
+	}
+
+	bool Release(void) {
+		bool locked = true;
+		return CAS(&lock, &locked, false);
+	}
+
+	void SanityCheck(void*);
+	void LSBUpdate(int, int, int, int, Segment**);
 };
 
 class CCEH {
@@ -234,12 +234,13 @@ class CCEH {
 
 
     TOID(struct page_pmem) save_page(char* data){
-	TOID(struct page_pmem) tmp;
-	POBJ_ALLOC(pop, &tmp, struct page_pmem, sizeof(struct page_pmem), NULL,NULL);
+		TOID(struct page_pmem) tmp;
+		POBJ_ALLOC(pop, &tmp, struct page_pmem, sizeof(struct page_pmem), NULL,NULL);
 		for(int i=0;i<page_size; i++)
 			D_RW(tmp)->data[i] = data[i];
 		return tmp;
     }
+
     int load_page(uint64_t off, char* dst, size_t byte){
 		if (off==NONE) {
 			return -1;
@@ -282,17 +283,19 @@ class CCEH {
     }
 
     void constructor(size_t global_depth_){
-	global_depth = global_depth_;
-	D_RW(cceh_pmem)->global_depth = global_depth;
-	dir = new Directory(pop,global_depth, dir_pmem);
+		global_depth = global_depth_;
+		D_RW(cceh_pmem)->global_depth = global_depth;
+		dir = new Directory(pop,global_depth, dir_pmem);
     }
+
     void set_global_depth_pmem(size_t global_depth){
-	D_RW(cceh_pmem)->global_depth = global_depth;
+		D_RW(cceh_pmem)->global_depth = global_depth;
     }
+
     void* operator new(size_t size) {
-      void *ret;
-      posix_memalign(&ret, 64, size);
-      return ret;
+		void *ret;
+		posix_memalign(&ret, 64, size);
+		return ret;
     } 
 };
 

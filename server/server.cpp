@@ -29,8 +29,6 @@ struct pmnet_msg_in {
 };
 
 struct pmnet_msg_in *msg_in;
-void *saved_page;
-
 
 /* CCEH hashTable */
 CCEH* hashTable;
@@ -38,6 +36,19 @@ CCEH* hashTable;
 /* XXX: example input, delete it after testing */
 uint64_t* keys = new uint64_t[1000];
 uint64_t* values = new uint64_t[1000];
+
+
+static long pmnet_long_key(long key, long index)
+{
+	uint64_t longkey;
+
+	/* derive long key (8byte) */
+	longkey = key << 32;
+	longkey |= index;
+
+	return longkey;
+}
+
 
 static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len, 
 		uint16_t msg_type, uint32_t key)
@@ -99,6 +110,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 	void *to_va, *from_va;
 	uint64_t key;
 	uint64_t index;
+	void *saved_page;
 
 	printf("%s: processing message\n", __func__);
 
@@ -134,27 +146,21 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 
 			printf("SERVER-->CLIENT: PMNET_MSG_HOLASI(%d)\n", ret);
 			break;
-			}
+		}
 
 		case PMNET_MSG_HOLASI: {
 			printf("SERVER-->CLIENT: PMNET_MSG_HOLASI\n");
 			break;
-			}
+		}
 
 		case PMNET_MSG_PUTPAGE: {
 			printf("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 			/* TODO: 4byte key and index should be change on demand */
-			key = ntohl(hdr->key);
-			index = ntohl(hdr->index);
-			printf("GOT PAGE with key=%lu, index=%lu\n", key, index);
-			/* derive big key (8byte) */
-			key = key << 32;
-			key |= index;
-			printf("SEND PAGE with long key=%llu\n", key);
+			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
+			printf("SEND PAGE with long key=%lx\n", key);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
-			memcpy(saved_page, from_va, PAGE_SIZE);
 
 			/* Insert received page into hash */
 			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
@@ -164,20 +170,19 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 			printf("SERVER-->CLIENT: PMNET_MSG_SUCCESS(%d)\n", ret);
 			printf("<Inserted %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
 			break;
-			}
+		}
 
 		case PMNET_MSG_GETPAGE:{
 			printf("CLIENT-->SERVER: PMNET_MSG_GETPAGE\n");
 
-			/* key */
-			key = ntohl(hdr->key);
-			index = ntohl(hdr->index);
-			printf("SEND PAGE with key=%lu, index=%lu\n", key, index);
-			key = key << 32;
-			key |= index;
-			printf("SEND PAGE with long key=%llu\n", key);
+			/* alloc new page pointer to send */
+			saved_page = calloc(1, PAGE_SIZE);
 
-			printf("<Got %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
+			/* key */
+			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
+			printf("SEND PAGE with long key=%lx\n", key);
+
+			/* Get page from Hash and copy to saved_page */
 			ret = hashTable->load_page(hashTable->Get(key), (char *)saved_page, 4096);
 
 			if (ret != 0) {
@@ -187,15 +192,30 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 					reply, PAGE_SIZE);
 			} else {
 				/* page exists */
+				printf("<Retrived %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
 				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
 					saved_page, PAGE_SIZE);
 				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
 			break;
+		}
 
 		case PMNET_MSG_SENDPAGE:
 			printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE\n");
 			break;
+
+		case PMNET_MSG_INVALIDATE: {
+			printf("SERVER-->CLIENT: PMNET_MSG_INVALIDATE\n");
+
+			/* key */
+			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
+			printf("INVALIDATE PAGE with long key=%llx\n", key);
+
+			/* delete key */
+			hashTable->Delete(key);
+
+			break;
+		}
 
 		default:
 			break;
@@ -219,11 +239,7 @@ static int pmnet_advance_rx(int sockfd)
 	if (msg_in->page_off < sizeof(struct pmnet_msg)) {
 		data = msg_in->hdr + msg_in->page_off;
 		datalen = sizeof(struct pmnet_msg) - msg_in->page_off;
-		printf("first read datalen=%zu\n", datalen);
 		ret = read(sockfd, data, datalen);
-
-		/* return value 0 means socket disconnected */
-		printf("read ret=%d\n", ret);
 
 		if (ret > 0) {
 			msg_in->page_off += ret;
@@ -314,8 +330,6 @@ void init_network_server(int *sockfd, int *connfd)
 	struct sockaddr_in servaddr, cli; 
 
 	init_msg();
-
-	saved_page = calloc(1, PAGE_SIZE);
 
 	// socket create and verification 
 	*sockfd = socket(AF_INET, SOCK_STREAM, 0); 
