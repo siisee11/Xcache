@@ -165,14 +165,26 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 	char reply[1024];
 	int status;
 
+	bool isIn = false;
+
+	/* hash input data */
+	unsigned char *data = (unsigned char*)&key;
+	data[0] += index;
+	
+	bloom_filter_check(bf, data, 8, &isIn);
+
 //	printk(KERN_INFO "pmdfc: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
 //			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
+
+	if (!isIn) {
+		goto not_exists;
+	}
 
 	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, &reply, sizeof(reply),
 		   0, &status);
 
-//	pmnet_recv_message(PMNET_MSG_SUCCESS, 0, &response, 1024,
-//		0, &status);
+not_exists:
+	return;
 }
 
 static void pmdfc_cleancache_flush_inode(int pool_id,
