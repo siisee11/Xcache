@@ -112,20 +112,14 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 	uint64_t index;
 	void *saved_page;
 
-	printf("%s: processing message\n", __func__);
-
 	switch(ntohs(hdr->magic)) {
 		case PMNET_MSG_STATUS_MAGIC:
-			printf("PMNET_MSG_STATUS_MAGIC\n");
 			goto out; 
 		case PMNET_MSG_KEEP_REQ_MAGIC:
-			printf("PMNET_MSG_KEEP_REQ_MAGIC\n");
 			goto out;
 		case PMNET_MSG_KEEP_RESP_MAGIC:
-			printf("PMNET_MSG_KEEP_RESP_MAGIC\n");
 			goto out;
 		case PMNET_MSG_MAGIC:
-			printf("PMNET_MSG_MAGIC\n");
 			break;
 		default:
 			printf("bad magic\n");
@@ -168,7 +162,8 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
 				reply, 1024);
 			printf("SERVER-->CLIENT: PMNET_MSG_SUCCESS(%d)\n", ret);
-			printf("<Inserted %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
+			printf("[ Inserted %lx : ", key);
+			printf("%lx ]\n", hashTable->Get(key));
 			break;
 		}
 
@@ -180,7 +175,6 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("SEND PAGE with long key=%lx\n", key);
 
 			/* Get page from Hash and copy to saved_page */
 			ret = hashTable->load_page(hashTable->Get(key), (char *)saved_page, 4096);
@@ -190,11 +184,14 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 				memset(&reply, 0, PAGE_SIZE);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_NOTEXIST, 0, 
 					reply, PAGE_SIZE);
+				printf("SERVER-->CLIENT: PMNET_MSG_NOTEXIST(%d)\n",ret);
 			} else {
 				/* page exists */
-				printf("<Retrived %lx : %lx %lx>\n", key, hashTable->oid, hashTable->Get(key));
+				printf("SEND PAGE with long key=%lx\n", key);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
 					saved_page, PAGE_SIZE);
+				printf("[ Retrived %lx : ", key);
+				printf("%lx ]\n", hashTable->Get(key));
 				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
 			break;
@@ -205,12 +202,8 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 			break;
 
 		case PMNET_MSG_INVALIDATE: {
-			printf("SERVER-->CLIENT: PMNET_MSG_INVALIDATE\n");
-
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("INVALIDATE PAGE with long key=%llx\n", key);
-
 			/* delete key */
 			hashTable->Delete(key);
 
@@ -233,8 +226,6 @@ static int pmnet_advance_rx(int sockfd)
 	int ret;
 	void *data;
 	size_t datalen;
-
-	printf("pmnet_advance_rx: start\n");
 
 	if (msg_in->page_off < sizeof(struct pmnet_msg)) {
 		data = msg_in->hdr + msg_in->page_off;
@@ -261,7 +252,7 @@ static int pmnet_advance_rx(int sockfd)
 	/* this was swabbed above when we first read it */
 	hdr = msg_in->hdr;
 
-	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
+//	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
 
 	/* 
 	 * do we need more payload? 
@@ -269,7 +260,7 @@ static int pmnet_advance_rx(int sockfd)
 	 */
 	if (msg_in->page_off - sizeof(struct pmnet_msg) < ntohs(hdr->data_len)) {
 		/* need more payload */
-		data = msg_in->page + msg_in->page_off - sizeof(struct pmnet_msg);
+		data = (char *)msg_in->page + msg_in->page_off - sizeof(struct pmnet_msg);
 		datalen = (sizeof(struct pmnet_msg) + ntohs(hdr->data_len) -
 			  msg_in->page_off);
 		ret = read(sockfd, data, datalen);
@@ -290,7 +281,6 @@ static int pmnet_advance_rx(int sockfd)
 	}
 
 out:
-	printf("pmnet_advance_rx: end\n");
 	return ret;
 }
 
