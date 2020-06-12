@@ -158,10 +158,6 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr)
 
 			/* Insert received page into hash */
 			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
-			memset(&reply, 0, 1024);
-			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
-				reply, 1024);
-			printf("SERVER-->CLIENT: PMNET_MSG_SUCCESS(%d)\n", ret);
 			printf("[ Inserted %lx : ", key);
 			printf("%lx ]\n", hashTable->Get(key));
 			break;
