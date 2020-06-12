@@ -33,14 +33,15 @@
 #define PMNET_IDLE_TIMEOUT_MS_DEFAULT		30000
 #define PMNET_TCP_USER_TIMEOUT			0x7fffffff
 
-#define PMNET_MSG_HOLA 		(0)
-#define PMNET_MSG_HOLASI	(1)
-#define PMNET_MSG_ADIOS 	(2)
-#define PMNET_MSG_PUTPAGE 	(3)
-#define PMNET_MSG_SUCCESS	(4)
-#define PMNET_MSG_GETPAGE 	(5)
-#define PMNET_MSG_SENDPAGE 	(6)
-#define PMNET_MSG_NOTEXIST	(7)
+#define PMNET_MSG_HOLA 			(0)
+#define PMNET_MSG_HOLASI		(1)
+#define PMNET_MSG_ADIOS 		(2)
+#define PMNET_MSG_PUTPAGE 		(3)
+#define PMNET_MSG_SUCCESS		(4)
+#define PMNET_MSG_GETPAGE 		(5)
+#define PMNET_MSG_SENDPAGE 		(6)
+#define PMNET_MSG_NOTEXIST		(7)
+#define PMNET_MSG_INVALIDATE	(8)
 
 #ifndef PAGE_SIZE
 # define PAGE_SIZE 4096

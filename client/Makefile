@@ -1,6 +1,6 @@
 CONFIG_MODULE_SIG=n
 TARGET_MODULE := pmdfc_client
-#obj-m := $(TARGET_MODULE).o
+obj-m := $(TARGET_MODULE).o
 
 pmdfc_client-objs := sync_pmdfc.o tcp.o bloom_filter.o nodemanager.o
 
