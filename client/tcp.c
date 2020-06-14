@@ -674,8 +674,8 @@ int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
 	/* solved --> WAITALL wait until recv all data 
 	 * It blocked because sender send a portion of data 
 	 */
-//	struct msghdr msghdr = {.msg_flags = MSG_DONTWAIT,};
-	struct msghdr msghdr = {.msg_flags = MSG_WAITALL,};
+	struct msghdr msghdr = {.msg_flags = MSG_DONTWAIT,};
+//	struct msghdr msghdr = {.msg_flags = MSG_WAITALL,};
 
 	DECLARE_WAIT_QUEUE_HEAD(recv_wait);
 
