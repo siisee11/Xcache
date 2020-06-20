@@ -54,17 +54,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	unsigned char *data = (unsigned char*)&key;
 	data[0] += index;
 
-	if ( pool < 0 ) 
+	if ( pool_id < 0 ) 
 		return;
 
 
-//	if (!tmem_oid_valid(&coid)) {
-/*
-	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
-			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
-*/
-//		coid = oid;
-//	tmem_oid_print(&coid);
 	if ( atomic_read(&r) < 3 ) {
 		atomic_inc(&r);
 		/* get page virtual address */
@@ -75,6 +68,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		strcat(reply, "PUTPAGE"); 
 
 		/* Send page to server */
+		printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
 		pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, pg_from, PAGE_SIZE,
@@ -112,17 +107,15 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	if ( !isIn )
 		goto not_exists;
 
-//	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
-//			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
-
-//	if ( tmem_oid_compare(&coid, &oid) == 0 && atomic_read(&v) == 0 ) {
 	if ( atomic_read(&v) < 3 ) {
 		atomic_inc(&v);
-		printk(KERN_INFO "pmdfc: GET PAGE start\n");
 
 		/* get page from server */
 		memset(&reply, 0, 1024);
 		strcat(reply, "GETPAGE"); 
+
+		printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
 		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, &reply, sizeof(reply),
 			   0, &status);
