@@ -65,6 +65,7 @@ class Buffer
 public:
     void add(struct pmnet_msg_in *msg) {
         while (true) {
+			printf("[Buffer] producer in \n");
             std::unique_lock<std::mutex> locker(mu);
             cond.wait(locker, [this](){return buffer_.size() < size_;});
             buffer_.push_back(msg);
@@ -76,6 +77,7 @@ public:
     struct pmnet_msg_in *remove() {
         while (true)
         {
+			printf("[Buffer] consumer in \n");
             std::unique_lock<std::mutex> locker(mu);
             cond.wait(locker, [this](){return buffer_.size() > 0;});
             struct pmnet_msg_in* back = buffer_.back();
@@ -158,6 +160,7 @@ public:
 		/* consume request from queue */
         while (true) {
             struct pmnet_msg_in *msg_in = buffer_.remove();
+			printf("CONSUMER buffer_.remove()\n");
 
 			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 			if (ret == 0)
@@ -409,11 +412,9 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buf
 		 * works out. after calling this the message is toast */
 		buffer_.add(msg_in);
 		ret = 1;
-#if 0
-		ret = pmnet_process_message(sockfd, hdr, msg_in);
-		if (ret == 0)
-			ret = 1;
-#endif
+//		ret = pmnet_process_message(sockfd, hdr, msg_in);
+//		if (ret == 0)
+//			ret = 1;
 		msg_in->page_off = 0;
 	}
 
@@ -441,7 +442,7 @@ static void pmnet_rx_until_empty(int sockfd, struct pmnet_msg_in *msg_in, Buffer
  * *connfd : fd of connected socket
  * *shared_buf : shared buffer for Producer and Consumer
  */
-void init_network_server(int *sockfd, int *connfd, Buffer *shared_buf)
+void init_network_server(int *sockfd, int *connfd, Buffer& shared_buf)
 {
 	socklen_t len; 
 	struct sockaddr_in servaddr, cli; 
@@ -487,6 +488,8 @@ void init_network_server(int *sockfd, int *connfd, Buffer *shared_buf)
 	 * create thread for each client.
 	 */
 	while (1) {
+		Buffer new_buf;		// Shared buffer
+
 		len = sizeof(cli); 
 		// Accept the data packet from client and verification 
 		*connfd = accept(*sockfd, (SA*)&cli, &len); 
@@ -497,18 +500,19 @@ void init_network_server(int *sockfd, int *connfd, Buffer *shared_buf)
 		else
 			printf("server acccept the client...\n"); 
 
-		/* Consumer start */
-		Consumer c(*shared_buf, *connfd);
-		std::thread consumer_thread(&Consumer::run, &c);
-
 		/* start thread */
-		Producer p(*shared_buf, *connfd);
-		threads.push_back(std::thread(&Producer::run, &p));
-		std::cout << "Started Producer " << "\n";
+		Producer p(new_buf, *connfd);
+		std::thread	produce_thread = std::thread(&Producer::run, &p);
+//		threads.push_back(produce_thread);
+		produce_thread.detach();
+
+		/* Consumer start */
+		Consumer c(new_buf, *connfd);
+		std::thread	consume_thread = std::thread(&Consumer::run, &c);
+		consume_thread.detach();
 
 		/* TODO: join threads */
-	}
-	
+	} 
 }
 
 /*
@@ -530,7 +534,7 @@ int main(int argc, char* argv[])
 	int sockfd, connfd;
 	struct timespec start, end;
 	uint64_t elapsed;
-    Buffer *shared_buf;		// Shared buffer
+    Buffer shared_buf;		// Shared buffer
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
 
