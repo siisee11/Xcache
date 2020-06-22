@@ -58,7 +58,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		return;
 
 
-	if ( atomic_read(&r) < 3 ) {
+	if ( atomic_read(&r) < 1000 ) {
 		atomic_inc(&r);
 		/* get page virtual address */
 		pg_from = page_address(page);
@@ -107,7 +107,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	if ( !isIn )
 		goto not_exists;
 
-	if ( atomic_read(&v) < 3 ) {
+	if ( atomic_read(&v) < 1000 ) {
 		atomic_inc(&v);
 
 		/* get page from server */
