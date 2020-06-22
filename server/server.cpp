@@ -32,7 +32,7 @@
 
 class Buffer;
 
-static void pmnet_rx_until_empty(int sockfd, struct pmnet_msg_in *, Buffer&);
+static void pmnet_rx_until_empty(int sockfd, Buffer&);
 static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
 
 using std::deque;
@@ -65,7 +65,7 @@ class Buffer
 public:
     void add(struct pmnet_msg_in *msg) {
         while (true) {
-			printf("[Buffer] producer in \n");
+			printf("[Buffer] producer (msg key=%lx, index=%lx)\n", msg->hdr->key, msg->hdr->index);
             std::unique_lock<std::mutex> locker(mu);
             cond.wait(locker, [this](){return buffer_.size() < size_;});
             buffer_.push_back(msg);
@@ -77,7 +77,7 @@ public:
     struct pmnet_msg_in *remove() {
         while (true)
         {
-			printf("[Buffer] consumer in \n");
+			printf("[Buffer] consumer \n");
             std::unique_lock<std::mutex> locker(mu);
             cond.wait(locker, [this](){return buffer_.size() > 0;});
             struct pmnet_msg_in* back = buffer_.back();
@@ -95,7 +95,7 @@ private:
 
    // Your normal variables here
     deque<pmnet_msg_in *> buffer_;
-    const unsigned int size_ = 10;
+    const unsigned int size_ = 100;
 };
 
 class Producer
@@ -103,7 +103,6 @@ class Producer
 private:
     Buffer &buffer_;
 	int client_socket;
-	struct pmnet_msg_in *msg_in; // structure for message processing
 
 public:
     Producer(Buffer& buffer, int sockfd)
@@ -111,34 +110,16 @@ public:
     {}
 
 	void run() {
-		/* initialize message */
-		msg_in = init_msg();
-
 		std::thread::id this_id = std::this_thread::get_id(); 
 		printf("[ new PRODUCER %lx Running... ]\n", this_id);
 
 		/* Function read bytes from connfd */
-		pmnet_rx_until_empty(client_socket, msg_in, buffer_); 
+		pmnet_rx_until_empty(client_socket, buffer_); 
 		printf("[ PRODUCER %lx Exit ]\n", this_id);
 		close( client_socket);
     }
 
-	struct pmnet_msg_in *init_msg()
-	{
-		void *page;
-		struct pmnet_msg *msg;
-		struct pmnet_msg_in *msg_in;
 
-		page = calloc(1, PAGE_SIZE);
-		msg = (struct pmnet_msg *)calloc(1, sizeof(struct pmnet_msg));
-		msg_in = (struct pmnet_msg_in *)calloc(1, sizeof(struct pmnet_msg_in));
-
-		msg_in->page_off = 0;
-		msg_in->page = page;
-		msg_in->hdr= msg;
-
-		return msg_in;
-	}
 };
 
 class Consumer
@@ -163,17 +144,15 @@ public:
 			printf("CONSUMER buffer_.remove()\n");
 
 			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
+			free(msg_in);
+
 			if (ret == 0)
 				ret = 1;
-			{
-				std::unique_lock<std::mutex> lock(cout_mu);
-				std::cout << "Consumed: " << std::endl;
-			}
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 };
 
+/* longkey = [key, index] */
 static long pmnet_long_key(long key, long index)
 {
 	uint64_t longkey;
@@ -185,7 +164,25 @@ static long pmnet_long_key(long key, long index)
 	return longkey;
 }
 
+/* initialize struct pmnet_msg_in */
+static struct pmnet_msg_in *init_msg()
+{
+	void *page;
+	struct pmnet_msg *msg;
+	struct pmnet_msg_in *msg_in;
 
+	page = calloc(1, PAGE_SIZE);
+	msg = (struct pmnet_msg *)calloc(1, sizeof(struct pmnet_msg));
+	msg_in = (struct pmnet_msg_in *)calloc(1, sizeof(struct pmnet_msg_in));
+
+	msg_in->page_off = 0;
+	msg_in->page = page;
+	msg_in->hdr= msg;
+
+	return msg_in;
+}
+
+/* initialize message to send */
 static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len, 
 		uint16_t msg_type, uint32_t key)
 {
@@ -199,6 +196,7 @@ static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len,
 	msg->key = htonl(key);
 }
 
+/* send to client */
 int pmnet_send_message(int sockfd, uint32_t msg_type, uint32_t key, 
 		void *data, uint16_t datalen)
 {
@@ -287,7 +285,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			printf("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("SEND PAGE with long key=%lx\n", key);
+			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
@@ -316,14 +314,14 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 				memset(&reply, 0, PAGE_SIZE);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_NOTEXIST, 0, 
 					reply, PAGE_SIZE);
-				printf("PAGE NOT EXITS key=%lx\n", key);
+				printf("PAGE NOT EXIST (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
 				printf("SERVER-->CLIENT: PMNET_MSG_NOTEXIST(%d)\n",ret);
 			} else {
 				/* page exists */
 				printf("SEND PAGE with long key=%lx\n", key);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
 					saved_page, PAGE_SIZE);
-				printf("[ Retrived %lx : ", key);
+				printf("[ Retrived (key=%lx, index=%lx, longkey=%lx) \n", ntohl(hdr->key), ntohl(hdr->index), key);
 				printf("%lx ]\n", hashTable->Get(key));
 				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
@@ -358,7 +356,7 @@ out:
 static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buffer_)
 {
 	struct pmnet_msg *hdr;
-	int ret;
+	int ret = 0;
 	void *data;
 	size_t datalen;
 
@@ -388,7 +386,7 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buf
 	/* this was swabbed above when we first read it */
 	hdr = msg_in->hdr;
 
-//	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
+	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
 
 	/* 
 	 * do we need more payload? 
@@ -422,11 +420,14 @@ out:
 	return ret;
 }
 
-static void pmnet_rx_until_empty(int sockfd, struct pmnet_msg_in *msg_in, Buffer& _buffer)
+static void pmnet_rx_until_empty(int sockfd, Buffer& _buffer)
 {
-	int ret;
-
+	int ret = 1;
+	struct pmnet_msg_in *msg_in; // structure for message processing
 	do {
+		/* prepare new msg */
+		if (ret == 1)
+			msg_in = init_msg();
 		ret = pmnet_advance_rx(sockfd, msg_in, _buffer);
 	} while (ret > 0);
 
