@@ -45,7 +45,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	void *pg_from;
 	void *pg_to;
 
-	char reply[1024];
+	char reply[4096];
 	char response[1024];
 	int status = 0;
 	int ret = -1;
@@ -57,7 +57,26 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	if ( pool_id < 0 ) 
 		return;
 
+	if ( atomic_read(&r) < 100 ) {
+		atomic_inc(&r);
+		memset(&reply, 0, 4096);
+		strcat(reply, "GETPAGE"); 
 
+		/* Send page to server */
+		printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+
+		pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
+		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, reply, PAGE_SIZE,
+			   0, &status);
+
+		ret = bloom_filter_add(bf, data, 8);
+		if ( ret < 0 )
+			pr_info("bloom_filter add fail\n");
+	}
+
+
+#if 0
 	if ( atomic_read(&r) < 1000 ) {
 		atomic_inc(&r);
 		/* get page virtual address */
@@ -80,6 +99,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 			pr_info("bloom_filter add fail\n");
 		printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 	} /* if */
+#endif
 }
 
 static int pmdfc_cleancache_get_page(int pool_id,
@@ -100,13 +120,27 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
 	data[0] += index;
-	
+
 	bloom_filter_check(bf, data, 8, &isIn);
 
 	/* This page is not exist in PM */
 	if ( !isIn )
 		goto not_exists;
 
+	pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, &reply, sizeof(reply),
+		   0, &status);
+
+	ret = pmnet_recv_message(PMNET_MSG_SENDPAGE, 0, &response, PAGE_SIZE,
+			0, &status);
+
+	if (strncmp(response, "GETPAGE", 7) == 0)
+		pr_info("GET PAGE matched!\n");
+	else
+		pr_info("GET PAGE not matched!\n");
+
+	goto not_exists;
+
+#if 0
 	if ( atomic_read(&v) < 1000 ) {
 		atomic_inc(&v);
 
@@ -135,6 +169,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 		return 0;
 	} /* if */
+#endif
 
 not_exists:
 	return -1;
