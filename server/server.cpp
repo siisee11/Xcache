@@ -53,6 +53,8 @@ struct pmnet_msg_in {
 /* lock-free-queue */
 boost::lockfree::queue<pmnet_msg_in *> new_queue(128);
 boost::atomic<bool> done (false);
+boost::atomic<int> putcnt (0);
+boost::atomic<int> getcnt (0);
 
 
 /* CCEH hashTable */
@@ -82,7 +84,8 @@ void consumer(int client_socket) {
 	/* consume request from queue */
 	while (!done) {
 		while (new_queue.pop(msg_in)){
-			log<LOG_DEBUG>(L"CONSUMER queue.pop()\n");
+			getcnt++;
+			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
 			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
@@ -198,7 +201,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 		case PMNET_MSG_MAGIC:
 			break;
 		default:
-			printf("bad magic\n");
+			log<LOG_ERROR>(L"bad magic");
 			ret = -EINVAL;
 			goto out;
 			break;
@@ -206,7 +209,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 
 	switch(ntohs(hdr->msg_type)) {
 		case PMNET_MSG_HOLA: {
-			printf("CLIENT-->SERVER: PMNET_MSG_HOLA\n");
+			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_HOLA");
 
 			/* send hello message */
 			memset(&reply, 0, 1024);
@@ -214,20 +217,20 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			ret = pmnet_send_message(sockfd, PMNET_MSG_HOLASI, 0, 
 				reply, 1024);
 
-			printf("SERVER-->CLIENT: PMNET_MSG_HOLASI(%d)\n", ret);
+			log<LOG_INFO>(L"SERVER-->CLIENT: PMNET_MSG_HOLASI(%1%)") % ret;
 			break;
 		}
 
 		case PMNET_MSG_HOLASI: {
-			printf("SERVER-->CLIENT: PMNET_MSG_HOLASI\n");
+			log<LOG_INFO>(L"SERVER-->CLIENT: PMNET_MSG_HOLASI");
 			break;
 		}
 
 		case PMNET_MSG_PUTPAGE: {
-			printf("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
+			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_PUTPAGE");
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
+			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
@@ -295,7 +298,7 @@ out:
 /* 
  * Read from socket
  */
-static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in)
+static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushed)
 {
 	struct pmnet_msg *hdr;
 	int ret = 0;
@@ -328,7 +331,7 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in)
 	/* this was swabbed above when we first read it */
 	hdr = msg_in->hdr;
 
-	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
+//	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
 
 	/* 
 	 * do we need more payload? 
@@ -350,8 +353,12 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in)
 		/* we can only get here once, the first time we read
 		 * the payload.. so set ret to progress if the handler
 		 * works out. after calling this the message is toast */
-		new_queue.push(msg_in);
-		ret = 1;
+		if (new_queue.push(msg_in)) {
+			putcnt++;
+			log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
+			pushed = true;
+			ret = 1;
+		}
 	}
 
 out:
@@ -361,15 +368,18 @@ out:
 static void pmnet_rx_until_empty(int sockfd)
 {
 	int ret = 1;
+	bool pushed = true;
 	struct pmnet_msg_in *msg_in; // structure for message processing
 	do {
 		/* prepare new msg */
-		if (ret == 1)
+		if (pushed) {
 			msg_in = init_msg();
-		ret = pmnet_advance_rx(sockfd, msg_in);
+			pushed = false;
+		}
+		ret = pmnet_advance_rx(sockfd, msg_in, pushed);
 	} while (ret > 0);
 
-	if (ret <= 0 && ret != -EAGAIN) {
+	if (ret <= 0 && ret !=-EAGAIN) {
 		printf("pmnet_rx_until_empty: saw error %d, closing\n", ret);
 		/* not permanent so read failed handshake can retry */
 	}
@@ -456,7 +466,7 @@ CCEH *init_cceh(char* file)
 {
 	printf("%s\n", file);
 	CCEH* ht = new CCEH(file);
-	printf("CCEH creation");fflush(stdout);
+	log<LOG_INFO>(L"CCEH create...");
 
 	return ht;
 }
