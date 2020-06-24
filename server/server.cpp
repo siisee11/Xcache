@@ -32,6 +32,8 @@
 #include "tcp.h"
 #include "tcp_internal.h"
 
+#include "log.hpp"
+
 #define  BUFF_SIZE   1024
 #define SA struct sockaddr 
 
@@ -56,7 +58,6 @@ boost::atomic<bool> done (false);
 /* CCEH hashTable */
 CCEH* hashTable;
 
-
 static void pmnet_rx_until_empty(int sockfd);
 static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
 
@@ -68,23 +69,28 @@ void producer(int client_socket) {
 	pmnet_rx_until_empty(client_socket); 
 	printf("[ PRODUCER %lx Exit ]\n", this_id);
 	close( client_socket);
+	done = true;
 }
 
 void consumer(int client_socket) {
 	int ret;
+	struct pmnet_msg_in *msg_in;
 
 	std::thread::id this_id = std::this_thread::get_id(); 
 	printf("[ new CONSUMER %lx Running... ]\n", this_id);
 
 	/* consume request from queue */
-	while (true) {
-		struct pmnet_msg_in *msg_in;
-		if (new_queue.pop(msg_in) == 0){
-			printf("CONSUMER buffer_.remove()\n");
-
+	while (!done) {
+		while (new_queue.pop(msg_in)){
+			log<LOG_DEBUG>(L"CONSUMER queue.pop()\n");
 			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
+	}
+
+	while (new_queue.pop(msg_in)) {
+		printf("CONSUMER buffer_.remove()\n");
+		ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 	}
 }
 
@@ -346,10 +352,6 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in)
 		 * works out. after calling this the message is toast */
 		new_queue.push(msg_in);
 		ret = 1;
-//		ret = pmnet_process_message(sockfd, hdr, msg_in);
-//		if (ret == 0)
-//			ret = 1;
-		msg_in->page_off = 0;
 	}
 
 out:
@@ -438,8 +440,9 @@ void init_network_server(int *sockfd, int *connfd)
 
 		/* start thread */
 		boost::thread p = boost::thread( producer, *connfd );
-//		p.detach();
+		p.detach();
 		boost::thread c = boost::thread( consumer, *connfd );
+		c.detach();
 //		producer_threads.create_thread( producer, *connfd );
 //		consumer_threads.create_thread( consumer, *connfd );
 	} 

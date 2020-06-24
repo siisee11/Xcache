@@ -13,7 +13,7 @@ all: main
 
 main: 
 	$(CC) $(CFLAGS) -c src/CCEH_LSB.cpp -o src/CCEH_LSB.o $(LIBS) $(INCLUDES)
-	g++ -g -std=c++11 -O3 -o server server.cpp src/CCEH_LSB.cpp $(LIBS) $(INCLUDES)
+	g++ -g -std=c++11 -o server server.cpp src/CCEH_LSB.cpp $(LIBS) $(INCLUDES)
 
 run:
 	sudo ./server ./jy/FILE83
