@@ -504,6 +504,7 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 {
 	int ret;
 	struct msghdr msg = {.msg_flags = 0,};
+//	struct msghdr msg = {.msg_flags = MSG_NOSIGNAL,};
 
 	if (sock == NULL) {
 		ret = -EINVAL;
@@ -596,8 +597,10 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	pmnet_set_nst_send_time(&nst);
 #endif
 
-	/* finally, convert the message header to network byte-order
-	 * 	 * and send */
+	/*
+	 * finally, convert the message header to network byte-order
+	 * and send 
+	 */
 	mutex_lock(&sc->sc_send_lock);
 	ret = pmnet_send_tcp_msg(sc->sc_sock, vec, veclen,
 			sizeof(struct pmnet_msg) + caller_bytes);

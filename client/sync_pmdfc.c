@@ -22,9 +22,6 @@
 /* bloom filter */
 struct bloom_filter *bf;
 
-/* The pool holding the compressed pages */
-//extern struct page* page_pool;
-
 /* Currently handled oid */
 struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
 
@@ -57,6 +54,11 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	if ( pool_id < 0 ) 
 		return;
 
+	atomic_inc(&r);
+	pr_info("count =%d\n", r);
+
+#if 0
+	/* debug send and recv */
 	if ( atomic_read(&r) < 100 ) {
 		atomic_inc(&r);
 		memset(&reply, 0, 4096);
@@ -74,20 +76,15 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		if ( ret < 0 )
 			pr_info("bloom_filter add fail\n");
 	}
+#endif
 
-
-#if 0
-	if ( atomic_read(&r) < 1000 ) {
+	if ( atomic_read(&r) < 10000 ) {
 		atomic_inc(&r);
 		/* get page virtual address */
 		pg_from = page_address(page);
 
-		/* get page from server */
-		memset(&reply, 0, 1024);
-		strcat(reply, "PUTPAGE"); 
-
 		/* Send page to server */
-		printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
+		printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
 		pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
@@ -99,7 +96,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 			pr_info("bloom_filter add fail\n");
 		printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 	} /* if */
-#endif
 }
 
 static int pmdfc_cleancache_get_page(int pool_id,
@@ -121,12 +117,14 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	unsigned char *data = (unsigned char*)&key;
 	data[0] += index;
 
+#if 0
 	bloom_filter_check(bf, data, 8, &isIn);
 
 	/* This page is not exist in PM */
 	if ( !isIn )
 		goto not_exists;
 
+	/* debug send and recv */
 	pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, &reply, sizeof(reply),
 		   0, &status);
 
@@ -140,7 +138,6 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 	goto not_exists;
 
-#if 0
 	if ( atomic_read(&v) < 1000 ) {
 		atomic_inc(&v);
 
@@ -148,7 +145,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		memset(&reply, 0, 1024);
 		strcat(reply, "GETPAGE"); 
 
-		printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llu,%llu,%llu index=%ld page=%p\n", pool_id, 
+		printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
 		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, &reply, sizeof(reply),
@@ -180,7 +177,6 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		pgoff_t index)
 {
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-	char response[1024];
 	char reply[1024];
 	int status;
 
@@ -199,8 +195,8 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		return;
 	}
 
-	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, &reply, sizeof(reply),
-		   0, &status);
+//	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, &reply, sizeof(reply),
+//		   0, &status);
 }
 
 static void pmdfc_cleancache_flush_inode(int pool_id,
@@ -253,7 +249,7 @@ static int pmdfc_cleancache_register_ops(void)
 
 static int bloom_filter_init(void)
 {
-	bf = bloom_filter_new(1000);
+	bf = bloom_filter_new(3000);
 	bloom_filter_add_hash_alg(bf, "md5");
 	bloom_filter_add_hash_alg(bf, "sha1");
 	bloom_filter_add_hash_alg(bf, "sha256");
@@ -277,10 +273,6 @@ static int __init pmdfc_init(void)
 	pr_info(" *** bloom filter | init | bloom_filter_init *** \n");
 
 
-	/* TODO: alloc many pages */
-	//	page_pool = alloc_pages(PMDFC_GFP_MASK, PMDFC_ORDER);
-//	page_pool = alloc_page(PMDFC_GFP_MASK);
-
 	ret = pmdfc_cleancache_register_ops();
 
 	if (!ret) {
@@ -297,8 +289,6 @@ static int __init pmdfc_init(void)
 		printk(KERN_INFO ">> pmdfc: cleancache_disabled\n");
 	}
 
-	
-
 	return 0;
 }
 
@@ -307,8 +297,6 @@ static void pmdfc_exit(void)
 {
 	bloom_filter_unref(bf);
 	pmnet_exit();
-
-//	__free_page(page_pool);
 }
 
 module_init(pmdfc_init);
