@@ -290,7 +290,6 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
-			printf("%s\n", from_va);
 
 			/* Insert received page into hash */
 			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
@@ -321,7 +320,6 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			} else {
 				/* page exists */
 				printf("SEND PAGE with long key=%lx\n", key);
-				printf("SEND PAGE : %s\n", saved_page);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
 					saved_page, PAGE_SIZE);
 				printf("[ Retrived (key=%lx, index=%lx, longkey=%lx) ", ntohl(hdr->key), ntohl(hdr->index), key);
@@ -527,8 +525,7 @@ CCEH *init_cceh(char* file)
 {
 	printf("%s\n", file);
 	CCEH* ht = new CCEH(file);
-	printf("CCEH creation");fflush(stdout);
-
+	printf("CCEH creation\n");
 	return ht;
 }
 
