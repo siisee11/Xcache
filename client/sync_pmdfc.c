@@ -54,9 +54,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	if ( pool_id < 0 ) 
 		return;
 
-	atomic_inc(&r);
-	pr_info("count =%d\n", r);
-
 #if 0
 	/* debug send and recv */
 	if ( atomic_read(&r) < 100 ) {
@@ -78,24 +75,27 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	}
 #endif
 
-	if ( atomic_read(&r) < 10000 ) {
-		atomic_inc(&r);
-		/* get page virtual address */
-		pg_from = page_address(page);
+	atomic_inc(&r);
+	if (atomic_read(&r) % 100 == 0 )
+		pr_info("count =%d\n", atomic_read(&r));
+	/* get page virtual address */
+	pg_from = page_address(page);
 
-		/* Send page to server */
-		printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
-			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+	/* Send page to server */
+//		printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
+//			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
-		pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
-		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, pg_from, PAGE_SIZE,
-			   0, &status);
+//		pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
+	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, pg_from, PAGE_SIZE,
+		   0, &status);
 
-		ret = bloom_filter_add(bf, data, 8);
-		if ( ret < 0 )
-			pr_info("bloom_filter add fail\n");
-		printk(KERN_INFO "pmdfc: PUT PAGE success\n");
-	} /* if */
+	if ( ret < 0 )
+		pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
+
+//		ret = bloom_filter_add(bf, data, 8);
+//		if ( ret < 0 )
+//			pr_info("bloom_filter add fail\n");
+//		printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 }
 
 static int pmdfc_cleancache_get_page(int pool_id,
@@ -112,6 +112,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 	int status;
 	bool isIn = false;
+	goto not_exists;
 
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
@@ -181,6 +182,7 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 	int status;
 
 	bool isIn = false;
+	goto out;
 
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
@@ -197,6 +199,8 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 
 //	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, &reply, sizeof(reply),
 //		   0, &status);
+out:
+	return;
 }
 
 static void pmdfc_cleancache_flush_inode(int pool_id,

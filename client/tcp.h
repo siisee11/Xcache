@@ -47,16 +47,14 @@
 # define PAGE_SIZE 4096
 #endif
 
-#if 0
-enum {
-	PMNET_MSG_HOLA = 0,
-	PMNET_MSG_HOLASI,
-	PMNET_MSG_ADIOS,
-	PMNET_MSG_PUTPAGE,
-	PMNET_MSG_GETPAGE,
-	PMNET_MSG_SENDPAGE,
-};
-#endif
+static unsigned int inet_addr(const char *str)
+{
+	int a,b,c,d;
+	char arr[4];
+	sscanf(str,"%d.%d.%d.%d",&a,&b,&c,&d);
+	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
+	return *(unsigned int*)arr;
+}
 
 struct pmnet_msg
 {
@@ -72,15 +70,6 @@ struct pmnet_msg
 	__u8  buf[0];
 };
 
-static unsigned int inet_addr(const char *str)
-{
-	int a,b,c,d;
-	char arr[4];
-	sscanf(str,"%d.%d.%d.%d",&a,&b,&c,&d);
-	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
-	return *(unsigned int*)arr;
-}
-
 
 int pmnet_send_message(u32 msg_type, u32 key, u32, void *data, u32 len,
 		       u8 target_node, int *status);
@@ -93,10 +82,43 @@ struct pmnm_node;
 int pmnet_start_listening(struct pmnm_node *node);
 void pmnet_stop_listening(struct pmnm_node *node);
 void pmnet_disconnect_node(struct pmnm_node *node);
+void pmnet_fill_node_map(unsigned long *map, unsigned bytes);
 
 
 int pmnet_init(void);
 void pmnet_exit(void);
+
+struct pmnet_send_tracking;
+struct pmnet_sock_container;
+
+#ifdef CONFIG_DEBUG_FS
+void pmnet_debugfs_init(void);
+void pmnet_debugfs_exit(void);
+void pmnet_debug_add_nst(struct pmnet_send_tracking *nst);
+void pmnet_debug_del_nst(struct pmnet_send_tracking *nst);
+void pmnet_debug_add_sc(struct pmnet_sock_container *sc);
+void pmnet_debug_del_sc(struct pmnet_sock_container *sc);
+#else
+static inline void pmnet_debugfs_init(void)
+{
+}
+static inline void pmnet_debugfs_exit(void)
+{
+}
+static inline void pmnet_debug_add_nst(struct pmnet_send_tracking *nst)
+{
+}
+static inline void pmnet_debug_del_nst(struct pmnet_send_tracking *nst)
+{
+}
+static inline void pmnet_debug_add_sc(struct pmnet_sock_container *sc)
+{
+}
+static inline void pmnet_debug_del_sc(struct pmnet_sock_container *sc)
+{
+}
+#endif	/* CONFIG_DEBUG_FS */
+
 
 
 #endif /* PMNET_TCP_H */
