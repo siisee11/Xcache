@@ -70,7 +70,6 @@ void producer(int client_socket) {
 	/* Function read bytes from connfd */
 	pmnet_rx_until_empty(client_socket); 
 	printf("[ PRODUCER %lx Exit ]\n", this_id);
-	close( client_socket);
 	done = true;
 }
 
@@ -95,6 +94,8 @@ void consumer(int client_socket) {
 		printf("CONSUMER buffer_.remove()\n");
 		ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 	}
+	close( client_socket);
+	printf("[ CONSUMER %lx Exit ]\n", this_id);
 }
 
 /* longkey = [key, index] */
