@@ -154,7 +154,7 @@ static struct kset mlog_kset = {
 	.kobj   = {.ktype = &mlog_ktype},
 };
 
-int mlog_sys_init(struct kset *o2cb_kset)
+int mlog_sys_init(struct kset *pmcb_kset)
 {
 	int i = 0;
 
@@ -165,7 +165,7 @@ int mlog_sys_init(struct kset *o2cb_kset)
 	mlog_attr_ptrs[i] = NULL;
 
 	kobject_set_name(&mlog_kset.kobj, "logmask");
-	mlog_kset.kobj.kset = o2cb_kset;
+	mlog_kset.kobj.kset = pmcb_kset;
 	return kset_register(&mlog_kset);
 }
 

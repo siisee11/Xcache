@@ -192,7 +192,7 @@ do {									\
 
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
-int mlog_sys_init(struct kset *o2cb_subsys);
+int mlog_sys_init(struct kset *pmcb_subsys);
 void mlog_sys_shutdown(void);
 
 #endif /* O2CLUSTER_MASKLOG_H */

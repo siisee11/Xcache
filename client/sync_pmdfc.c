@@ -73,11 +73,11 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		if ( ret < 0 )
 			pr_info("bloom_filter add fail\n");
 	}
-#endif
 
+#endif
 	atomic_inc(&r);
-	if (atomic_read(&r) % 100 == 0 )
-		pr_info("count =%d\n", atomic_read(&r));
+//	if (atomic_read(&r) % 100 == 0 )
+	pr_info("count =%d\n", atomic_read(&r));
 	/* get page virtual address */
 	pg_from = page_address(page);
 

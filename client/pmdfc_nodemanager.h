@@ -13,7 +13,7 @@
 #ifndef _PMDFC_NODEMANAGER_H
 #define _PMDFC_NODEMANAGER_H
 
-#define PMNM_API_VERSION	5
+#define PMNM_API_VERSION	1
 
 #define PMNM_MAX_NODES		2
 #define PMNM_INVALID_NODE_NUM	255
@@ -27,4 +27,4 @@
  */
 #define PMNM_MAX_REGIONS	32
 
-#endif /* _pmdfc_NODEMANAGER_H */
+#endif /* _PMDFC_NODEMANAGER_H */

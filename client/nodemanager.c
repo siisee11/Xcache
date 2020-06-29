@@ -12,6 +12,8 @@
 
 #include "tcp.h"
 #include "nodemanager.h"
+#include "masklog.h"
+#include "sys.h"
 
 struct pmnm_cluster *pmnm_single_cluster = NULL;
 
@@ -102,6 +104,9 @@ void init_pmnm_cluster(void){
 	struct pmnm_cluster *cluster = NULL;
 	struct pmnm_node *server_node = NULL;
 	struct pmnm_node *client_node = NULL;
+
+	/* sys file system */
+	pmcb_sys_init();
 
 	pr_info("nodemanager: init_pmnm_cluster\n");
 

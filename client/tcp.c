@@ -12,12 +12,33 @@
 
 #include "tcp.h"
 #include "nodemanager.h"
+#define MLOG_MASK_PREFIX ML_TCP
+#include "masklog.h"
+
 #include "tcp_internal.h"
 
 #define SC_NODEF_FMT "node %s (num %u) at %pI4:%u"
 #define SC_NODEF_ARGS(sc) sc->sc_node->nd_name, sc->sc_node->nd_num,	\
 	&sc->sc_node->nd_ipv4_address,		\
 	ntohs(sc->sc_node->nd_ipv4_port)
+
+#define sclog(sc, fmt, args...) do {					\
+	typeof(sc) __sc = (sc);						\
+	mlog(ML_SOCKET, "[sc %p refs %d sock %p node %u page %p "	\
+	     "pg_off %zu] " fmt, __sc,					\
+	     kref_read(&__sc->sc_kref), __sc->sc_sock,	\
+	    __sc->sc_node->nd_num, __sc->sc_page, __sc->sc_page_off ,	\
+	    ##args);							\
+} while (0)
+
+#define pr_sclog(sc, fmt, args...) do {					\
+	typeof(sc) __sc = (sc);						\
+	pr_info("[sc %p refs %d sock %p node %u page %p "	\
+	     "pg_off %zu] " fmt, __sc,					\
+	     kref_read(&__sc->sc_kref), __sc->sc_sock,	\
+	    __sc->sc_node->nd_num, __sc->sc_page, __sc->sc_page_off ,	\
+	    ##args);							\
+} while (0)
 
 /* struct workqueue */
 static struct workqueue_struct *pmnet_wq;
@@ -125,7 +146,8 @@ static inline void pmnet_set_func_stop_time(struct pmnet_sock_container *sc)
 # define pmnet_set_func_stop_time(a)
 #endif /* CONFIG_DEBUG_FS */
 
-#ifdef CONFIG_OCFS2_FS_STATS
+#define CONFIG_PMDFC_FS_STATS
+#ifdef CONFIG_PMDFC_FS_STATS
 static ktime_t pmnet_get_func_run_time(struct pmnet_sock_container *sc)
 {
 	return ktime_sub(sc->sc_tv_func_stop, sc->sc_tv_func_start);
@@ -159,7 +181,7 @@ static void pmnet_update_recv_stats(struct pmnet_sock_container *sc)
 
 # define pmnet_update_recv_stats(sc)
 
-#endif /* CONFIG_OCFS2_FS_STATS */
+#endif /* CONFIG_PMDFC_FS_STATS */
 
 
 static inline unsigned int pmnet_reconnect_delay(void)
@@ -217,6 +239,7 @@ static int pmnet_prep_nsw(struct pmnet_node *nn, struct pmnet_status_wait *nsw)
  */
 static void sc_kref_release(struct kref *kref)
 {
+#if 0
 	struct pmnet_sock_container *sc = container_of(kref,
 			struct pmnet_sock_container, sc_kref);
 
@@ -232,14 +255,17 @@ static void sc_kref_release(struct kref *kref)
 		__free_page(sc->sc_page);
 
 	kfree(sc);
+#endif
 }
 
 static void sc_put(struct pmnet_sock_container *sc)
 {
+	pr_sclog(sc, "put\n");
 	kref_put(&sc->sc_kref, sc_kref_release);
 }
 static void sc_get(struct pmnet_sock_container *sc)
 {
+	pr_sclog(sc, "get\n");
 	kref_get(&sc->sc_kref);
 }
 
@@ -278,7 +304,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 	if (sc == NULL || page == NULL)
 		goto out;
 
-	kref_init(&sc->sc_kref);
+	kref_init(&sc->sc_kref); 	/* sc_kref initialized to 1 */
 	sc->sc_node = node;
 
 	INIT_WORK(&sc->sc_connect_work, pmnet_sc_connect_completed);
@@ -316,6 +342,12 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	if (was_valid && !valid && err == 0)
 		err = -ENOTCONN;
 
+	BUG_ON(sc && nn->nn_sc && nn->nn_sc != sc);
+
+	if (was_valid && !valid && err == 0)
+		err = -ENOTCONN;
+
+
 	pr_info("node %u sc %p -> %p, valid %u -> %u, err %d -> %d\n",
 	     pmnet_num_from_nn(nn), nn->nn_sc, sc, nn->nn_sc_valid, valid,
 	     nn->nn_persistent_error, err);
@@ -324,15 +356,15 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	nn->nn_sc_valid = valid ? 1 : 0;
 	nn->nn_persistent_error = err;
 
+#if 0
 	/* mirrors pmnet_tx_can_proceed() */
 	if (nn->nn_persistent_error || nn->nn_sc_valid)
 		wake_up(&nn->nn_sc_wq);
 
-#if 0
 	if (was_valid && !was_err && nn->nn_persistent_error) {
 		o2quo_conn_err(pmnet_num_from_nn(nn));
 		queue_delayed_work(pmnet_wq, &nn->nn_still_up,
-				   msecs_to_jiffies(pmnet_QUORUM_DELAY_MS));
+				   msecs_to_jiffies(PMNET_QUORUM_DELAY_MS));
 	}
 #endif
 
@@ -388,6 +420,7 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	if ((old_sc == NULL) && sc)
 		sc_get(sc);
 	if (old_sc && (old_sc != sc)) {
+		pr_info("here??\n");
 		pmnet_sc_queue_work(old_sc, &old_sc->sc_shutdown_work);
 		sc_put(old_sc);
 	}
@@ -422,7 +455,7 @@ static void pmnet_state_change(struct sock *sk)
 		printk(KERN_INFO "pmnet: Connection to " SC_NODEF_FMT
 			" shutdown, state %d\n",
 			SC_NODEF_ARGS(sc), sk->sk_state);
-//		pmnet_sc_queue_work(sc, &sc->sc_shutdown_work);
+		pmnet_sc_queue_work(sc, &sc->sc_shutdown_work);
 		break;
 	}
 out:
@@ -584,11 +617,16 @@ static void pmnet_init_msg(struct pmnet_msg *msg, u16 data_len, u16 msg_type, u3
 }
 
 
+/*
+ * if nn->nn_sc is valid then increase kref (kref_get) and return that sc
+ */
 static int pmnet_tx_can_proceed(struct pmnet_node *nn,
 		struct pmnet_sock_container **sc_ret,
 		int *error)
 {
 	int ret = 0;
+	pr_info("nn->nn_persistent_error=%d, nn->nn_sc_valid=%d\n",
+			nn->nn_persistent_error, nn->nn_sc_valid);
 
 	spin_lock(&nn->nn_lock);
 	if (nn->nn_persistent_error) {
@@ -597,7 +635,6 @@ static int pmnet_tx_can_proceed(struct pmnet_node *nn,
 		*error = nn->nn_persistent_error;
 	} else if (nn->nn_sc_valid) {
 		kref_get(&nn->nn_sc->sc_kref);
-
 		ret = 1;
 		*sc_ret = nn->nn_sc;
 		*error = 0;
@@ -662,12 +699,14 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	struct kvec *vec = NULL;
 	struct pmnet_sock_container *sc = NULL;
 	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
+#if 0
 	struct pmnet_status_wait nsw = {
 		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
 	};
 	struct pmnet_send_tracking nst;
 
 	pmnet_init_nst(&nst, msg_type, key, current, target_node);
+#endif
 
 	if (pmnet_wq == NULL) {
 		pr_info("attempt to tx without pmnetd running\n");
@@ -688,10 +727,12 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 		goto out;
 	}
 
+#if 0
 	pr_info("wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret)\n");
 	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
 	if (ret)
 		goto out;
+#endif
 
 	sc = nn->nn_sc;
 
@@ -716,6 +757,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	vec[0].iov_base = msg;
 	memcpy(&vec[1], caller_vec, caller_veclen * sizeof(struct kvec));
 
+	/* TODO: is this code working? */
 #if 0
 	ret = pmnet_prep_nsw(nn, &nsw);
 	if (ret)
@@ -723,7 +765,6 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 
 	msg->msg_num = cpu_to_be32(nsw.ns_id);
 	pmnet_set_nst_msg_id(&nst, nsw.ns_id);
-
 	pmnet_set_nst_send_time(&nst);
 #endif
 
@@ -761,8 +802,8 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 
 out:
 //	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
-	if (sc)
-		sc_put(sc);
+//	if (sc)
+//		sc_put(sc);
 	kfree(vec);
 	kfree(msg);
 //	pmnet_complete_nsw(nn, &nsw, 0, 0, 0);
@@ -1080,11 +1121,6 @@ static void pmnet_start_connect(struct work_struct *work)
 	int ret = 0, stop;
 	unsigned int timeout;
 
-
-	DECLARE_WAIT_QUEUE_HEAD(recv_wait);
-
-	pr_info("pmnet_start_connect: start\n");
-
 	/*
 	 * sock_create allocates the sock with GFP_KERNEL. We must set
 	 * per-process flag PF_MEMALLOC_NOIO so that all allocations done
@@ -1099,6 +1135,7 @@ static void pmnet_start_connect(struct work_struct *work)
 		goto out;
 	}
 
+#if 0
 	spin_lock(&nn->nn_lock);
 	/*
 	 * see if we already have one pending or have given up.
@@ -1114,6 +1151,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	spin_unlock(&nn->nn_lock);
 	if (stop)
 		goto out;
+#endif
 
 	nn->nn_last_connect_attempt = jiffies;
 
@@ -1128,7 +1166,6 @@ static void pmnet_start_connect(struct work_struct *work)
 		pr_info("can't create socket: %d\n", ret);
 		goto out;
 	}
-	pr_info("pmnet_start_connect: socket_create\n");
 	sc->sc_sock = sock; /* freed by sc_kref_release */
 
 	sock->sk->sk_allocation = GFP_ATOMIC;
@@ -1149,7 +1186,7 @@ static void pmnet_start_connect(struct work_struct *work)
 
 	spin_lock(&nn->nn_lock);
 	/* handshake completion will set nn->nn_sc_valid */
-	pmnet_set_nn_state(nn, sc, 0, 0);
+	pmnet_set_nn_state(nn, sc, 1, 0);
 	spin_unlock(&nn->nn_lock);
 
 	remoteaddr.sin_family = AF_INET;
@@ -1163,9 +1200,6 @@ static void pmnet_start_connect(struct work_struct *work)
 	if (ret == -EINPROGRESS)
 		ret = 0;
 
-	pr_info("pmnet_start_connect: socket connected\n");
-
-
 out:
 	if (ret && sc) {
 		printk(KERN_NOTICE "pmnet: Connect attempt to " SC_NODEF_FMT
@@ -1177,8 +1211,13 @@ out:
 	}
 	if (sc)
 		sc_put(sc);
+
+	/* XXX: pmnm_node_put make error */
+#if 0
 	if (node)
 		pmnm_node_put(node);
+#endif
+
 	pr_info("pmnet_start_connect::end\n");
 	return;
 }
