@@ -82,18 +82,22 @@ void consumer(int client_socket) {
 
 	/* consume request from queue */
 	while (!done) {
+#if 0
 		while (new_queue.pop(msg_in)){
 			getcnt++;
 			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
 			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
+#endif
 	}
 
+#if 0
 	while (new_queue.pop(msg_in)) {
 		printf("CONSUMER buffer_.remove()\n");
 		ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 	}
+#endif
 	close( client_socket);
 	printf("[ CONSUMER %lx Exit ]\n", this_id);
 }
@@ -354,12 +358,18 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushe
 		/* we can only get here once, the first time we read
 		 * the payload.. so set ret to progress if the handler
 		 * works out. after calling this the message is toast */
+#if 0
 		if (new_queue.push(msg_in)) {
 			putcnt++;
 			log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
 			pushed = true;
 			ret = 1;
 		}
+#endif
+		putcnt++;
+		log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
+		pushed = true;
+		ret = 1;
 	}
 
 out:
