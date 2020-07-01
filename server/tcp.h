@@ -26,6 +26,7 @@
 #define CLIENT_ADDR		("10.0.2.15")
 
 #define PMNET_MAX_PAYLOAD_BYTES  (8192 - sizeof(struct pmnet_msg))
+//#define PMNET_MAX_PAYLOAD_BYTES  1000000
 
 /* same as hb delay, we're waiting for another node to recognize our hb */
 #define PMNET_RECONNECT_DELAY_MS_DEFAULT	2000
@@ -47,16 +48,6 @@
 # define PAGE_SIZE 4096
 #endif
 
-#if 0
-enum {
-	PMNET_MSG_HOLA = 0,
-	PMNET_MSG_HOLASI,
-	PMNET_MSG_ADIOS,
-	PMNET_MSG_PUTPAGE,
-	PMNET_MSG_GETPAGE,
-	PMNET_MSG_SENDPAGE,
-};
-#endif
 
 struct pmnet_msg
 {
@@ -71,14 +62,5 @@ struct pmnet_msg
 	uint32_t index;
 	uint8_t  buf[0];
 };
-
-static unsigned int inet_addr(const char *str)
-{
-	int a,b,c,d;
-	char arr[4];
-	sscanf(str,"%d.%d.%d.%d",&a,&b,&c,&d);
-	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
-	return *(unsigned int*)arr;
-}
 
 #endif /* PMNET_TCP_H */

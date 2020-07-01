@@ -21,137 +21,85 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <cstring>
+#include <boost/lockfree/queue.hpp>
+#include <boost/thread/thread.hpp>
+#include <boost/thread.hpp>
+#include <boost/atomic.hpp>
+
 #include "util/pair.h"
 #include "src/CCEH.h"
 
 #include "tcp.h"
 #include "tcp_internal.h"
 
+#include "log.hpp"
+
 #define  BUFF_SIZE   1024
 #define SA struct sockaddr 
 
-class Buffer;
-
-static void pmnet_rx_until_empty(int sockfd, Buffer&);
-static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
 
 using std::deque;
-std::mutex cout_mu;
-std::condition_variable cond;
-
-char client_message[2000];
-char buffer[1024];
-pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-
-struct msg_with_page
-{
-	struct pmnet_msg msg;
-	char *page;
-};
-
+using namespace boost::lockfree;
 
 struct pmnet_msg_in {
+	int sockfd;
 	struct pmnet_msg *hdr;
 	void *page;
 	size_t page_off;
 };
 
+/* lock-free-queue */
+boost::lockfree::queue<pmnet_msg_in *> new_queue(128);
+boost::atomic<bool> done (false);
+boost::atomic<int> putcnt (0);
+boost::atomic<int> getcnt (0);
+
 
 /* CCEH hashTable */
 CCEH* hashTable;
 
-class Buffer
-{
-public:
-    void add(struct pmnet_msg_in *msg) {
-        while (true) {
-			printf("[Buffer] producer (msg key=%lx, index=%lx)\n", msg->hdr->key, msg->hdr->index);
-            std::unique_lock<std::mutex> locker(mu);
-            cond.wait(locker, [this](){return buffer_.size() < size_;});
-            buffer_.push_back(msg);
-            locker.unlock();
-            cond.notify_all();
-            return;
-        }
-    }
-    struct pmnet_msg_in *remove() {
-        while (true)
-        {
-			printf("[Buffer] consumer \n");
-            std::unique_lock<std::mutex> locker(mu);
-            cond.wait(locker, [this](){return buffer_.size() > 0;});
-            struct pmnet_msg_in* back = buffer_.back();
-            buffer_.pop_back();
-            locker.unlock();
-            cond.notify_all();
-            return back;
-        }
-    }
-    Buffer() {}
-private:
-   // Add them as member variables here
-    std::mutex mu;
-    std::condition_variable cond;
+static void pmnet_rx_until_empty(int sockfd);
+static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
 
-   // Your normal variables here
-    deque<pmnet_msg_in *> buffer_;
-    const unsigned int size_ = 100;
-};
+void producer(int client_socket) {
+	std::thread::id this_id = std::this_thread::get_id(); 
+	printf("[ new PRODUCER %lx Running... ]\n", this_id);
 
-class Producer
-{
-private:
-    Buffer &buffer_;
-	int client_socket;
+	/* Function read bytes from connfd */
+	pmnet_rx_until_empty(client_socket); 
+	printf("[ PRODUCER %lx Exit ]\n", this_id);
+	done = true;
+}
 
-public:
-    Producer(Buffer& buffer, int sockfd)
-		: buffer_(buffer), client_socket(sockfd)
-    {}
+void consumer(int client_socket) {
+	int ret;
+	struct pmnet_msg_in *msg_in;
 
-	void run() {
-		std::thread::id this_id = std::this_thread::get_id(); 
-		printf("[ new PRODUCER %lx Running... ]\n", this_id);
+	std::thread::id this_id = std::this_thread::get_id(); 
+	printf("[ new CONSUMER %lx Running... ]\n", this_id);
 
-		/* Function read bytes from connfd */
-		pmnet_rx_until_empty(client_socket, buffer_); 
-		printf("[ PRODUCER %lx Exit ]\n", this_id);
-		close( client_socket);
-    }
-
-
-};
-
-class Consumer
-{
-    Buffer &buffer_;
-	int client_socket;
-
-public:
-    Consumer(Buffer& buffer, int sockfd)
-		: buffer_(buffer), client_socket(sockfd)
-	{}
-
-    void run() {
-		int ret;
-
-		std::thread::id this_id = std::this_thread::get_id(); 
-		printf("[ new CONSUMER %lx Running... ]\n", this_id);
-
-		/* consume request from queue */
-        while (true) {
-            struct pmnet_msg_in *msg_in = buffer_.remove();
-			printf("CONSUMER buffer_.remove()\n");
-
+	/* consume request from queue */
+	while (!done) {
+		/* TODO: Uncomment below after debugging */
+#if 0
+		while (new_queue.pop(msg_in)){
+			getcnt++;
+			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
 			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
 			free(msg_in);
+		}
+#endif
+	}
 
-			if (ret == 0)
-				ret = 1;
-        }
-		printf("[ CONSUMER %lx Exit ]\n", this_id);
-    }
-};
+#if 0
+	while (new_queue.pop(msg_in)) {
+		printf("CONSUMER buffer_.remove()\n");
+		ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
+	}
+#endif
+	close( client_socket);
+	printf("[ CONSUMER %lx Exit ]\n", this_id);
+}
 
 /* longkey = [key, index] */
 static long pmnet_long_key(long key, long index)
@@ -257,7 +205,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 		case PMNET_MSG_MAGIC:
 			break;
 		default:
-			printf("bad magic\n");
+			log<LOG_ERROR>(L"bad magic");
 			ret = -EINVAL;
 			goto out;
 			break;
@@ -265,7 +213,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 
 	switch(ntohs(hdr->msg_type)) {
 		case PMNET_MSG_HOLA: {
-			printf("CLIENT-->SERVER: PMNET_MSG_HOLA\n");
+			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_HOLA");
 
 			/* send hello message */
 			memset(&reply, 0, 1024);
@@ -273,20 +221,20 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			ret = pmnet_send_message(sockfd, PMNET_MSG_HOLASI, 0, 
 				reply, 1024);
 
-			printf("SERVER-->CLIENT: PMNET_MSG_HOLASI(%d)\n", ret);
+			log<LOG_INFO>(L"SERVER-->CLIENT: PMNET_MSG_HOLASI(%1%)") % ret;
 			break;
 		}
 
 		case PMNET_MSG_HOLASI: {
-			printf("SERVER-->CLIENT: PMNET_MSG_HOLASI\n");
+			log<LOG_INFO>(L"SERVER-->CLIENT: PMNET_MSG_HOLASI");
 			break;
 		}
 
 		case PMNET_MSG_PUTPAGE: {
-			printf("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
+			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_PUTPAGE");
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
+			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
@@ -354,7 +302,7 @@ out:
 /* 
  * Read from socket
  */
-static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buffer_)
+static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushed)
 {
 	struct pmnet_msg *hdr;
 	int ret = 0;
@@ -371,8 +319,10 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buf
 			msg_in->page_off += ret;
 			if (msg_in->page_off == sizeof(struct pmnet_msg)) {
 				hdr = msg_in->hdr;
-				if (ntohs(hdr->data_len) > PMNET_MAX_PAYLOAD_BYTES)
+				if (ntohs(hdr->data_len) > PMNET_MAX_PAYLOAD_BYTES) {
+					printf("ntohs(hdr->data_len) =%d\n", ntohs(hdr->data_len));
 					ret = -EOVERFLOW;
+				}
 			}
 		}
 		if (ret <= 0)
@@ -387,7 +337,7 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buf
 	/* this was swabbed above when we first read it */
 	hdr = msg_in->hdr;
 
-	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
+//	printf("at page_off %zu, datalen=%u\n", msg_in->page_off, ntohs(hdr->data_len));
 
 	/* 
 	 * do we need more payload? 
@@ -409,30 +359,40 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, Buffer& buf
 		/* we can only get here once, the first time we read
 		 * the payload.. so set ret to progress if the handler
 		 * works out. after calling this the message is toast */
-		buffer_.add(msg_in);
+		/* TODO: Uncomment below after debugging */
+#if 0
+		if (new_queue.push(msg_in)) {
+			putcnt++;
+			log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
+			pushed = true;
+			ret = 1;
+		}
+#endif
+		putcnt++;
+		log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
+		pushed = true;
 		ret = 1;
-//		ret = pmnet_process_message(sockfd, hdr, msg_in);
-//		if (ret == 0)
-//			ret = 1;
-		msg_in->page_off = 0;
 	}
 
 out:
 	return ret;
 }
 
-static void pmnet_rx_until_empty(int sockfd, Buffer& _buffer)
+static void pmnet_rx_until_empty(int sockfd)
 {
 	int ret = 1;
+	bool pushed = true;
 	struct pmnet_msg_in *msg_in; // structure for message processing
 	do {
 		/* prepare new msg */
-		if (ret == 1)
+		if (pushed) {
 			msg_in = init_msg();
-		ret = pmnet_advance_rx(sockfd, msg_in, _buffer);
+			pushed = false;
+		}
+		ret = pmnet_advance_rx(sockfd, msg_in, pushed);
 	} while (ret > 0);
 
-	if (ret <= 0 && ret != -EAGAIN) {
+	if (ret <= 0 && ret !=-EAGAIN) {
 		printf("pmnet_rx_until_empty: saw error %d, closing\n", ret);
 		/* not permanent so read failed handshake can retry */
 	}
@@ -444,12 +404,11 @@ static void pmnet_rx_until_empty(int sockfd, Buffer& _buffer)
  * *connfd : fd of connected socket
  * *shared_buf : shared buffer for Producer and Consumer
  */
-void init_network_server(int *sockfd, int *connfd, Buffer& shared_buf)
+void init_network_server(int *sockfd, int *connfd)
 {
 	socklen_t len; 
 	struct sockaddr_in servaddr, cli; 
 
-//	init_msg();
 
 	// socket create and verification 
 	*sockfd = socket(AF_INET, SOCK_STREAM, 0); 
@@ -484,14 +443,13 @@ void init_network_server(int *sockfd, int *connfd, Buffer& shared_buf)
 
 	/* Thread pool */
 	std::vector<std::thread> threads;
+	boost::thread_group producer_threads, consumer_threads;
 
 	/*
 	 * Loop and accept client.
 	 * create thread for each client.
 	 */
 	while (1) {
-		Buffer new_buf;		// Shared buffer
-
 		len = sizeof(cli); 
 		// Accept the data packet from client and verification 
 		*connfd = accept(*sockfd, (SA*)&cli, &len); 
@@ -503,17 +461,12 @@ void init_network_server(int *sockfd, int *connfd, Buffer& shared_buf)
 			printf("server acccept the client...\n"); 
 
 		/* start thread */
-		Producer p(new_buf, *connfd);
-		std::thread	produce_thread = std::thread(&Producer::run, &p);
-//		threads.push_back(produce_thread);
-		produce_thread.detach();
-
-		/* Consumer start */
-		Consumer c(new_buf, *connfd);
-		std::thread	consume_thread = std::thread(&Consumer::run, &c);
-		consume_thread.detach();
-
-		/* TODO: join threads */
+		boost::thread p = boost::thread( producer, *connfd );
+		p.detach();
+		boost::thread c = boost::thread( consumer, *connfd );
+		c.detach();
+//		producer_threads.create_thread( producer, *connfd );
+//		consumer_threads.create_thread( consumer, *connfd );
 	} 
 }
 
@@ -525,7 +478,8 @@ CCEH *init_cceh(char* file)
 {
 	printf("%s\n", file);
 	CCEH* ht = new CCEH(file);
-	printf("CCEH creation\n");
+	log<LOG_INFO>(L"CCEH create...");
+
 	return ht;
 }
 
@@ -535,19 +489,23 @@ int main(int argc, char* argv[])
 	int sockfd, connfd;
 	struct timespec start, end;
 	uint64_t elapsed;
-    Buffer shared_buf;		// Shared buffer
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
 
 	/* New CCEH hash table */
 	hashTable = init_cceh(argv[1]);
 
+	using namespace std;
+	cout << "boost::lockfree::queue is ";
+	if (!new_queue.is_lock_free())
+		cout << "not ";
+	cout << "lockfree" << endl;
 
 	/* 
 	 * Listen and accept socket 
 	 * Looping inside this fuction
 	 */
-	init_network_server(&sockfd, &connfd, shared_buf);
+	init_network_server(&sockfd, &connfd);
 
 	close(sockfd); 
 
