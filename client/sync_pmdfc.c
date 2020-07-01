@@ -20,6 +20,7 @@
 #define PMDFC_ORDER 13
 
 /* bloom filter */
+/* TODO: is it thread safe? */
 struct bloom_filter *bf;
 
 /* Currently handled oid */
@@ -29,8 +30,6 @@ struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
 atomic_t v = ATOMIC_INIT(0);
 atomic_t r = ATOMIC_INIT(0);
 
-/* wait queue for cleancache_get_page */
-extern wait_queue_head_t get_page_wait_queue;
 extern int cond;
 
 /*  Clean cache operations implementation */
@@ -76,8 +75,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
 #endif
 	atomic_inc(&r);
-//	if (atomic_read(&r) % 100 == 0 )
-	pr_info("count =%d\n", atomic_read(&r));
+	if (atomic_read(&r) % 100 == 0 )
+		pr_info("count =%d\n", atomic_read(&r));
 	/* get page virtual address */
 	pg_from = page_address(page);
 
@@ -265,8 +264,6 @@ static int __init pmdfc_init(void)
 {
 	int ret;
 
-	// -- initialize the WAIT QUEUE head
-	init_waitqueue_head(&get_page_wait_queue);
 
 	/* initailize pmdfc's network feature */
 	pmnet_init();

@@ -101,7 +101,8 @@
  * than errors and notices, allowing gcc to remove the code completely.
  * When enabled, allow all masks.
  */
-#if defined(CONFIG_OCFS2_DEBUG_MASKLOG)
+#define CONFIG_PMDFC_DEBUG_MASKLOG
+#if defined(CONFIG_PMDFC_DEBUG_MASKLOG)
 #define ML_ALLOWED_BITS ~0
 #else
 #define ML_ALLOWED_BITS (ML_ERROR|ML_NOTICE)

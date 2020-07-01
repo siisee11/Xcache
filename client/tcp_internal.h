@@ -8,6 +8,8 @@
 #define PMNET_MSG_KEEP_REQ_MAGIC  ((u16)0xfa59)
 #define PMNET_MSG_KEEP_RESP_MAGIC ((u16)0xfa5a)
 
+#define PMNET_PROTOCOL_VERSION 11ULL
+
 /* we're delaying our quorum decision so that heartbeat will have timed
  * out truly dead nodes by the time we come around to making decisions
  * on their number */

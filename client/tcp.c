@@ -6,6 +6,7 @@
 #include <linux/net.h>
 #include <linux/export.h>
 #include <linux/sched/mm.h>
+#include <linux/delay.h>
 #include <net/tcp.h>
 
 #include <asm/uaccess.h>
@@ -45,14 +46,12 @@ static struct workqueue_struct *pmnet_wq;
 
 /* PMNET nodes */
 static struct pmnet_node pmnet_nodes[PMNM_MAX_NODES];
-//static struct pmnet_node pmnet_nodes[2];
 
 static struct pmnet_handshake *pmnet_hand;
 static struct pmnet_msg *pmnet_keep_req, *pmnet_keep_resp;
 
 /* extern value in pmdfc.c */
 struct page* page_pool;
-wait_queue_head_t get_page_wait_queue;
 
 
 /* can't quite avoid *all* internal declarations :/ */
@@ -260,12 +259,14 @@ static void sc_kref_release(struct kref *kref)
 
 static void sc_put(struct pmnet_sock_container *sc)
 {
-	pr_sclog(sc, "put\n");
+	if (sc->sc_node->nd_num == 0)
+		pr_sclog(sc, "put\n");
 	kref_put(&sc->sc_kref, sc_kref_release);
 }
 static void sc_get(struct pmnet_sock_container *sc)
 {
-	pr_sclog(sc, "get\n");
+	if (sc->sc_node->nd_num == 0)
+		pr_sclog(sc, "get\n");
 	kref_get(&sc->sc_kref);
 }
 
@@ -309,7 +310,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 
 	INIT_WORK(&sc->sc_connect_work, pmnet_sc_connect_completed);
 	INIT_WORK(&sc->sc_shutdown_work, pmnet_shutdown_sc);
-	INIT_DELAYED_WORK(&sc->sc_keepalive_work, pmnet_sc_send_keep_req);
+//	INIT_DELAYED_WORK(&sc->sc_keepalive_work, pmnet_sc_send_keep_req);
 
 	timer_setup(&sc->sc_idle_timeout, pmnet_idle_timer, 0);
 
@@ -370,15 +371,15 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 
 	if (was_valid && !valid) {
 		if (old_sc)
-			printk(KERN_NOTICE "pmnet: No longer connected to "
+			pr_info("pmnet: No longer connected to "
 				SC_NODEF_FMT "\n", SC_NODEF_ARGS(old_sc));
 //		pmnet_complete_nodes_nsw(nn);
 	}
 
 	if (!was_valid && valid) {
 //		o2quo_conn_up(pmnet_num_from_nn(nn));
-//		cancel_delayed_work(&nn->nn_connect_expired);
-		printk(KERN_NOTICE "pmnet: %s " SC_NODEF_FMT "\n",
+		cancel_delayed_work(&nn->nn_connect_expired);
+		pr_info("pmnet: %s " SC_NODEF_FMT "\n",
 		       "Connected to" ,
 		       SC_NODEF_ARGS(sc));
 	}
@@ -388,10 +389,9 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	 * from node config teardown and so needs to be careful about
 	 * the work queue actually being up. */
 	if (!valid && pmnet_wq) {
-//		unsigned long delay = 0;
+		unsigned long delay = 0;
 		/* delay if we're within a RECONNECT_DELAY of the
 		 * last attempt */
-#if 0
 		delay = (nn->nn_last_connect_attempt +
 			 msecs_to_jiffies(pmnet_reconnect_delay()))
 			- jiffies;
@@ -409,10 +409,8 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 		 * the connect_expired work will do anything.  The rest will see
 		 * that it's already queued and do nothing.
 		 */
-//		delay += msecs_to_jiffies(pmnet_idle_timeout());
-//		queue_delayed_work(pmnet_wq, &nn->nn_connect_expired, delay);
-		queue_delayed_work(pmnet_wq, &nn->nn_connect_expired, 100);
-#endif 
+		delay += msecs_to_jiffies(pmnet_idle_timeout());
+		queue_delayed_work(pmnet_wq, &nn->nn_connect_expired, delay);
 	}
 
 
@@ -439,7 +437,8 @@ static void pmnet_state_change(struct sock *sk)
 		goto out;
 	}
 
-	pr_info("state_change: --> %d\n", sk->sk_state);
+//	pr_info("state_change: --> %d\n", sk->sk_state);
+	sclog(sc, "state_change to %d\n", sk->sk_state);
 
 	state_change = sc->sc_state_change;
 
@@ -474,6 +473,7 @@ static void pmnet_register_callbacks(struct sock *sk,
 {
 	write_lock_bh(&sk->sk_callback_lock);
 
+	/* TODO: can remove? */
 #if 0
 	/* accepted sockets inherit the old listen socket data ready */
 	if (sk->sk_data_ready == pmnet_listen_data_ready) {
@@ -563,18 +563,16 @@ static void pmnet_shutdown_sc(struct work_struct *work)
 	sc_put(sc);
 }
 
-#if 0
 static void pmnet_initialize_handshake(void)
 {
-	pmnet_hand->pmhb_heartbeat_timeout_ms = cpu_to_be32(
-			PMHB_MAX_WRITE_TIMEOUT_MS);
+//	pmnet_hand->pmhb_heartbeat_timeout_ms = cpu_to_be32(
+//			PMHB_MAX_WRITE_TIMEOUT_MS);
 	pmnet_hand->pmnet_idle_timeout_ms = cpu_to_be32(pmnet_idle_timeout());
 	pmnet_hand->pmnet_keepalive_delay_ms = cpu_to_be32(
 			pmnet_keepalive_delay());
 	pmnet_hand->pmnet_reconnect_delay_ms = cpu_to_be32(
 			pmnet_reconnect_delay());
 }
-#endif
 
 /* TODO: how can I use this func */
 static void pmnet_sendpage(struct pmnet_sock_container *sc,
@@ -625,8 +623,6 @@ static int pmnet_tx_can_proceed(struct pmnet_node *nn,
 		int *error)
 {
 	int ret = 0;
-	pr_info("nn->nn_persistent_error=%d, nn->nn_sc_valid=%d\n",
-			nn->nn_persistent_error, nn->nn_sc_valid);
 
 	spin_lock(&nn->nn_lock);
 	if (nn->nn_persistent_error) {
@@ -670,21 +666,20 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 {
 	int ret;
 	struct msghdr msg = {.msg_flags = 0,};
-//	struct msghdr msg = {.msg_flags = MSG_NOSIGNAL,};
 
 	if (sock == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
 
+	/* TODO: 얘가 잘못 */
 	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
+   // return 0;
 	if (likely(ret == total))
 		return 0;
 	pr_info("sendmsg returned %d instead of %zu\n", ret, total);
 	if (ret >= 0)
 		ret = -EPIPE; /* should be smarter, I bet */
-	if (ret == -110)
-		pr_info("PMNET TIME OUT\n");
 out:
 	pr_info("returning error: %d\n", ret);
 	return ret;
@@ -699,6 +694,8 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	struct kvec *vec = NULL;
 	struct pmnet_sock_container *sc = NULL;
 	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
+	
+
 #if 0
 	struct pmnet_status_wait nsw = {
 		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
@@ -727,17 +724,19 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 		goto out;
 	}
 
-#if 0
-	pr_info("wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret)\n");
+//	o2net_debug_add_nst(&nst);
+
+//	o2net_set_nst_sock_time(&nst);
+	
 	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
 	if (ret)
 		goto out;
-#endif
 
-	sc = nn->nn_sc;
+//	o2net_set_nst_sock_container(&nst, sc);
+//	sc = nn->nn_sc;
 
 	veclen = caller_veclen + 1;
-	vec = kmalloc(sizeof(struct kvec) * veclen, GFP_ATOMIC);
+	vec = kmalloc_array(veclen, sizeof(struct kvec), GFP_ATOMIC);
 	if (vec == NULL) {
 		pr_info("failed to %zu element kvec!\n", veclen);
 		ret = -ENOMEM;
@@ -802,8 +801,8 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 
 out:
 //	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
-//	if (sc)
-//		sc_put(sc);
+	if (sc)
+		sc_put(sc);
 	kfree(vec);
 	kfree(msg);
 //	pmnet_complete_nsw(nn, &nsw, 0, 0, 0);
@@ -936,8 +935,8 @@ read_again:
 
 
 out:
-//	if (sc)
-//		sc_put(sc);
+	if (sc)
+		sc_put(sc);
 	kfree(vec);
 	kfree(msg);
 	return ret;
@@ -1002,6 +1001,7 @@ static void pmnet_sc_connect_completed(struct work_struct *work)
 		container_of(work, struct pmnet_sock_container,
 			     sc_connect_work);
 
+#if 0
 	struct socket *conn_socket;
 	int tmp_ret;
 	char response[1024];
@@ -1009,7 +1009,6 @@ static void pmnet_sc_connect_completed(struct work_struct *work)
 	int status;
 
 	DECLARE_WAIT_QUEUE_HEAD(recv_wait);
-
 	/* send hello message */
 	memset(&reply, 0, 1024);
 	strcat(reply, "HOLA"); 
@@ -1028,7 +1027,14 @@ static void pmnet_sc_connect_completed(struct work_struct *work)
 	if (tmp_ret < 0)
 		pr_info("error: pmnet_recv_message\n");
 	pr_info("SERVER-->CLIENT: PMNET_MSG_HOLASI\n");
-	
+#endif
+
+	mlog(ML_MSG, "sc sending handshake with ver %llu id %llx\n",
+              (unsigned long long)PMNET_PROTOCOL_VERSION,
+	      (unsigned long long)be64_to_cpu(pmnet_hand->connector_id));
+
+	pmnet_initialize_handshake();
+	pmnet_sendpage(sc, pmnet_hand, sizeof(*pmnet_hand));
 	sc_put(sc);
 	pr_info("%s: finished\n", __func__);
 }
@@ -1161,6 +1167,7 @@ static void pmnet_start_connect(struct work_struct *work)
 		ret = -ENOMEM;
 		goto out;
 	} 
+
 	ret = sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
 	if (ret < 0) {
 		pr_info("can't create socket: %d\n", ret);
@@ -1185,7 +1192,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	pmnet_register_callbacks(sc->sc_sock->sk, sc);
 
 	spin_lock(&nn->nn_lock);
-	/* handshake completion will set nn->nn_sc_valid */
+	/* XXX: we set valid here; handshake completion will set nn->nn_sc_valid */
 	pmnet_set_nn_state(nn, sc, 1, 0);
 	spin_unlock(&nn->nn_lock);
 
@@ -1274,7 +1281,7 @@ int pmnet_init(void)
 {
 	unsigned long i;
 
-	DECLARE_WAIT_QUEUE_HEAD(recv_wait);
+	pmnet_debugfs_init();
 
 	init_pmnm_cluster();
 
@@ -1290,8 +1297,15 @@ int pmnet_init(void)
 	pmnet_keep_resp->magic = cpu_to_be16(PMNET_MSG_KEEP_RESP_MAGIC);
 
 
+	/* Codes from o2net_start_listening */
+	BUG_ON(pmnet_wq != NULL);
 	/* perpapre work queue */
+	mlog(ML_KTHREAD, "starting pmnet thread...\n");
 	pmnet_wq = alloc_ordered_workqueue("pmnet", WQ_MEM_RECLAIM);
+	if (pmnet_wq == NULL) {
+		mlog(ML_ERROR, "unable to launch pmnet thread\n");
+		return -ENOMEM; /* ? */
+	}
 
 	for (i = 0; i < ARRAY_SIZE(pmnet_nodes); i++) {
 		struct pmnet_node *nn = pmnet_nn_from_num(i);
@@ -1301,16 +1315,16 @@ int pmnet_init(void)
 		spin_lock_init(&nn->nn_lock);
 
 		INIT_DELAYED_WORK(&nn->nn_connect_work, pmnet_start_connect);
-		/* TODO: queue_delayed_work is it right position? */
-		queue_delayed_work(pmnet_wq, &nn->nn_connect_work, 0);
-		INIT_DELAYED_WORK(&nn->nn_connect_expired,
-				pmnet_connect_expired);
+		INIT_DELAYED_WORK(&nn->nn_connect_expired, pmnet_connect_expired);
 		INIT_DELAYED_WORK(&nn->nn_still_up, pmnet_still_up);
 		/* until we see hb from a node we'll return einval */
 		nn->nn_persistent_error = -ENOTCONN;
 		init_waitqueue_head(&nn->nn_sc_wq);
 		idr_init(&nn->nn_status_idr);
 		INIT_LIST_HEAD(&nn->nn_status_list);
+
+		/* TODO: queue_delayed_work is it right position? */
+		queue_delayed_work(pmnet_wq, &nn->nn_connect_work, 0);
 	}
 
 	return 0;
