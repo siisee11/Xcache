@@ -314,6 +314,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 
 	ret = sc;
 	sc->sc_page = page;
+	pmnet_debug_add_sc(sc);
 	sc = NULL;
 	page = NULL;
 
