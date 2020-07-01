@@ -238,7 +238,6 @@ static int pmnet_prep_nsw(struct pmnet_node *nn, struct pmnet_status_wait *nsw)
  */
 static void sc_kref_release(struct kref *kref)
 {
-#if 0
 	struct pmnet_sock_container *sc = container_of(kref,
 			struct pmnet_sock_container, sc_kref);
 
@@ -254,7 +253,6 @@ static void sc_kref_release(struct kref *kref)
 		__free_page(sc->sc_page);
 
 	kfree(sc);
-#endif
 }
 
 static void sc_put(struct pmnet_sock_container *sc)
