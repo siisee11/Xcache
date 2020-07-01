@@ -387,6 +387,7 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	 * from node config teardown and so needs to be careful about
 	 * the work queue actually being up. */
 	if (!valid && pmnet_wq) {
+#if 0
 		unsigned long delay = 0;
 		/* delay if we're within a RECONNECT_DELAY of the
 		 * last attempt */
@@ -409,6 +410,7 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 		 */
 		delay += msecs_to_jiffies(pmnet_idle_timeout());
 		queue_delayed_work(pmnet_wq, &nn->nn_connect_expired, delay);
+#endif
 	}
 
 
@@ -1289,6 +1291,7 @@ int pmnet_init(void)
 	if (!pmnet_hand || !pmnet_keep_req || !pmnet_keep_resp)
 		goto out;
 
+	pmnet_hand->protocol_version = cpu_to_be64(PMNET_PROTOCOL_VERSION);
 	pmnet_hand->connector_id = cpu_to_be64(1);
 
 	pmnet_keep_req->magic = cpu_to_be16(PMNET_MSG_KEEP_REQ_MAGIC);
