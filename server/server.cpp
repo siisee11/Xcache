@@ -37,6 +37,8 @@
 #define  BUFF_SIZE   1024
 #define SA struct sockaddr 
 
+#define htonll(x)   ((((uint64_t)htonl(x)) << 32) + htonl(x >> 32))
+#define ntohll(x)   ((((uint64_t)ntohl(x)) << 32) + ntohl(x >> 32))
 
 using std::deque;
 using namespace boost::lockfree;
@@ -58,20 +60,41 @@ boost::atomic<int> getcnt (0);
 /* CCEH hashTable */
 CCEH* hashTable;
 
-static void pmnet_rx_until_empty(int sockfd);
-static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
+static void pmnet_rx_until_empty(struct pmnet_sock_container *sc);
+static int pmnet_process_message(struct pmnet_sock_container *sc, 
+		struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
 
-void producer(int client_socket) {
+static struct pmnet_sock_container *sc_alloc()
+{
+	struct pmnet_sock_container *sc, *ret = NULL;
+	int status = 0;
+
+	sc = (pmnet_sock_container *)calloc(1, sizeof(*sc));
+	if (sc == NULL)
+		goto out;
+
+	printf("sc alloced\n");
+
+	ret = sc;
+	sc = NULL;
+
+out:
+	free(sc);
+
+	return ret;
+}
+
+void producer(struct pmnet_sock_container *sc) {
 	std::thread::id this_id = std::this_thread::get_id(); 
 	printf("[ new PRODUCER %lx Running... ]\n", this_id);
 
 	/* Function read bytes from connfd */
-	pmnet_rx_until_empty(client_socket); 
+	pmnet_rx_until_empty( sc ); 
 	printf("[ PRODUCER %lx Exit ]\n", this_id);
 	done = true;
 }
 
-void consumer(int client_socket) {
+void consumer(struct pmnet_sock_container *sc) {
 	int ret;
 	struct pmnet_msg_in *msg_in;
 
@@ -85,7 +108,7 @@ void consumer(int client_socket) {
 		while (new_queue.pop(msg_in)){
 			getcnt++;
 			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
-			ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
+			ret = pmnet_process_message(sc->sockfd, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
 #endif
@@ -94,10 +117,10 @@ void consumer(int client_socket) {
 #if 0
 	while (new_queue.pop(msg_in)) {
 		printf("CONSUMER buffer_.remove()\n");
-		ret = pmnet_process_message(client_socket, msg_in->hdr, msg_in);
+		ret = pmnet_process_message(sc->sockfd, msg_in->hdr, msg_in);
 	}
 #endif
-	close( client_socket);
+	close( sc->sockfd );
 	printf("[ CONSUMER %lx Exit ]\n", this_id);
 }
 
@@ -298,22 +321,76 @@ out:
 	return ret;
 }
 
+static int pmnet_check_handshake(struct pmnet_sock_container *sc, struct pmnet_msg_in *msg_in)
+{
+	struct pmnet_handshake *hand = (struct pmnet_handshake *)msg_in->page;
+
+	printf("ntohl(hand->protocol_version)=%lld\n", ntohll(hand->protocol_version));
+	printf("PMNET_PROTOCOL_VERSION =%lld\n", PMNET_PROTOCOL_VERSION);
+
+	if (ntohll(hand->protocol_version) != PMNET_PROTOCOL_VERSION) {
+		/* don't bother reconnecting if its the wrong version. */
+		return -1;
+	}
+
+	sc->sc_handshake_ok = 1;
+	printf("Handshake ok!\n");
+
+#if 0
+	spin_lock(&nn->nn_lock);
+	/* set valid and queue the idle timers only if it hasn't been
+	 * shut down already */
+	if (nn->nn_sc == sc) {
+		pmnet_sc_reset_idle_timer(sc);
+		atomic_set(&nn->nn_timeout, 0);
+		pmnet_set_nn_state(nn, sc, 1, 0);
+	}
+	spin_unlock(&nn->nn_lock);
+#endif
+
+	/* shift everything up as though it wasn't there */
+	msg_in->page_off -= sizeof(struct pmnet_handshake);
+	if (msg_in->page_off)
+		memmove(hand, hand + 1, msg_in->page_off);
+
+	return 0;
+}
+
 
 /* 
  * Read from socket
  */
-static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushed)
+static int pmnet_advance_rx(struct pmnet_sock_container *sc, 
+		struct pmnet_msg_in *msg_in, bool& pushed)
 {
 	struct pmnet_msg *hdr;
 	int ret = 0;
 	void *data;
 	size_t datalen;
 
+	/* handshake */
+	if ((sc->sc_handshake_ok == 0)) {
+		if(msg_in->page_off < sizeof(struct pmnet_handshake)) {
+			data = (char *)msg_in->page + msg_in->page_off;
+			datalen = sizeof(struct pmnet_handshake) - msg_in->page_off;
+			ret = read(sc->sockfd, data, datalen);
+			if (ret > 0)
+				msg_in->page_off += ret;
+		}
+
+		if (msg_in->page_off == sizeof(struct pmnet_handshake)) {
+			pmnet_check_handshake(sc, msg_in);
+			if ((sc->sc_handshake_ok == 0))
+				ret = -EPROTO;
+		}
+		goto out;
+	}
+
 	/* read header */
 	if (msg_in->page_off < sizeof(struct pmnet_msg)) {
 		data = msg_in->hdr + msg_in->page_off;
 		datalen = sizeof(struct pmnet_msg) - msg_in->page_off;
-		ret = read(sockfd, data, datalen);
+		ret = read(sc->sockfd, data, datalen);
 
 		if (ret > 0) {
 			msg_in->page_off += ret;
@@ -348,7 +425,7 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushe
 		data = (char *)msg_in->page + msg_in->page_off - sizeof(struct pmnet_msg);
 		datalen = (sizeof(struct pmnet_msg) + ntohs(hdr->data_len) -
 			  msg_in->page_off);
-		ret = read(sockfd, data, datalen);
+		ret = read(sc->sockfd, data, datalen);
 		if (ret > 0)
 			msg_in->page_off += ret;
 		if (ret <= 0)
@@ -378,7 +455,7 @@ out:
 	return ret;
 }
 
-static void pmnet_rx_until_empty(int sockfd)
+static void pmnet_rx_until_empty(struct pmnet_sock_container *sc)
 {
 	int ret = 1;
 	bool pushed = true;
@@ -389,7 +466,7 @@ static void pmnet_rx_until_empty(int sockfd)
 			msg_in = init_msg();
 			pushed = false;
 		}
-		ret = pmnet_advance_rx(sockfd, msg_in, pushed);
+		ret = pmnet_advance_rx(sc, msg_in, pushed);
 	} while (ret > 0);
 
 	if (ret <= 0 && ret !=-EAGAIN) {
@@ -400,19 +477,18 @@ static void pmnet_rx_until_empty(int sockfd)
 
 
 /*
- * *sockfd : listen socket fd
- * *connfd : fd of connected socket
- * *shared_buf : shared buffer for Producer and Consumer
+ * Initialize network server
  */
-void init_network_server(int *sockfd, int *connfd)
+void init_network_server()
 {
+	int sockfd, connfd;
 	socklen_t len; 
 	struct sockaddr_in servaddr, cli; 
-
+	struct pmnet_sock_container *sc = NULL;
 
 	// socket create and verification 
-	*sockfd = socket(AF_INET, SOCK_STREAM, 0); 
-	if (*sockfd == -1) { 
+	sockfd = socket(AF_INET, SOCK_STREAM, 0); 
+	if (sockfd == -1) { 
 		printf("socket creation failed...\n"); 
 		exit(0); 
 	} 
@@ -426,7 +502,7 @@ void init_network_server(int *sockfd, int *connfd)
 	servaddr.sin_port = htons(PORT); 
 
 	// Binding newly created socket to given IP and verification 
-	if ((bind(*sockfd, (SA*)&servaddr, sizeof(servaddr))) != 0) { 
+	if ((bind(sockfd, (SA*)&servaddr, sizeof(servaddr))) != 0) { 
 		printf("socket bind failed...\n"); 
 		exit(0); 
 	} 
@@ -434,7 +510,7 @@ void init_network_server(int *sockfd, int *connfd)
 		printf("Socket successfully binded..\n"); 
 
 	// Now server is ready to listen and verification 
-	if ((listen(*sockfd, 5)) != 0) { 
+	if ((listen(sockfd, 5)) != 0) { 
 		printf("Listen failed...\n"); 
 		exit(0); 
 	} 
@@ -452,22 +528,27 @@ void init_network_server(int *sockfd, int *connfd)
 	while (1) {
 		len = sizeof(cli); 
 		// Accept the data packet from client and verification 
-		*connfd = accept(*sockfd, (SA*)&cli, &len); 
-		if (*connfd < 0) { 
+		connfd = accept(sockfd, (SA*)&cli, &len); 
+		if (connfd < 0) { 
 			printf("server acccept failed...\n"); 
 			exit(0); 
 		} 
 		else
 			printf("server acccept the client...\n"); 
 
+		sc = sc_alloc();
+		sc->sockfd = connfd;
+
 		/* start thread */
-		boost::thread p = boost::thread( producer, *connfd );
+		boost::thread p = boost::thread( producer, sc );
 		p.detach();
-		boost::thread c = boost::thread( consumer, *connfd );
+		boost::thread c = boost::thread( consumer, sc );
 		c.detach();
-//		producer_threads.create_thread( producer, *connfd );
-//		consumer_threads.create_thread( consumer, *connfd );
+//		producer_threads.create_thread( producer, connfd );
+//		consumer_threads.create_thread( consumer, connfd );
 	} 
+
+	close(sockfd); 
 }
 
 /*
@@ -486,7 +567,6 @@ CCEH *init_cceh(char* file)
 
 int main(int argc, char* argv[]) 
 { 	
-	int sockfd, connfd;
 	struct timespec start, end;
 	uint64_t elapsed;
 
@@ -505,9 +585,8 @@ int main(int argc, char* argv[])
 	 * Listen and accept socket 
 	 * Looping inside this fuction
 	 */
-	init_network_server(&sockfd, &connfd);
+	init_network_server();
 
-	close(sockfd); 
 
 	return 0;
 } 

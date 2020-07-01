@@ -8,9 +8,21 @@
 #define PMNET_MSG_KEEP_REQ_MAGIC  ((uint16_t)0xfa59)
 #define PMNET_MSG_KEEP_RESP_MAGIC ((uint16_t)0xfa5a)
 
+#define PMNET_PROTOCOL_VERSION 11ULL
+
 /* we're delaying our quorum decision so that heartbeat will have timed
  * out truly dead nodes by the time we come around to making decisions
  * on their number */
-#define PMNET_QUORUM_DELAY_MS	((pmhb_dead_threshold + 2) * PMHB_REGION_TIMEOUT_MS)
+//#define PMNET_QUORUM_DELAY_MS	((pmhb_dead_threshold + 2) * PMHB_REGION_TIMEOUT_MS)
+
+
+struct pmnet_sock_container {
+	int 			sockfd;
+	unsigned		sc_handshake_ok:1;
+
+//	u32			sc_msg_key;
+//	u16			sc_msg_type;
+//  struct mutex		sc_send_lock;
+};
 
 #endif /* PMNET_TCP_INTERNAL_H */
