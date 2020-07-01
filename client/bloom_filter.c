@@ -176,8 +176,6 @@ int bloom_filter_add(struct bloom_filter *filter,
 		ret = __bit_for_crypto_alg(alg, data, datalen, filter->bitmap_size, &bit);
 		if (ret < 0)
 			goto exit_unlock;
-
-		pr_info("Bloom filter: set_bit-->%d\n", bit);
 		set_bit(bit, filter->bitmap);
 	}
 

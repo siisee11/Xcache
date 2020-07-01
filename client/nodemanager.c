@@ -12,6 +12,8 @@
 
 #include "tcp.h"
 #include "nodemanager.h"
+#include "masklog.h"
+#include "sys.h"
 
 struct pmnm_cluster *pmnm_single_cluster = NULL;
 
@@ -29,6 +31,36 @@ out:
 	return node;
 }
 EXPORT_SYMBOL_GPL(pmnm_get_node_by_num);
+
+int pmnm_configured_node_map(unsigned long *map, unsigned bytes)
+{
+	struct pmnm_cluster *cluster = pmnm_single_cluster;
+
+	BUG_ON(bytes < (sizeof(cluster->cl_nodes_bitmap)));
+
+	if (cluster == NULL)
+		return -EINVAL;
+
+	read_lock(&cluster->cl_nodes_lock);
+	memcpy(map, cluster->cl_nodes_bitmap, sizeof(cluster->cl_nodes_bitmap));
+	read_unlock(&cluster->cl_nodes_lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pmnm_configured_node_map);
+
+void pmnm_node_put(struct pmnm_node *node)
+{
+	config_item_put(&node->nd_item);
+}
+EXPORT_SYMBOL_GPL(pmnm_node_put);
+
+void pmnm_node_get(struct pmnm_node *node)
+{
+	config_item_get(&node->nd_item);
+}
+EXPORT_SYMBOL_GPL(pmnm_node_get);
+
 
 struct pmnm_node *init_pmnm_node(const char *name, 
 		const char *ip, unsigned int port, int num)
@@ -67,15 +99,22 @@ static void pmnm_cluster_release(void)
 	kfree(pmnm_single_cluster);
 }
 
+/* refer to o2nm_cluster_group_make_group */
 void init_pmnm_cluster(void){
 	struct pmnm_cluster *cluster = NULL;
 	struct pmnm_node *server_node = NULL;
 	struct pmnm_node *client_node = NULL;
 
+	/* sys file system */
+	pmcb_sys_init();
+
 	pr_info("nodemanager: init_pmnm_cluster\n");
 
 	cluster = kzalloc(sizeof(struct pmnm_cluster), GFP_KERNEL);
+	if (cluster == NULL)
+		goto out;
 
+	/* 0 is server, 1 is client node */
 	server_node = init_pmnm_node("pm_server", DEST_ADDR, PORT, 0);
 	client_node = init_pmnm_node("pm_client", CLIENT_ADDR, CLIENT_PORT, 1);
 
@@ -83,8 +122,18 @@ void init_pmnm_cluster(void){
 	cluster->cl_nodes[1] = client_node;
 
 	rwlock_init(&cluster->cl_nodes_lock);
+
+	cluster->cl_reconnect_delay_ms = PMNET_RECONNECT_DELAY_MS_DEFAULT;
+	cluster->cl_idle_timeout_ms    = PMNET_IDLE_TIMEOUT_MS_DEFAULT;
+	cluster->cl_keepalive_delay_ms = PMNET_KEEPALIVE_DELAY_MS_DEFAULT;
+	cluster->cl_fence_method       = PMNM_FENCE_RESET;
+
 	pmnm_single_cluster = cluster;
 
+	return;
+
+out:
+	kfree(cluster);
 	return;
 }
 

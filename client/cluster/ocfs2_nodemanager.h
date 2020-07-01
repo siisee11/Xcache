@@ -2,29 +2,29 @@
 /* -*- mode: c; c-basic-offset: 8; -*-
  * vim: noexpandtab sw=8 ts=8 sts=0:
  *
- * pmdfc_nodemanager.h
+ * ocfs2_nodemanager.h
  *
  * Header describing the interface between userspace and the kernel
- * for the pmdfc_nodemanager module.
+ * for the ocfs2_nodemanager module.
  *
  * Copyright (C) 2002, 2004 Oracle.  All rights reserved.
  */
 
-#ifndef _PMDFC_NODEMANAGER_H
-#define _PMDFC_NODEMANAGER_H
+#ifndef _OCFS2_NODEMANAGER_H
+#define _OCFS2_NODEMANAGER_H
 
-#define PMNM_API_VERSION	1
+#define O2NM_API_VERSION	5
 
-#define PMNM_MAX_NODES		2
-#define PMNM_INVALID_NODE_NUM	255
+#define O2NM_MAX_NODES		255
+#define O2NM_INVALID_NODE_NUM	255
 
 /* host name, group name, cluster name all 64 bytes */
-#define PMNM_MAX_NAME_LEN        64    // __NEW_UTS_LEN
+#define O2NM_MAX_NAME_LEN        64    // __NEW_UTS_LEN
 
 /*
  * Maximum number of global heartbeat regions allowed.
  * **CAUTION**  Changing this number will break dlm compatibility.
  */
-#define PMNM_MAX_REGIONS	32
+#define O2NM_MAX_REGIONS	32
 
-#endif /* _PMDFC_NODEMANAGER_H */
+#endif /* _OCFS2_NODEMANAGER_H */

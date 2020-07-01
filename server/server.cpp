@@ -270,7 +270,7 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 				printf("SEND PAGE with long key=%lx\n", key);
 				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
 					saved_page, PAGE_SIZE);
-				printf("[ Retrived (key=%lx, index=%lx, longkey=%lx) \n", ntohl(hdr->key), ntohl(hdr->index), key);
+				printf("[ Retrived (key=%lx, index=%lx, longkey=%lx) ", ntohl(hdr->key), ntohl(hdr->index), key);
 				printf("%lx ]\n", hashTable->Get(key));
 				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
