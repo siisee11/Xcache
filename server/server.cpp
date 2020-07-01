@@ -40,8 +40,6 @@
 
 using std::deque;
 using namespace boost::lockfree;
-std::mutex cout_mu;
-std::condition_variable cond;
 
 struct pmnet_msg_in {
 	int sockfd;
@@ -82,6 +80,7 @@ void consumer(int client_socket) {
 
 	/* consume request from queue */
 	while (!done) {
+		/* TODO: Uncomment below after debugging */
 #if 0
 		while (new_queue.pop(msg_in)){
 			getcnt++;
@@ -320,8 +319,10 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushe
 			msg_in->page_off += ret;
 			if (msg_in->page_off == sizeof(struct pmnet_msg)) {
 				hdr = msg_in->hdr;
-				if (ntohs(hdr->data_len) > PMNET_MAX_PAYLOAD_BYTES)
+				if (ntohs(hdr->data_len) > PMNET_MAX_PAYLOAD_BYTES) {
+					printf("ntohs(hdr->data_len) =%d\n", ntohs(hdr->data_len));
 					ret = -EOVERFLOW;
+				}
 			}
 		}
 		if (ret <= 0)
@@ -358,6 +359,7 @@ static int pmnet_advance_rx(int sockfd, struct pmnet_msg_in *msg_in, bool& pushe
 		/* we can only get here once, the first time we read
 		 * the payload.. so set ret to progress if the handler
 		 * works out. after calling this the message is toast */
+		/* TODO: Uncomment below after debugging */
 #if 0
 		if (new_queue.push(msg_in)) {
 			putcnt++;
@@ -407,7 +409,6 @@ void init_network_server(int *sockfd, int *connfd)
 	socklen_t len; 
 	struct sockaddr_in servaddr, cli; 
 
-//	init_msg();
 
 	// socket create and verification 
 	*sockfd = socket(AF_INET, SOCK_STREAM, 0); 
