@@ -23,6 +23,7 @@ clean:
 prepare:
 	make -C $(KDIR) modules
 load:
+	script/bit_mask_set.sh
 	insmod ./$(TARGET_MODULE).ko
 unload:
 	rmmod ./$(TARGET_MODULE).ko
