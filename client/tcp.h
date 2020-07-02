@@ -65,7 +65,7 @@ struct pmnet_msg
 	__be32 sys_status;
 	__be32 status;
 	__be32 key;
-//	__be32 msg_num;
+	__be32 msg_num;
 	__be32 index;
 	__u8  buf[0];
 };
