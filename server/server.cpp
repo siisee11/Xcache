@@ -50,6 +50,9 @@ struct pmnet_msg_in {
 	size_t page_off;
 };
 
+
+static struct pmnet_msg *pmnet_keep_req, *pmnet_keep_resp;
+
 /* lock-free-queue */
 boost::lockfree::queue<pmnet_msg_in *> new_queue(128);
 boost::atomic<bool> done (false);
@@ -61,7 +64,7 @@ boost::atomic<int> getcnt (0);
 CCEH* hashTable;
 
 static void pmnet_rx_until_empty(struct pmnet_sock_container *sc);
-static int pmnet_process_message(struct pmnet_sock_container *sc, 
+static int pmnet_process_message(int sockfd, 
 		struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
 
 static struct pmnet_sock_container *sc_alloc()
@@ -104,22 +107,20 @@ void consumer(struct pmnet_sock_container *sc) {
 	/* consume request from queue */
 	while (!done) {
 		/* TODO: Uncomment below after debugging */
-#if 0
 		while (new_queue.pop(msg_in)){
 			getcnt++;
 			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
 			ret = pmnet_process_message(sc->sockfd, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
-#endif
 	}
 
-#if 0
 	while (new_queue.pop(msg_in)) {
-		printf("CONSUMER buffer_.remove()\n");
+		getcnt++;
+		log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
 		ret = pmnet_process_message(sc->sockfd, msg_in->hdr, msg_in);
 	}
-#endif
+
 	close( sc->sockfd );
 	printf("[ CONSUMER %lx Exit ]\n", this_id);
 }
@@ -162,8 +163,8 @@ static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len,
 	msg->magic = htons(PMNET_MSG_MAGIC);
 	msg->data_len = htons(data_len);
 	msg->msg_type = htons(msg_type);
-//	msg->sys_status = htonl(PMNET_ERR_NONE);
-	msg->sys_status = htonl(0);
+	msg->sys_status = htonl(PMNET_ERR_NONE);
+//	msg->sys_status = htonl(0);
 	msg->status = 0;
 	msg->key = htonl(key);
 }
@@ -204,6 +205,33 @@ out:
 	return ret;
 }
 
+static void pmnet_sendpage(int sockfd,
+			   struct pmnet_msg *msg,
+			   size_t size)
+{
+	int ret;
+
+	struct msghdr msghdr1;
+	struct iovec iov_msg[1];
+
+	memset(iov_msg, 0, sizeof(iov_msg));
+	iov_msg[0].iov_base = msg;
+	iov_msg[0].iov_len = size;
+
+	while (1) {
+		/* XXX: do we need lock here? */
+		ret = sendmsg(sockfd, &msghdr1, MSG_DONTWAIT);
+		if (ret == size)
+			break;
+		if (ret == (ssize_t)-EAGAIN) {
+			printf("%s: have to resend page\n", __func__);
+			continue;
+		}
+		break;
+	}
+}
+
+
 /* this returns -errno if the header was unknown or too large, etc.
  * after this is called the buffer us reused for the next message */
 static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in)
@@ -222,6 +250,8 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 		case PMNET_MSG_STATUS_MAGIC:
 			goto out; 
 		case PMNET_MSG_KEEP_REQ_MAGIC:
+			pmnet_sendpage(sockfd, pmnet_keep_resp,
+				       sizeof(*pmnet_keep_resp));
 			goto out;
 		case PMNET_MSG_KEEP_RESP_MAGIC:
 			goto out;
@@ -258,6 +288,9 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
+
+			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
+				NULL, 0);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
@@ -324,9 +357,6 @@ out:
 static int pmnet_check_handshake(struct pmnet_sock_container *sc, struct pmnet_msg_in *msg_in)
 {
 	struct pmnet_handshake *hand = (struct pmnet_handshake *)msg_in->page;
-
-	printf("ntohl(hand->protocol_version)=%lld\n", ntohll(hand->protocol_version));
-	printf("PMNET_PROTOCOL_VERSION =%lld\n", PMNET_PROTOCOL_VERSION);
 
 	if (ntohll(hand->protocol_version) != PMNET_PROTOCOL_VERSION) {
 		/* don't bother reconnecting if its the wrong version. */
@@ -437,18 +467,18 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		 * the payload.. so set ret to progress if the handler
 		 * works out. after calling this the message is toast */
 		/* TODO: Uncomment below after debugging */
-#if 0
 		if (new_queue.push(msg_in)) {
 			putcnt++;
 			log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
 			pushed = true;
 			ret = 1;
 		}
-#endif
+#if 0
 		putcnt++;
 		log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
 		pushed = true;
 		ret = 1;
+#endif
 	}
 
 out:
@@ -485,6 +515,14 @@ void init_network_server()
 	socklen_t len; 
 	struct sockaddr_in servaddr, cli; 
 	struct pmnet_sock_container *sc = NULL;
+
+	pmnet_keep_req = (pmnet_msg *)calloc(1, sizeof(struct pmnet_msg));
+	pmnet_keep_resp = (pmnet_msg *)calloc(1, sizeof(struct pmnet_msg));
+	if (!pmnet_keep_req || !pmnet_keep_resp)
+		return;
+
+	pmnet_keep_req->magic = htons(PMNET_MSG_KEEP_REQ_MAGIC);
+	pmnet_keep_resp->magic = htons(PMNET_MSG_KEEP_RESP_MAGIC);
 
 	// socket create and verification 
 	sockfd = socket(AF_INET, SOCK_STREAM, 0); 
