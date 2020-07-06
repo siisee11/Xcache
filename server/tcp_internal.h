@@ -25,4 +25,12 @@ struct pmnet_sock_container {
 //  struct mutex		sc_send_lock;
 };
 
+enum pmnet_system_error {
+	PMNET_ERR_NONE = 0,
+	PMNET_ERR_NO_HNDLR,
+	PMNET_ERR_OVERFLOW,
+	PMNET_ERR_DIED,
+	PMNET_ERR_MAX
+};
+
 #endif /* PMNET_TCP_INTERNAL_H */

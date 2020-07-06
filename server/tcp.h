@@ -67,7 +67,7 @@ struct pmnet_msg
 	uint32_t sys_status;
 	uint32_t status;
 	uint32_t key;
-//	uint32_t msg_num;
+	uint32_t msg_num;
 	uint32_t index;
 	uint8_t  buf[0];
 };
