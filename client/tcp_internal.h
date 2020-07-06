@@ -13,7 +13,7 @@
 /* we're delaying our quorum decision so that heartbeat will have timed
  * out truly dead nodes by the time we come around to making decisions
  * on their number */
-#define PMNET_QUORUM_DELAY_MS	((pmhb_dead_threshold + 2) * PMHB_REGION_TIMEOUT_MS)
+//#define PMNET_QUORUM_DELAY_MS	((pmhb_dead_threshold + 2) * PMHB_REGION_TIMEOUT_MS)
 
 struct pmnet_handshake {
 	__be64	protocol_version;

@@ -321,6 +321,8 @@ static void sc_kref_release(struct kref *kref)
 	struct pmnet_sock_container *sc = container_of(kref,
 			struct pmnet_sock_container, sc_kref);
 
+	printk(KERN_NOTICE "releasing sc.....\n");
+
 	if (sc->sc_sock) {
 		sock_release(sc->sc_sock);
 		sc->sc_sock = NULL;
@@ -389,7 +391,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 	INIT_WORK(&sc->sc_connect_work, pmnet_sc_connect_completed);
 	INIT_WORK(&sc->sc_rx_work, pmnet_rx_until_empty);
 	INIT_WORK(&sc->sc_shutdown_work, pmnet_shutdown_sc);
-//	INIT_DELAYED_WORK(&sc->sc_keepalive_work, pmnet_sc_send_keep_req);
+	INIT_DELAYED_WORK(&sc->sc_keepalive_work, pmnet_sc_send_keep_req);
 
 	timer_setup(&sc->sc_idle_timeout, pmnet_idle_timer, 0);
 
@@ -441,13 +443,11 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	if (nn->nn_persistent_error || nn->nn_sc_valid)
 		wake_up(&nn->nn_sc_wq);
 
-#if 0
 	if (was_valid && !was_err && nn->nn_persistent_error) {
-		o2quo_conn_err(pmnet_num_from_nn(nn));
-		queue_delayed_work(pmnet_wq, &nn->nn_still_up,
-				   msecs_to_jiffies(PMNET_QUORUM_DELAY_MS));
+//		o2quo_conn_err(pmnet_num_from_nn(nn));
+//		queue_delayed_work(pmnet_wq, &nn->nn_still_up,
+//				   msecs_to_jiffies(PMNET_QUORUM_DELAY_MS));
 	}
-#endif
 
 	if (was_valid && !valid) {
 		if (old_sc)
@@ -648,8 +648,8 @@ static void pmnet_shutdown_sc(struct work_struct *work)
 	if (pmnet_unregister_callbacks(sc->sc_sock->sk, sc)) {
 		/* we shouldn't flush as we're in the thread, the
 		 * races with pending sc work structs are harmless */
-//		del_timer_sync(&sc->sc_idle_timeout);
-//		pmnet_sc_cancel_delayed_work(sc, &sc->sc_keepalive_work);
+		del_timer_sync(&sc->sc_idle_timeout);
+		pmnet_sc_cancel_delayed_work(sc, &sc->sc_keepalive_work);
 		sc_put(sc);
 		kernel_sock_shutdown(sc->sc_sock, SHUT_RDWR);
 	}
@@ -771,7 +771,7 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 
 	/* TODO: 얘가 잘못 */
 	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
-   // return 0;
+//    return 0;
 	if (likely(ret == total))
 		return 0;
 	pr_info("sendmsg returned %d instead of %zu\n", ret, total);
@@ -874,7 +874,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	/* wait on other node's handler */
 	pmnet_set_nst_status_time(&nst);
 	/* TODO: make wait_event work */
-//	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
+	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
 
 	pmnet_update_send_stats(&nst, sc);
 
@@ -946,7 +946,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 	msglog(hdr, "processing message\n");
 
-//	pmnet_sc_postpone_idle(sc);
+	pmnet_sc_postpone_idle(sc);
 
 	switch(be16_to_cpu(hdr->magic)) {
 		case PMNET_MSG_STATUS_MAGIC:
@@ -1414,6 +1414,7 @@ static void pmnet_sc_connect_completed(struct work_struct *work)
 		container_of(work, struct pmnet_sock_container,
 			     sc_connect_work);
 
+	/* TODO: Why below log doesn't appear? pr_info works, sclog and mlog doesn't work */
 	mlog(ML_MSG, "sc sending handshake with ver %llu id %llx\n",
               (unsigned long long)PMNET_PROTOCOL_VERSION,
 	      (unsigned long long)be64_to_cpu(pmnet_hand->connector_id));

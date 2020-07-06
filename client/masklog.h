@@ -5,8 +5,8 @@
  * Copyright (C) 2005 Oracle.  All rights reserved.
  */
 
-#ifndef O2CLUSTER_MASKLOG_H
-#define O2CLUSTER_MASKLOG_H
+#ifndef PMCLUSTER_MASKLOG_H
+#define PMCLUSTER_MASKLOG_H
 
 /*
  * For now this is a trivial wrapper around printk() that gives the critical
@@ -101,7 +101,7 @@
  * than errors and notices, allowing gcc to remove the code completely.
  * When enabled, allow all masks.
  */
-#define CONFIG_PMDFC_DEBUG_MASKLOG
+#define CONFIG_PMDFC_DEBUG_MASKLOG 0
 #if defined(CONFIG_PMDFC_DEBUG_MASKLOG)
 #define ML_ALLOWED_BITS ~0
 #else
