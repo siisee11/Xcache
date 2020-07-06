@@ -284,8 +284,24 @@ static void sc_show_sock_stats(struct seq_file *seq,
 {
 	if (!sc)
 		return;
-
+#if 0
 	seq_printf(seq, "%d,%u,%lu,%lld,%lld,%lld,%lu,%lld\n", PMNET_STATS_STR_VERSION,
+		   sc->sc_node->nd_num, (unsigned long)sc_send_count(sc),
+		   (long long)sc_tv_acquiry_total_ns(sc),
+		   (long long)sc_tv_send_total_ns(sc),
+		   (long long)sc_tv_status_total_ns(sc),
+		   (unsigned long)sc_recv_count(sc),
+		   (long long)sc_tv_process_total_ns(sc));
+#endif
+
+	seq_printf(seq,
+		   "node %u\n"
+		   "  send_count:           %lu\n"
+		   "  acquiry_total_ns:     %lld\n"
+		   "  send_total_ns:        %lld\n"
+		   "  status_total_ns:      %lld\n"
+		   "  recv_count:           %lu\n"
+		   "  process_total_ns:     %lld\n",
 		   sc->sc_node->nd_num, (unsigned long)sc_send_count(sc),
 		   (long long)sc_tv_acquiry_total_ns(sc),
 		   (long long)sc_tv_send_total_ns(sc),
