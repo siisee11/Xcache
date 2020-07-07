@@ -418,7 +418,7 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 
 	/* read header */
 	if (msg_in->page_off < sizeof(struct pmnet_msg)) {
-		data = msg_in->hdr + msg_in->page_off;
+		data = (char *)msg_in->hdr + msg_in->page_off;
 		datalen = sizeof(struct pmnet_msg) - msg_in->page_off;
 		ret = read(sc->sockfd, data, datalen);
 
@@ -489,14 +489,18 @@ static void pmnet_rx_until_empty(struct pmnet_sock_container *sc)
 {
 	int ret = 1;
 	bool pushed = true;
+	char buff[4096];
 	struct pmnet_msg_in *msg_in; // structure for message processing
 	do {
+#if 0
 		/* prepare new msg */
 		if (pushed) {
 			msg_in = init_msg();
 			pushed = false;
 		}
 		ret = pmnet_advance_rx(sc, msg_in, pushed);
+#endif
+		ret = read(sc->sockfd, buff, 4096);
 	} while (ret > 0);
 
 	if (ret <= 0 && ret !=-EAGAIN) {
