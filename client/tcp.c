@@ -1627,7 +1627,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	pmnet_register_callbacks(sc->sc_sock->sk, sc);
 
 	spin_lock(&nn->nn_lock);
-	/* XXX: we set valid here; handshake completion will set nn->nn_sc_valid */
+	/* XXX: handshake completion will set nn->nn_sc_valid */
 	pmnet_set_nn_state(nn, sc, 1, 0);
 	spin_unlock(&nn->nn_lock);
 
@@ -1786,7 +1786,7 @@ int pmnet_init(void)
 		return -ENOMEM; /* ? */
 	}
 
-	for (i = 0; i < ARRAY_SIZE(pmnet_nodes); i++) {
+	for (i = 0; i < ARRAY_SIZE(pmnet_nodes) - 1; i++) {
 		struct pmnet_node *nn = pmnet_nn_from_num(i);
 		
 		pr_info("pmnet_init::set pmnet_node\n");

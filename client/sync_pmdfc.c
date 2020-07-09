@@ -38,8 +38,10 @@ atomic_t r = ATOMIC_INIT(0);
  */
 static u64 pmdfc_total_gets;
 static u64 pmdfc_actual_gets;
+static u64 pmdfc_put_count;
 
 extern int cond;
+
 
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
@@ -47,85 +49,68 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		pgoff_t index, struct page *page)
 {
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-	void *pg_from;
-	void *pg_to;
 
 	int status = 0;
 	int ret = -1;
 
-//	atomic_inc(&r);
-//	if ( atomic_read(&r) < 1000 ) {
-//		tmem_oid_print(&oid);
+	pr_info("put_page %lu\n", pmdfc_put_count++);
+//	schedule();
 
-		/* hash input data */
-		unsigned char *data = (unsigned char*)&key;
-		unsigned char *idata = (unsigned char*)&index;
-
-		data[4] = idata[0];
-		data[5] = idata[1];
-		data[6] = idata[2];
-		data[7] = idata[3];
-
-#if 0
-		pr_info("data[0] =%x, data[1] =%x, data[2]=%x, data[3] =%x \n"
-				, data[0], data[1], data[2], data[3]);
-
-		pr_info("data[4] =%x, data[5] =%x, data[6]=%x, data[7] =%x, size=%d\n"
-				, data[4], data[5], data[6], data[7], sizeof(data));
-#endif
-
-		if ( pool_id < 0 ) 
-			return;
-
-		/* simulate put_page success */
-		ret = 0;
-
-		if ( ret < 0 )
-			pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
-
+	if ( pool_id < 0 ) 
 		return;
-		ret = bloom_filter_add(bf, data, 8);
-		if ( ret < 0 )
-			pr_info("bloom_filter add fail\n");
-//	}
-//	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
+
+#if 1
+	/* hash input data */
+	unsigned char *data = (unsigned char*)&key;
+	unsigned char *idata = (unsigned char*)&index;
+
+	data[4] = idata[0];
+	data[5] = idata[1];
+	data[6] = idata[2];
+	data[7] = idata[3];
+
+
+	/* simulate put_page success */
+	ret = 0;
+
+	if ( ret < 0 )
+		pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
+
+	ret = bloom_filter_add(bf, data, 24);
+	if ( ret < 0 )
+		pr_info("bloom_filter add fail\n");
+#endif
 }
 
 static int pmdfc_cleancache_get_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
+#if 1
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-	char *to_va, *from_va;
-	int ret;
 	bool isIn = false;
 
-#if 0
-	atomic_inc(&v);
-	if ( atomic_read(&v) < 1000 ) {
-		/* hash input data */
-		unsigned char *data = (unsigned char*)&key;
-		unsigned char *idata = (unsigned char*)&index;
+	/* hash input data */
+	unsigned char *data = (unsigned char*)&key;
+	unsigned char *idata = (unsigned char*)&index;
 
-		data[4] = idata[0];
-		data[5] = idata[1];
-		data[6] = idata[2];
-		data[7] = idata[3];
+	data[4] = idata[0];
+	data[5] = idata[1];
+	data[6] = idata[2];
+	data[7] = idata[3];
 
-		pmdfc_total_gets++;
+	bloom_filter_check(bf, data, 8, &isIn);
 
-//		bloom_filter_check(bf, data, 8, &isIn);
+	pmdfc_total_gets++;
 
-		/* This page is not exist in PM */
-		if ( !isIn )
-			goto not_exists;
+	/* This page is not exist in PM */
+	if ( !isIn )
+		goto not_exists;
 
-		/* increase actual get page count */
-		pmdfc_actual_gets++;
-	}
-#endif
+	pmdfc_actual_gets++;
 
 not_exists:
+#endif
 	return -1;
 }
 
@@ -134,28 +119,7 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		pgoff_t index)
 {
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-	char reply[1024];
-	int status;
 
-	bool isIn = false;
-	goto out;
-
-	/* hash input data */
-	unsigned char *data = (unsigned char*)&key;
-	data[0] += index;
-	
-//	bloom_filter_check(bf, data, 8, &isIn);
-
-//	printk(KERN_INFO "pmdfc: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
-//			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
-
-	if (!isIn) {
-		return;
-	}
-
-//	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, &reply, sizeof(reply),
-//		   0, &status);
-out:
 	return;
 }
 
@@ -225,8 +189,8 @@ static int __init pmdfc_init(void)
 	int ret;
 
 	/* initailize pmdfc's network feature */
-	pmnet_init();
-	pr_info(" *** mtp | network client init | network_client_init *** \n");
+//	pmnet_init();
+//	pr_info(" *** mtp | network client init | network_client_init *** \n");
 
 	/* initialize bloom filter */
 	bloom_filter_init();

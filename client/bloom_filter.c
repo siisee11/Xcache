@@ -12,7 +12,6 @@
 #include <linux/idr.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <linux/sched.h>
 #include <linux/mutex.h>
 #include <linux/init.h>
 #include <linux/hash.h>
@@ -178,6 +177,8 @@ int bloom_filter_add(struct bloom_filter *filter,
 		if (ret < 0)
 			goto exit_unlock;
 		set_bit(bit, filter->bitmap);
+
+//		pr_info("set_bit --> %u\n", bit);
 	}
 
 exit_unlock:
@@ -208,7 +209,7 @@ int bloom_filter_check(struct bloom_filter *filter,
 		if (ret < 0)
 			goto exit_unlock;
 
-		pr_info("Bloom filter: test_bit-->%d\n", bit);
+//		pr_info("Bloom filter: test_bit-->%d\n", bit);
 
 		if (!test_bit(bit, filter->bitmap)) {
 			*result = false;

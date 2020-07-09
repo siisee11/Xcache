@@ -9,5 +9,11 @@ echo "puts : ";
 cat /sys/kernel/debug/cleancache/puts;
 echo "invalidates : ";
 cat /sys/kernel/debug/cleancache/invalidates;
+
+echo "total_get: ";
+cat /sys/kernel/debug/pmdfc/total_gets;
+echo "actual_get: ";
+cat /sys/kernel/debug/pmdfc/actual_gets;
+
 '
 
