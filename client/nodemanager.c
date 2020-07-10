@@ -15,6 +15,15 @@
 #include "masklog.h"
 #include "sys.h"
 
+static unsigned int inet_addr(const char *str)
+{
+	int a,b,c,d;
+	char arr[4];
+	sscanf(str,"%d.%d.%d.%d",&a,&b,&c,&d);
+	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
+	return *(unsigned int*)arr;
+}
+
 struct pmnm_cluster *pmnm_single_cluster = NULL;
 
 struct pmnm_node *pmnm_get_node_by_num(u8 node_num)

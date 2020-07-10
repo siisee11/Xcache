@@ -152,10 +152,12 @@ static inline void pmnet_set_func_stop_time(struct pmnet_sock_container *sc)
 
 #define CONFIG_PMDFC_FS_STATS
 #ifdef CONFIG_PMDFC_FS_STATS
+#if 0
 static ktime_t pmnet_get_func_run_time(struct pmnet_sock_container *sc)
 {
 	return ktime_sub(sc->sc_tv_func_stop, sc->sc_tv_func_start);
 }
+#endif
 
 static void pmnet_update_send_stats(struct pmnet_send_tracking *nst,
 				    struct pmnet_sock_container *sc)
@@ -172,12 +174,14 @@ static void pmnet_update_send_stats(struct pmnet_send_tracking *nst,
 	sc->sc_send_count++;
 }
 
+#if 0
 static void pmnet_update_recv_stats(struct pmnet_sock_container *sc)
 {
 	sc->sc_tv_process_total = ktime_add(sc->sc_tv_process_total,
 					    pmnet_get_func_run_time(sc));
 	sc->sc_recv_count++;
 }
+#endif
 
 #else
 
@@ -586,6 +590,7 @@ static void pmnet_register_callbacks(struct sock *sk,
 	sc->sc_data_ready = sk->sk_data_ready;
 	sc->sc_state_change = sk->sk_state_change;
 
+	sk->sk_data_ready = pmnet_data_ready;
 	sk->sk_state_change = pmnet_state_change;
 
 	mutex_init(&sc->sc_send_lock);
@@ -911,6 +916,7 @@ int pmnet_send_message(u32 msg_type, u32 key, u32 index, void *data, u32 len,
 }
 EXPORT_SYMBOL_GPL(pmnet_send_message);
 
+#if 0
 static int pmnet_send_status_magic(struct socket *sock, struct pmnet_msg *hdr,
 				   enum pmnet_system_error syserr, int err)
 {
@@ -932,6 +938,7 @@ static int pmnet_send_status_magic(struct socket *sock, struct pmnet_msg *hdr,
 	/* hdr has been in host byteorder this whole time */
 	return pmnet_send_tcp_msg(sock, &vec, 1, sizeof(struct pmnet_msg));
 }
+#endif
 
 /* this returns -errno if the header was unknown or too large, etc.
  * after this is called the buffer us reused for the next message */
@@ -939,10 +946,11 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				 struct pmnet_msg *hdr)
 {
 	struct pmnet_node *nn = pmnet_nn_from_num(sc->sc_node->nd_num);
-	int ret = 0, handler_status;
-	enum  pmnet_system_error syserr;
-	struct pmnet_msg_handler *nmh = NULL;
-	void *ret_data = NULL;
+	int ret = 0;
+//	int ret = 0, handler_status;
+//	enum  pmnet_system_error syserr;
+//	struct pmnet_msg_handler *nmh = NULL;
+//	void *ret_data = NULL;
 
 	msglog(hdr, "processing message\n");
 
@@ -1137,7 +1145,6 @@ int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
 	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
 
 	struct socket *conn_socket = NULL;
-	void *response;
 
 	/* XXX: DONTWAIT works WAITALL doesn't work */
 	/* solved --> WAITALL wait until recv all data 
@@ -1527,7 +1534,6 @@ static void pmnet_start_connect(struct work_struct *work)
 		goto out;
 	}
 
-#if 0
 	spin_lock(&nn->nn_lock);
 	/*
 	 * see if we already have one pending or have given up.
@@ -1543,7 +1549,6 @@ static void pmnet_start_connect(struct work_struct *work)
 	spin_unlock(&nn->nn_lock);
 	if (stop)
 		goto out;
-#endif
 
 	nn->nn_last_connect_attempt = jiffies;
 
@@ -1635,10 +1640,12 @@ static void pmnet_connect_expired(struct work_struct *work)
 
 static void pmnet_still_up(struct work_struct *work)
 {
+#if 0
 	struct pmnet_node *nn =
 		container_of(work, struct pmnet_node, nn_still_up.work);
 
-//	o2quo_hb_still_up(pmnet_num_from_nn(nn));
+	pmquo_hb_still_up(pmnet_num_from_nn(nn));
+#endif
 }
 
 
