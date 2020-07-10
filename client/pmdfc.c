@@ -49,17 +49,13 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		pgoff_t index, struct page *page)
 {
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
+	void *pg_from;
 
 	int status = 0;
 	int ret = -1;
 
-	pr_info("put_page %lu\n", pmdfc_put_count++);
 //	schedule();
 
-	if ( pool_id < 0 ) 
-		return;
-
-#if 1
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
@@ -69,9 +65,26 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	data[6] = idata[2];
 	data[7] = idata[3];
 
+	if ( pool_id < 0 ) 
+		return;
 
-	/* simulate put_page success */
-	ret = 0;
+	atomic_inc(&r);
+	if (atomic_read(&r) % 100 == 0 )
+		pr_info("count =%d\n", atomic_read(&r));
+
+	/* get page virtual address */
+	pg_from = page_address(page);
+
+#if defined(PMDFC_DEBUG)
+	/* Send page to server */
+	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
+		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+
+	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
+#endif
+
+	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, pg_from, PAGE_SIZE,
+		   0, &status);
 
 	if ( ret < 0 )
 		pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
@@ -79,6 +92,9 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
+
+#if defined(PMDFC_DEBUG)
+	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 #endif
 }
 
@@ -86,8 +102,12 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
-#if 1
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
+	char *to_va;
+	char response[PAGE_SIZE];
+	int ret;
+
+	int status;
 	bool isIn = false;
 
 	/* hash input data */
@@ -99,7 +119,8 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	data[6] = idata[2];
 	data[7] = idata[3];
 
-	bloom_filter_check(bf, data, 8, &isIn);
+	/* page is in or not? */
+	bloom_filter_check(bf, data, 24, &isIn);
 
 	pmdfc_total_gets++;
 
@@ -108,6 +129,36 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		goto not_exists;
 
 	pmdfc_actual_gets++;
+
+	if ( atomic_read(&v) < 1000 ) {
+		atomic_inc(&v);
+
+#if defined(PMDFC_DEBUG)
+		/* Send get request and receive page */
+		printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+#endif
+
+		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, NULL, 0,
+			   0, &status);
+
+		ret = pmnet_recv_message(PMNET_MSG_SENDPAGE, 0, &response, PAGE_SIZE,
+			0, &status);
+
+		if (status != 0) {
+			/* get page failed */
+			goto not_exists;
+		}
+		/* copy page content from message */
+		to_va = page_address(page);
+		memcpy(to_va, response, PAGE_SIZE);
+
+#if defined(PMDFC_DEBUG)
+		printk(KERN_INFO "pmdfc: GET PAGE success\n");
+#endif
+
+		return 0;
+	} /* if */
 
 not_exists:
 #endif
@@ -119,21 +170,47 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		pgoff_t index)
 {
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
+	int status;
 
+	bool isIn = false;
+
+	/* hash input data */
+	unsigned char *data = (unsigned char*)&key;
+	data[0] += index;
+	
+	bloom_filter_check(bf, data, 8, &isIn);
+
+#if defined(PMDFC_DEBUG)
+	printk(KERN_INFO "pmdfc: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
+#endif
+
+	if (!isIn) {
+		goto out;
+	}
+
+	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, 0, 0,
+		   0, &status);
+out:
 	return;
 }
 
 static void pmdfc_cleancache_flush_inode(int pool_id,
 		struct cleancache_filekey key)
 {
+#if defined(PMDFC_DEBUG)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-//	printk(KERN_INFO "pmdfc: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
-//			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2]);
+
+	printk(KERN_INFO "pmdfc: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2]);
+#endif
 }
 
 static void pmdfc_cleancache_flush_fs(int pool_id)
 {
+#if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: FLUSH FS\n");
+#endif
 }
 
 static int pmdfc_cleancache_init_fs(size_t pagesize)
