@@ -45,7 +45,7 @@ static inline bool tmem_oid_valid(struct tmem_oid *oidp)
 
 static inline void tmem_oid_print(struct tmem_oid *oidp)
 {
-	printk(KERN_INFO ".oid[0]=%llu .oid[1]=%llu .oid[2]=%llu\n", 
+	printk(KERN_INFO ".oid[0]=%llx .oid[1]=%llx .oid[2]=%llx\n", 
 			(long long)oidp->oid[0], (long long)oidp->oid[1], (long long)oidp->oid[2]);
 }
 

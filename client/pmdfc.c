@@ -7,6 +7,7 @@
 #include <linux/delay.h>
 #include <linux/workqueue.h>
 #include <linux/wait.h>
+#include <linux/debugfs.h>
 #include <asm/delay.h>
 
 #include "tmem.h"
@@ -30,7 +31,17 @@ struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
 atomic_t v = ATOMIC_INIT(0);
 atomic_t r = ATOMIC_INIT(0);
 
+/*
+ * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
+ * properly configured.  These are for information only so are not protected
+ * against increment races.
+ */
+static u64 pmdfc_total_gets;
+static u64 pmdfc_actual_gets;
+static u64 pmdfc_put_count;
+
 extern int cond;
+
 
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
@@ -42,6 +53,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
 	int status = 0;
 	int ret = -1;
+
+//	schedule();
 
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
@@ -76,7 +89,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	if ( ret < 0 )
 		pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
 
-	ret = bloom_filter_add(bf, data, 8);
+	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
 
@@ -106,15 +119,16 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	data[6] = idata[2];
 	data[7] = idata[3];
 
-
 	/* page is in or not? */
-	bloom_filter_check(bf, data, 8, &isIn);
+	bloom_filter_check(bf, data, 24, &isIn);
+
+	pmdfc_total_gets++;
 
 	/* This page is not exist in PM */
 	if ( !isIn )
 		goto not_exists;
 
-	goto not_exists;
+	pmdfc_actual_gets++;
 
 	if ( atomic_read(&v) < 1000 ) {
 		atomic_inc(&v);
@@ -147,6 +161,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	} /* if */
 
 not_exists:
+#endif
 	return -1;
 }
 
@@ -250,10 +265,9 @@ static int __init pmdfc_init(void)
 {
 	int ret;
 
-
 	/* initailize pmdfc's network feature */
-	pmnet_init();
-	pr_info(" *** mtp | network client init | network_client_init *** \n");
+//	pmnet_init();
+//	pr_info(" *** mtp | network client init | network_client_init *** \n");
 
 	/* initialize bloom filter */
 	bloom_filter_init();
@@ -275,6 +289,14 @@ static int __init pmdfc_init(void)
 	else {
 		printk(KERN_INFO ">> pmdfc: cleancache_disabled\n");
 	}
+
+
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *root = debugfs_create_dir("pmdfc", NULL);
+
+	debugfs_create_u64("total_gets", 0444, root, &pmdfc_total_gets);
+	debugfs_create_u64("actual_gets", 0444, root, &pmdfc_actual_gets);
+#endif
 
 	return 0;
 }

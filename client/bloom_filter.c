@@ -12,7 +12,6 @@
 #include <linux/idr.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <linux/sched.h>
 #include <linux/mutex.h>
 #include <linux/init.h>
 #include <linux/hash.h>
@@ -150,7 +149,8 @@ int __bit_for_crypto_alg(struct bloom_crypto_alg *alg,
 	*bit = 0;
 
 	/* TODO: i range check (alg->len) */
-	for (i = 0; i < alg->len / 8; i++) {
+//	for (i = 0; i < alg->len / 8; i++) {
+	for (i = 0; i < alg->len; i++) {
 		*bit += alg->data[i];
 		*bit %= bitmap_size;
 	}
@@ -177,6 +177,8 @@ int bloom_filter_add(struct bloom_filter *filter,
 		if (ret < 0)
 			goto exit_unlock;
 		set_bit(bit, filter->bitmap);
+
+//		pr_info("set_bit --> %u\n", bit);
 	}
 
 exit_unlock:
@@ -193,7 +195,7 @@ int bloom_filter_check(struct bloom_filter *filter,
 	int ret = 0;
 
 	mutex_lock(&filter->lock);
-	if (list_empty(&filter->alg_list)) {
+	if (unlikely(list_empty(&filter->alg_list))) {
 		ret = -EINVAL;
 		goto exit_unlock;
 	}
@@ -206,6 +208,8 @@ int bloom_filter_check(struct bloom_filter *filter,
 		ret = __bit_for_crypto_alg(alg, data, datalen, filter->bitmap_size, &bit);
 		if (ret < 0)
 			goto exit_unlock;
+
+//		pr_info("Bloom filter: test_bit-->%d\n", bit);
 
 		if (!test_bit(bit, filter->bitmap)) {
 			*result = false;

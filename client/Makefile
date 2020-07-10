@@ -24,6 +24,6 @@ prepare:
 	make -C $(KDIR) modules
 load:
 	insmod ./$(TARGET_MODULE).ko
-	script/bit_mask_set.sh
+#	script/bit_mask_set.sh
 unload:
 	rmmod ./$(TARGET_MODULE).ko

@@ -769,19 +769,68 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 	int ret;
 	struct msghdr msg = {.msg_flags = 0,};
 
+
+#if 1
+	struct kvec *vec1 = NULL;
+	struct msghdr msg1 = {.msg_flags = 0,};
+	struct pmnet_msg *pmsg = NULL;
+	size_t veclen1, total1;
+//	char buf[4096];
+
+//	memset(buf, 0, 4096);
+
+	vec1 = kmalloc_array(1, sizeof(struct kvec), GFP_ATOMIC);
+	if (vec1 == NULL) {
+		pr_info("failed to %zu element kvec!\n", veclen);
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	pmsg = kmalloc(sizeof(struct pmnet_msg), GFP_ATOMIC);
+	if (!pmsg) {
+		pr_info("failed to allocate a pmnet_msg!\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	pmnet_init_msg(pmsg, 0, 0, 0, 0);
+
+	vec1[0].iov_len = sizeof(struct pmnet_msg);
+	vec1[0].iov_base = pmsg;
+//	vec1[1].iov_len = 4096;
+//	vec1[1].iov_base = buf;
+
+	pmsg->magic = cpu_to_be16(PMNET_MSG_STATUS_MAGIC);  // twiddle the magic
+	pmsg->data_len = 0;
+
+	veclen1 = 1;
+	total1 = sizeof(struct pmnet_msg) ;
+
+#endif
+
 	if (sock == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
 
+#if 1
+	ret = kernel_sendmsg(sock, &msg1, vec1, veclen1, total1);
+
+	if (likely(ret == total1))
+		return 0;
+#endif
+
+#if 0
 	/* TODO: 얘가 잘못 */
-	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
-//    return 0;
+//	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
+//	return 0;
 	if (likely(ret == total))
 		return 0;
+
 	pr_info("sendmsg returned %d instead of %zu\n", ret, total);
 	if (ret >= 0)
 		ret = -EPIPE; /* should be smarter, I bet */
+#endif
 out:
 	pr_info("returning error: %d\n", ret);
 	return ret;
@@ -879,7 +928,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	/* wait on other node's handler */
 	pmnet_set_nst_status_time(&nst);
 	/* TODO: make wait_event work */
-	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
+//	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
 
 	pmnet_update_send_stats(&nst, sc);
 
@@ -1583,7 +1632,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	pmnet_register_callbacks(sc->sc_sock->sk, sc);
 
 	spin_lock(&nn->nn_lock);
-	/* XXX: we set valid here; handshake completion will set nn->nn_sc_valid */
+	/* XXX: handshake completion will set nn->nn_sc_valid */
 	pmnet_set_nn_state(nn, sc, 1, 0);
 	spin_unlock(&nn->nn_lock);
 
@@ -1744,7 +1793,7 @@ int pmnet_init(void)
 		return -ENOMEM; /* ? */
 	}
 
-	for (i = 0; i < ARRAY_SIZE(pmnet_nodes); i++) {
+	for (i = 0; i < ARRAY_SIZE(pmnet_nodes) - 1; i++) {
 		struct pmnet_node *nn = pmnet_nn_from_num(i);
 		
 		pr_info("pmnet_init::set pmnet_node\n");
