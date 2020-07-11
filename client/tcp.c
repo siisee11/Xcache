@@ -767,10 +767,11 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 		size_t veclen, size_t total)
 {
 	int ret;
-	struct msghdr msg = {.msg_flags = 0,};
+//	struct msghdr msg = {.msg_flags = 0,};
 
 
 #if 1
+	/* send dummy vec */
 	struct kvec *vec1 = NULL;
 	struct msghdr msg1 = {.msg_flags = 0,};
 	struct pmnet_msg *pmsg = NULL;
@@ -1583,6 +1584,7 @@ static void pmnet_start_connect(struct work_struct *work)
 		goto out;
 	}
 
+#if 0
 	spin_lock(&nn->nn_lock);
 	/*
 	 * see if we already have one pending or have given up.
@@ -1598,6 +1600,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	spin_unlock(&nn->nn_lock);
 	if (stop)
 		goto out;
+#endif 
 
 	nn->nn_last_connect_attempt = jiffies;
 
@@ -1768,7 +1771,6 @@ int pmnet_init(void)
 
 	pmnet_debugfs_init();
 
-	init_pmnm_cluster();
 
 	pmnet_hand = kzalloc(sizeof(struct pmnet_handshake), GFP_KERNEL);
 	pmnet_keep_req = kzalloc(sizeof(struct pmnet_msg), GFP_KERNEL);
@@ -1793,7 +1795,7 @@ int pmnet_init(void)
 		return -ENOMEM; /* ? */
 	}
 
-	for (i = 0; i < ARRAY_SIZE(pmnet_nodes) - 1; i++) {
+	for (i = 0; i < ARRAY_SIZE(pmnet_nodes); i++) {
 		struct pmnet_node *nn = pmnet_nn_from_num(i);
 		
 		pr_info("pmnet_init::set pmnet_node\n");
@@ -1824,8 +1826,8 @@ out:
 
 void pmnet_exit(void)
 {
-	exit_pmnm_cluster();
 	kfree(pmnet_hand);
 	kfree(pmnet_keep_req);
 	kfree(pmnet_keep_resp);
 }
+

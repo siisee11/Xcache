@@ -149,3 +149,65 @@ out:
 void exit_pmnm_cluster(void){
 	pmnm_cluster_release();
 }
+
+
+static void __exit exit_pmnm(void)
+{
+	/* XXX sync with hb callbacks and shut down hb? */
+//	o2net_unregister_hb_callbacks();
+//	configfs_unregister_subsystem(&o2nm_cluster_group.cs_subsys);
+	pmcb_sys_shutdown();
+
+	pmnet_exit();
+	exit_pmnm_cluster();
+//	o2hb_exit();
+}
+
+static int __init init_pmnm(void)
+{
+	int ret = -1;
+
+//	pmhb_init();
+	init_pmnm_cluster();
+
+	ret = pmnet_init();
+	if (ret)
+		goto out_pmhb;
+
+#if 0
+	ret = pmnet_register_hb_callbacks();
+	if (ret)
+		goto out_pmnet;
+
+	config_group_init(&pmnm_cluster_group.cs_subsys.su_group);
+	mutex_init(&pmnm_cluster_group.cs_subsys.su_mutex);
+	ret = configfs_register_subsystem(&pmnm_cluster_group.cs_subsys);
+	if (ret) {
+		printk(KERN_ERR "nodemanager: Registration returned %d\n", ret);
+		goto out_callbacks;
+	}
+#endif
+
+	ret = pmcb_sys_init();
+	if (!ret)
+		goto out;
+
+#if 0
+	configfs_unregister_subsystem(&pmnm_cluster_group.cs_subsys);
+out_callbacks:
+	pmnet_unregister_hb_callbacks();
+#endif
+out_pmnet:
+	pmnet_exit();
+out_pmhb:
+//	pmhb_exit();
+out:
+	return ret;
+}
+
+MODULE_AUTHOR("JY");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("PMDFC management");
+
+module_init(init_pmnm)
+module_exit(exit_pmnm)

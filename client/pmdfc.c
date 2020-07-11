@@ -17,9 +17,6 @@
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
 
-/* Initial page pool: 32 MB (2^13 * 4KB) in pages */
-#define PMDFC_ORDER 13
-
 /* bloom filter */
 /* TODO: is it thread safe? */
 struct bloom_filter *bf;
@@ -38,10 +35,6 @@ atomic_t r = ATOMIC_INIT(0);
  */
 static u64 pmdfc_total_gets;
 static u64 pmdfc_actual_gets;
-static u64 pmdfc_put_count;
-
-extern int cond;
-
 
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
@@ -83,11 +76,12 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
 
+#if defined(PMDFC_NETWORK)
 	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, (long)oid.oid[0], index, pg_from, PAGE_SIZE,
 		   0, &status);
-
 	if ( ret < 0 )
 		pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
+#endif
 
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
@@ -139,6 +133,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 #endif
 
+#if defined(PMDFC_NETWORK)
 		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, NULL, 0,
 			   0, &status);
 
@@ -158,10 +153,11 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif
 
 		return 0;
+#endif /* PMDFC_NETWORK end */
+
 	} /* if */
 
 not_exists:
-#endif
 	return -1;
 }
 
@@ -189,8 +185,10 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		goto out;
 	}
 
+#if defined(PMDFC_NETWORK)
 	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, 0, 0,
 		   0, &status);
+#endif 
 out:
 	return;
 }
@@ -264,15 +262,13 @@ static int bloom_filter_init(void)
 static int __init pmdfc_init(void)
 {
 	int ret;
-
-	/* initailize pmdfc's network feature */
-//	pmnet_init();
-//	pr_info(" *** mtp | network client init | network_client_init *** \n");
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *root = debugfs_create_dir("pmdfc", NULL);
+#endif
 
 	/* initialize bloom filter */
 	bloom_filter_init();
 	pr_info(" *** bloom filter | init | bloom_filter_init *** \n");
-
 
 	ret = pmdfc_cleancache_register_ops();
 
@@ -292,8 +288,6 @@ static int __init pmdfc_init(void)
 
 
 #ifdef CONFIG_DEBUG_FS
-	struct dentry *root = debugfs_create_dir("pmdfc", NULL);
-
 	debugfs_create_u64("total_gets", 0444, root, &pmdfc_total_gets);
 	debugfs_create_u64("actual_gets", 0444, root, &pmdfc_actual_gets);
 #endif
@@ -305,7 +299,6 @@ static int __init pmdfc_init(void)
 static void pmdfc_exit(void)
 {
 	bloom_filter_unref(bf);
-	pmnet_exit();
 }
 
 module_init(pmdfc_init);
