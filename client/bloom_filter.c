@@ -43,7 +43,7 @@ struct bloom_filter *bloom_filter_new(int bit_size)
 		return ERR_PTR(-ENOMEM);
 
 	kref_init(&filter->kref);
-	mutex_init(&filter->lock);
+//	mutex_init(&filter->lock);
 	filter->bitmap_size = bit_size;
 	INIT_LIST_HEAD(&filter->alg_list);
 
@@ -71,10 +71,10 @@ static void __bloom_filter_free(struct kref *kref)
 	struct bloom_filter *filter =
 		container_of(kref, struct bloom_filter, kref);
 
-	mutex_lock(&filter->lock);
+//	mutex_lock(&filter->lock);
 	list_for_each_entry_safe(alg, tmp, &filter->alg_list, entry)
 		bloom_crypto_alg_free(alg);
-	mutex_unlock(&filter->lock);
+//	mutex_unlock(&filter->lock);
 
 	kfree(filter);
 }
@@ -110,9 +110,9 @@ int bloom_filter_add_hash_alg(struct bloom_filter *filter,
 		goto exit_free_hash;
 	}
 
-	mutex_lock(&filter->lock);
+//	mutex_lock(&filter->lock);
 	list_add_tail(&alg->entry, &filter->alg_list);
-	mutex_unlock(&filter->lock);
+//	mutex_unlock(&filter->lock);
 
 	return 0;
 
@@ -164,7 +164,7 @@ int bloom_filter_add(struct bloom_filter *filter,
 	struct bloom_crypto_alg *alg;
 	int ret = 0;
 
-	mutex_lock(&filter->lock);
+//	mutex_lock(&filter->lock);
 	if (list_empty(&filter->alg_list)) {
 		ret = -EINVAL;
 		goto exit_unlock;
@@ -182,7 +182,7 @@ int bloom_filter_add(struct bloom_filter *filter,
 	}
 
 exit_unlock:
-	mutex_unlock(&filter->lock);
+//	mutex_unlock(&filter->lock);
 
 	return ret;
 }
@@ -194,7 +194,7 @@ int bloom_filter_check(struct bloom_filter *filter,
 	struct bloom_crypto_alg *alg;
 	int ret = 0;
 
-	mutex_lock(&filter->lock);
+//	mutex_lock(&filter->lock);
 	if (unlikely(list_empty(&filter->alg_list))) {
 		ret = -EINVAL;
 		goto exit_unlock;
@@ -218,7 +218,7 @@ int bloom_filter_check(struct bloom_filter *filter,
 	}
 
 exit_unlock:
-	mutex_unlock(&filter->lock);
+//	mutex_unlock(&filter->lock);
 
 	return ret;
 }
@@ -232,9 +232,9 @@ void bloom_filter_set(struct bloom_filter *filter,
 
 void bloom_filter_reset(struct bloom_filter *filter)
 {
-	mutex_lock(&filter->lock);
+//	mutex_lock(&filter->lock);
 	bitmap_zero(filter->bitmap, filter->bitmap_size);
-	mutex_unlock(&filter->lock);
+//	mutex_unlock(&filter->lock);
 }
 
 
