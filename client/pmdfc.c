@@ -14,6 +14,10 @@
 #include "tcp.h"
 #include "bloom_filter.h"
 
+#define PMDFC_NETWORK 1
+#define PMDFC_DEBUG 1
+#define PMDFC_NO_GET 1
+
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
 
@@ -46,8 +50,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
 	int status = 0;
 	int ret = -1;
-
-//	schedule();
 
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
@@ -96,6 +98,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
+#if defined(PMDFC_NO_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	char *to_va;
 	char response[PAGE_SIZE];
@@ -158,6 +161,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	} /* if */
 
 not_exists:
+#endif 
 	return -1;
 }
 

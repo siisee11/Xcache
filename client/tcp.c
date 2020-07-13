@@ -876,9 +876,14 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 
 	pmnet_set_nst_sock_time(&nst);
 	
-	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
-	if (ret)
-		goto out;
+	/* XXX: wait may cause problem */
+//	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
+//	if (ret)
+//		goto out;
+	
+	/* XXX: alternative code of above wait_event */
+	kref_get(&nn->nn_sc->sc_kref);
+	sc = nn->nn_sc;
 
 	pmnet_set_nst_sock_container(&nst, sc);
 

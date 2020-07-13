@@ -1,5 +1,4 @@
 CONFIG_MODULE_SIG=n
-TARGET_MODULE := $1
 obj-m := pmdfc_client.o pmnet.o
 
 pmdfc_client-objs := pmdfc.o bloom_filter.o 
@@ -25,7 +24,10 @@ clean:
 prepare:
 	make -C $(KDIR) modules
 load:
-	insmod ./$(TARGET_MODULE).ko
+	insmod ./pmdfc_client.ko
 #	script/bit_mask_set.sh
+net:
+	insmod ./pmnet.ko
+	insmod ./pmdfc_client.ko
 unload:
 	rmmod ./$(TARGET_MODULE).ko
