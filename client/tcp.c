@@ -767,10 +767,9 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 		size_t veclen, size_t total)
 {
 	int ret;
-//	struct msghdr msg = {.msg_flags = 0,};
+	struct msghdr msg = {.msg_flags = 0,};
 
-
-#if 1
+#if 0
 	/* send dummy vec */
 	struct kvec *vec1 = NULL;
 	struct msghdr msg1 = {.msg_flags = 0,};
@@ -814,16 +813,16 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 		goto out;
 	}
 
-#if 1
+#if 0
 	ret = kernel_sendmsg(sock, &msg1, vec1, veclen1, total1);
 
 	if (likely(ret == total1))
 		return 0;
 #endif
 
-#if 0
+#if 1
 	/* TODO: 얘가 잘못 */
-//	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
+	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
 //	return 0;
 	if (likely(ret == total))
 		return 0;

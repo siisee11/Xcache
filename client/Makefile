@@ -30,4 +30,5 @@ net:
 	insmod ./pmnet.ko
 	insmod ./pmdfc_client.ko
 unload:
-	rmmod ./$(TARGET_MODULE).ko
+	rmmod ./pmnet.ko
+	rmmod ./pmdfc_client.ko

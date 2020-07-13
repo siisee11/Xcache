@@ -169,6 +169,7 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index)
 {
+#if defined(PMDFC_FLUSH)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	int status;
 
@@ -195,23 +196,28 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 #endif 
 out:
 	return;
+#endif
 }
 
 static void pmdfc_cleancache_flush_inode(int pool_id,
 		struct cleancache_filekey key)
 {
+#if defined(PMDFC_FLUSH)
 #if defined(PMDFC_DEBUG)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 
 	printk(KERN_INFO "pmdfc: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2]);
 #endif
+#endif
 }
 
 static void pmdfc_cleancache_flush_fs(int pool_id)
 {
+#if defined(PMDFC_FLUSH)
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: FLUSH FS\n");
+#endif
 #endif
 }
 
