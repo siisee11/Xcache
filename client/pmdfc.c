@@ -85,6 +85,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		pr_info("pmnet_send_message_fail(ret=%d)\n", ret);
 #endif
 
+#if defined(PMDFC_RDMA)
+	ret = generate_write_request(&pg_from, (long)oid.oid[0], index, 1);
+#endif 
+
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
@@ -151,13 +155,22 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		to_va = page_address(page);
 		memcpy(to_va, response, PAGE_SIZE);
 
+#endif /* PMDFC_NETWORK end */
+
+#if defined(PMDFC_RDMA)
+		ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
+
+		/* copy page content from message */
+		to_va = page_address(page);
+		memcpy(to_va, response, PAGE_SIZE);
+#endif /* PMDFC_RDMA end */
+
+
 #if defined(PMDFC_DEBUG)
 		printk(KERN_INFO "pmdfc: GET PAGE success\n");
 #endif
 
 		return 0;
-#endif /* PMDFC_NETWORK end */
-
 	} /* if */
 
 not_exists:

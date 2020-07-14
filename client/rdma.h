@@ -148,8 +148,10 @@ struct send_struct{
 
 struct request_struct{
     struct list_head list; // 16
-    int type; // 4
-    int pid;  // 4
+    int type;	// 4
+    int pid; 	// 4
+	u32 key;	// 4
+	u32 index;	// 4
     uint32_t num; // 4
     union{
         uint64_t remote_mm; // 8

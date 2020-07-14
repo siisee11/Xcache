@@ -284,8 +284,8 @@ void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, 
     *node_id = (int)((target >> 56) & 0xff);*/
 }
 
-int generate_write_request(void** pages, int num){
-//int generate_write_request(struct page** pages, int size){
+//int generate_write_request(void** pages, int num){
+int generate_read_request(void** pages, u32 key, u32 index, int num){
     struct request_struct* new_request;
     int pid, i, ret;
 
@@ -301,8 +301,10 @@ int generate_write_request(void** pages, int num){
     new_request->type = MSG_WRITE_REQUEST;
     new_request->pid = pid;
     new_request->num = num;
+    new_request->key = key;
+    new_request->index = index;
     for(i=0; i<num; i++){
-	new_request->pages[i] = pages[i];
+		new_request->pages[i] = pages[i];
     }
 
     spin_lock(&list_lock);
@@ -314,7 +316,7 @@ int generate_write_request(void** pages, int num){
      */
     
     while(atomic_read(&ctx->process_state[pid]) == PROCESS_STATE_ACTIVE){
-	cpu_relax();
+		cpu_relax();
     }
     /*
     ret = ctx->process_state[pid];
@@ -326,7 +328,8 @@ int generate_write_request(void** pages, int num){
 }
 EXPORT_SYMBOL(generate_write_request);
 
-int generate_read_request(void** pages, uint64_t* keys, int num){
+//int generate_read_request(void** pages, uint64_t* keys, int num){
+int generate_read_request(void** pages, u32 key, u32 index, int num){
     struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
     int pid = find_and_set_nextbit();
     int i, ret;
@@ -334,9 +337,13 @@ int generate_read_request(void** pages, uint64_t* keys, int num){
     new_request->type = MSG_READ_REQUEST;
     new_request->pid = pid;
     new_request->num = num;
+	new_request->index = index;
+	new_request->key = key;
+#if 0
     for(i=0; i<num; i++){
-	new_request->keys[i] = keys[i];
+		new_request->keys[i] = keys[i];
     }
+#endif
 
     spin_lock(&list_lock);
     list_add_tail(&(new_request->list), &request_list.list);
@@ -347,11 +354,11 @@ int generate_read_request(void** pages, uint64_t* keys, int num){
      */
     
     while(atomic_read(&ctx->process_state[pid]) == PROCESS_STATE_ACTIVE){
-	cpu_relax();
+		cpu_relax();
     }
     for(i=0; i<num; i++){
-	memcpy(pages[i], ctx->temp_log[pid][i], PAGE_SIZE);
-	//pages[i] = (void*)ctx->temp_log[pid][i];
+		memcpy(pages[i], ctx->temp_log[pid][i], PAGE_SIZE);
+		//pages[i] = (void*)ctx->temp_log[pid][i];
     }
     atomic_set(&ctx->process_state[pid], PROCESS_STATE_DONE);
     /*
@@ -370,11 +377,11 @@ int find_and_set_nextbit(void){
     int bit = 1;
     //uint64_t bit = 1;
     while(1){
-	bit = find_first_zero_bit(ctx->bitmap, MAX_PROCESS);
-	if(test_and_set_bit(bit, ctx->bitmap) == 0){
-	    atomic_set(&ctx->process_state[bit], PROCESS_STATE_ACTIVE);
-	    return bit;
-	}
+		bit = find_first_zero_bit(ctx->bitmap, MAX_PROCESS);
+		if(test_and_set_bit(bit, ctx->bitmap) == 0){
+			atomic_set(&ctx->process_state[bit], PROCESS_STATE_ACTIVE);
+			return bit;
+		}
     }
     /*
 	if((*bitmap & bit) == 0){
