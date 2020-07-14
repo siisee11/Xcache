@@ -108,6 +108,11 @@ static void pmnm_cluster_release(void)
 	kfree(pmnm_single_cluster);
 }
 
+static int param_port = 0;
+static char param_ip[64];
+module_param_named(port, param_port, int, 0444);
+module_param_string(ip, param_ip, sizeof(param_ip), 0444);
+
 /* refer to o2nm_cluster_group_make_group */
 void init_pmnm_cluster(void){
 	struct pmnm_cluster *cluster = NULL;
@@ -121,7 +126,7 @@ void init_pmnm_cluster(void){
 		goto out;
 
 	/* 0 is server, 1 is client node */
-	server_node = init_pmnm_node("pm_server", DEST_ADDR, PORT, 0);
+	server_node = init_pmnm_node("pm_server", param_ip, param_port, 0);
 	client_node = init_pmnm_node("pm_client", CLIENT_ADDR, CLIENT_PORT, 1);
 
 	cluster->cl_nodes[0] = server_node;
