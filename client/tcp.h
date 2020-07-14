@@ -47,14 +47,6 @@
 # define PAGE_SIZE 4096
 #endif
 
-static unsigned int inet_addr(const char *str)
-{
-	int a,b,c,d;
-	char arr[4];
-	sscanf(str,"%d.%d.%d.%d",&a,&b,&c,&d);
-	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
-	return *(unsigned int*)arr;
-}
 
 struct pmnet_msg
 {

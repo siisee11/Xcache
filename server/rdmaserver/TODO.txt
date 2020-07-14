@@ -1,0 +1,20 @@
+1. memory management by node_id, process_id
+	METADATA --> static
+	DATA 	 --> on demand
+	- management with 2 dimesional index array which points to the allocated address
+
+2. workflow --> set bit when request arrives, and clear bit when request is committed or aborted
+      <WRITE>
+        1) recv MSG_WRITE_REQUEST(void) with RDMA_WRITE_IMM -- node_id, pid, size, type masked in wr_id
+	   --> allocate address with size and insert in 2D array with node_id(x) and pid(y) + register_mr
+        2) send MSG_WRITE_REQUEST_REPLY(addr)
+        3) recv MSG_WRITE --> insert the pages in index and free the address
+	4) send MSG_WRITE_REPLY
+	 	tx_state ? committed : aborted
+
+      <READ>
+	1) recv MSG_READ_REQUEST(key) with RDMA_WRITE_IMM -- node_id, pid, size, type masked in wr_id
+	   --> allocate address with size, mmap and insert in 2D array with node_id(x) and pid(y) + register_mr
+	2) send MSG_READ_REQUEST_REPLY(addr)
+        3) recv MSG_READ in remote addr --> skip
+	4) recv MSG_READ_REPLY --> free the address

@@ -15,6 +15,15 @@
 #include "masklog.h"
 #include "sys.h"
 
+static unsigned int inet_addr(const char *str)
+{
+	int a,b,c,d;
+	char arr[4];
+	sscanf(str,"%d.%d.%d.%d",&a,&b,&c,&d);
+	arr[0] = a; arr[1] = b; arr[2] = c; arr[3] = d;
+	return *(unsigned int*)arr;
+}
+
 struct pmnm_cluster *pmnm_single_cluster = NULL;
 
 struct pmnm_node *pmnm_get_node_by_num(u8 node_num)
@@ -99,14 +108,16 @@ static void pmnm_cluster_release(void)
 	kfree(pmnm_single_cluster);
 }
 
+static int param_port = 0;
+static char param_ip[64];
+module_param_named(port, param_port, int, 0444);
+module_param_string(ip, param_ip, sizeof(param_ip), 0444);
+
 /* refer to o2nm_cluster_group_make_group */
 void init_pmnm_cluster(void){
 	struct pmnm_cluster *cluster = NULL;
 	struct pmnm_node *server_node = NULL;
 	struct pmnm_node *client_node = NULL;
-
-	/* sys file system */
-	pmcb_sys_init();
 
 	pr_info("nodemanager: init_pmnm_cluster\n");
 
@@ -115,7 +126,7 @@ void init_pmnm_cluster(void){
 		goto out;
 
 	/* 0 is server, 1 is client node */
-	server_node = init_pmnm_node("pm_server", DEST_ADDR, PORT, 0);
+	server_node = init_pmnm_node("pm_server", param_ip, param_port, 0);
 	client_node = init_pmnm_node("pm_client", CLIENT_ADDR, CLIENT_PORT, 1);
 
 	cluster->cl_nodes[0] = server_node;
@@ -140,3 +151,65 @@ out:
 void exit_pmnm_cluster(void){
 	pmnm_cluster_release();
 }
+
+
+static void __exit exit_pmnm(void)
+{
+	/* XXX sync with hb callbacks and shut down hb? */
+//	o2net_unregister_hb_callbacks();
+//	configfs_unregister_subsystem(&o2nm_cluster_group.cs_subsys);
+	pmcb_sys_shutdown();
+
+	pmnet_exit();
+	exit_pmnm_cluster();
+//	o2hb_exit();
+}
+
+static int __init init_pmnm(void)
+{
+	int ret = -1;
+
+//	pmhb_init();
+	init_pmnm_cluster();
+
+	ret = pmnet_init();
+	if (ret)
+		goto out_pmhb;
+
+#if 0
+	ret = pmnet_register_hb_callbacks();
+	if (ret)
+		goto out_pmnet;
+
+	config_group_init(&pmnm_cluster_group.cs_subsys.su_group);
+	mutex_init(&pmnm_cluster_group.cs_subsys.su_mutex);
+	ret = configfs_register_subsystem(&pmnm_cluster_group.cs_subsys);
+	if (ret) {
+		printk(KERN_ERR "nodemanager: Registration returned %d\n", ret);
+		goto out_callbacks;
+	}
+#endif
+
+	ret = pmcb_sys_init();
+	if (!ret)
+		goto out;
+
+#if 0
+	configfs_unregister_subsystem(&pmnm_cluster_group.cs_subsys);
+out_callbacks:
+	pmnet_unregister_hb_callbacks();
+#endif
+out_pmnet:
+	pmnet_exit();
+out_pmhb:
+//	pmhb_exit();
+out:
+	return ret;
+}
+
+MODULE_AUTHOR("JY");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("PMDFC management");
+
+module_init(init_pmnm)
+module_exit(exit_pmnm)

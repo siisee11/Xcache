@@ -1,8 +1,9 @@
 CONFIG_MODULE_SIG=n
-TARGET_MODULE := pmdfc_client
-obj-m := $(TARGET_MODULE).o
+obj-m := pmdfc_client.o pmnet.o pmrdma.o
 
-pmdfc_client-objs := sync_pmdfc.o tcp.o bloom_filter.o nodemanager.o netdebug.o sys.o masklog.o
+pmdfc_client-objs := pmdfc.o bloom_filter.o 
+pmnet-objs := tcp.o nodemanager.o netdebug.o sys.o masklog.o
+pmrdma-objs := rdma.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD     := $(shell pwd)
@@ -23,7 +24,14 @@ clean:
 prepare:
 	make -C $(KDIR) modules
 load:
-	insmod ./$(TARGET_MODULE).ko
-	script/bit_mask_set.sh
+	insmod ./pmdfc_client.ko
+#	script/bit_mask_set.sh
+net:
+	insmod ./pmnet.ko ip="115.145.173.69" port=5432
+	insmod ./pmdfc_client.ko
+rdma:
+	insmod ./pmrdma.ko ip="115.145.173.69" port=2123
+	insmod ./pmdfc_client.ko
 unload:
-	rmmod ./$(TARGET_MODULE).ko
+	rmmod ./pmnet.ko
+	rmmod ./pmdfc_client.ko

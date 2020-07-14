@@ -152,10 +152,12 @@ static inline void pmnet_set_func_stop_time(struct pmnet_sock_container *sc)
 
 #define CONFIG_PMDFC_FS_STATS
 #ifdef CONFIG_PMDFC_FS_STATS
+#if 0
 static ktime_t pmnet_get_func_run_time(struct pmnet_sock_container *sc)
 {
 	return ktime_sub(sc->sc_tv_func_stop, sc->sc_tv_func_start);
 }
+#endif
 
 static void pmnet_update_send_stats(struct pmnet_send_tracking *nst,
 				    struct pmnet_sock_container *sc)
@@ -172,12 +174,14 @@ static void pmnet_update_send_stats(struct pmnet_send_tracking *nst,
 	sc->sc_send_count++;
 }
 
+#if 0
 static void pmnet_update_recv_stats(struct pmnet_sock_container *sc)
 {
 	sc->sc_tv_process_total = ktime_add(sc->sc_tv_process_total,
 					    pmnet_get_func_run_time(sc));
 	sc->sc_recv_count++;
 }
+#endif
 
 #else
 
@@ -586,6 +590,7 @@ static void pmnet_register_callbacks(struct sock *sk,
 	sc->sc_data_ready = sk->sk_data_ready;
 	sc->sc_state_change = sk->sk_state_change;
 
+	sk->sk_data_ready = pmnet_data_ready;
 	sk->sk_state_change = pmnet_state_change;
 
 	mutex_init(&sc->sc_send_lock);
@@ -764,19 +769,68 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 	int ret;
 	struct msghdr msg = {.msg_flags = 0,};
 
+#if 0
+	/* send dummy vec */
+	struct kvec *vec1 = NULL;
+	struct msghdr msg1 = {.msg_flags = 0,};
+	struct pmnet_msg *pmsg = NULL;
+	size_t veclen1, total1;
+//	char buf[4096];
+
+//	memset(buf, 0, 4096);
+
+	vec1 = kmalloc_array(1, sizeof(struct kvec), GFP_ATOMIC);
+	if (vec1 == NULL) {
+		pr_info("failed to %zu element kvec!\n", veclen);
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	pmsg = kmalloc(sizeof(struct pmnet_msg), GFP_ATOMIC);
+	if (!pmsg) {
+		pr_info("failed to allocate a pmnet_msg!\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	pmnet_init_msg(pmsg, 0, 0, 0, 0);
+
+	vec1[0].iov_len = sizeof(struct pmnet_msg);
+	vec1[0].iov_base = pmsg;
+//	vec1[1].iov_len = 4096;
+//	vec1[1].iov_base = buf;
+
+	pmsg->magic = cpu_to_be16(PMNET_MSG_STATUS_MAGIC);  // twiddle the magic
+	pmsg->data_len = 0;
+
+	veclen1 = 1;
+	total1 = sizeof(struct pmnet_msg) ;
+
+#endif
+
 	if (sock == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
 
+#if 0
+	ret = kernel_sendmsg(sock, &msg1, vec1, veclen1, total1);
+
+	if (likely(ret == total1))
+		return 0;
+#endif
+
+#if 1
 	/* TODO: 얘가 잘못 */
 	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
-//    return 0;
+//	return 0;
 	if (likely(ret == total))
 		return 0;
+
 	pr_info("sendmsg returned %d instead of %zu\n", ret, total);
 	if (ret >= 0)
 		ret = -EPIPE; /* should be smarter, I bet */
+#endif
 out:
 	pr_info("returning error: %d\n", ret);
 	return ret;
@@ -821,9 +875,14 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 
 	pmnet_set_nst_sock_time(&nst);
 	
-	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
-	if (ret)
-		goto out;
+	/* XXX: wait may cause problem */
+//	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
+//	if (ret)
+//		goto out;
+	
+	/* XXX: alternative code of above wait_event */
+	kref_get(&nn->nn_sc->sc_kref);
+	sc = nn->nn_sc;
 
 	pmnet_set_nst_sock_container(&nst, sc);
 
@@ -874,7 +933,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	/* wait on other node's handler */
 	pmnet_set_nst_status_time(&nst);
 	/* TODO: make wait_event work */
-	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
+//	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
 
 	pmnet_update_send_stats(&nst, sc);
 
@@ -911,6 +970,7 @@ int pmnet_send_message(u32 msg_type, u32 key, u32 index, void *data, u32 len,
 }
 EXPORT_SYMBOL_GPL(pmnet_send_message);
 
+#if 0
 static int pmnet_send_status_magic(struct socket *sock, struct pmnet_msg *hdr,
 				   enum pmnet_system_error syserr, int err)
 {
@@ -932,6 +992,7 @@ static int pmnet_send_status_magic(struct socket *sock, struct pmnet_msg *hdr,
 	/* hdr has been in host byteorder this whole time */
 	return pmnet_send_tcp_msg(sock, &vec, 1, sizeof(struct pmnet_msg));
 }
+#endif
 
 /* this returns -errno if the header was unknown or too large, etc.
  * after this is called the buffer us reused for the next message */
@@ -939,10 +1000,11 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				 struct pmnet_msg *hdr)
 {
 	struct pmnet_node *nn = pmnet_nn_from_num(sc->sc_node->nd_num);
-	int ret = 0, handler_status;
-	enum  pmnet_system_error syserr;
-	struct pmnet_msg_handler *nmh = NULL;
-	void *ret_data = NULL;
+	int ret = 0;
+//	int ret = 0, handler_status;
+//	enum  pmnet_system_error syserr;
+//	struct pmnet_msg_handler *nmh = NULL;
+//	void *ret_data = NULL;
 
 	msglog(hdr, "processing message\n");
 
@@ -1137,7 +1199,6 @@ int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
 	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
 
 	struct socket *conn_socket = NULL;
-	void *response;
 
 	/* XXX: DONTWAIT works WAITALL doesn't work */
 	/* solved --> WAITALL wait until recv all data 
@@ -1543,7 +1604,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	spin_unlock(&nn->nn_lock);
 	if (stop)
 		goto out;
-#endif
+#endif 
 
 	nn->nn_last_connect_attempt = jiffies;
 
@@ -1578,7 +1639,7 @@ static void pmnet_start_connect(struct work_struct *work)
 	pmnet_register_callbacks(sc->sc_sock->sk, sc);
 
 	spin_lock(&nn->nn_lock);
-	/* XXX: we set valid here; handshake completion will set nn->nn_sc_valid */
+	/* XXX: handshake completion will set nn->nn_sc_valid */
 	pmnet_set_nn_state(nn, sc, 1, 0);
 	spin_unlock(&nn->nn_lock);
 
@@ -1635,10 +1696,12 @@ static void pmnet_connect_expired(struct work_struct *work)
 
 static void pmnet_still_up(struct work_struct *work)
 {
+#if 0
 	struct pmnet_node *nn =
 		container_of(work, struct pmnet_node, nn_still_up.work);
 
-//	o2quo_hb_still_up(pmnet_num_from_nn(nn));
+	pmquo_hb_still_up(pmnet_num_from_nn(nn));
+#endif
 }
 
 
@@ -1712,7 +1775,6 @@ int pmnet_init(void)
 
 	pmnet_debugfs_init();
 
-	init_pmnm_cluster();
 
 	pmnet_hand = kzalloc(sizeof(struct pmnet_handshake), GFP_KERNEL);
 	pmnet_keep_req = kzalloc(sizeof(struct pmnet_msg), GFP_KERNEL);
@@ -1768,8 +1830,8 @@ out:
 
 void pmnet_exit(void)
 {
-	exit_pmnm_cluster();
 	kfree(pmnet_hand);
 	kfree(pmnet_keep_req);
 	kfree(pmnet_keep_resp);
 }
+
