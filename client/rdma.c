@@ -285,7 +285,7 @@ void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, 
 }
 
 //int generate_write_request(void** pages, int num){
-int generate_read_request(void** pages, u32 key, u32 index, int num){
+int generate_write_request(void** pages, u32 key, u32 index, int num){
     struct request_struct* new_request;
     int pid, i, ret;
 

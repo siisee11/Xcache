@@ -201,10 +201,12 @@ int modify_qp(int my_psn, int sl, struct node_info* server);
 void init_header(int node_id, uint64_t addr, uint32_t length, int type, struct ib_header* header);
 void cleanup_resource(void);
 
-int generate_write_request(void** pages, int size);
+//int generate_write_request(void** pages, int size);
 //int generate_write_request(struct page** pages, int size);
+int generate_write_request(void** pages, u32 key, u32 index, int num);
 //int generate_read_request(uint64_t* keys, int size);
-int generate_read_request(void** pages, uint64_t* keys, int size);
+//int generate_read_request(void** pages, uint64_t* keys, int size);
+int generate_read_request(void** pages, u32 key, u32 index, int num);
 
 
 int find_and_set_nextbit(void);
