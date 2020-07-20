@@ -264,33 +264,16 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			break;
 	}
 
+	printf("msg_type=%d\n", ntohs(hdr->msg_type));
 	switch(ntohs(hdr->msg_type)) {
-		case PMNET_MSG_HOLA: {
-			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_HOLA");
-
-			/* send hello message */
-			memset(&reply, 0, 1024);
-
-			ret = pmnet_send_message(sockfd, PMNET_MSG_HOLASI, 0, 
-				reply, 1024);
-
-			log<LOG_INFO>(L"SERVER-->CLIENT: PMNET_MSG_HOLASI(%1%)") % ret;
-			break;
-		}
-
-		case PMNET_MSG_HOLASI: {
-			log<LOG_INFO>(L"SERVER-->CLIENT: PMNET_MSG_HOLASI");
-			break;
-		}
-
 		case PMNET_MSG_PUTPAGE: {
 			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_PUTPAGE");
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
 
-			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
-				NULL, 0);
+//			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
+//				NULL, 0);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
@@ -418,7 +401,7 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 
 	/* read header */
 	if (msg_in->page_off < sizeof(struct pmnet_msg)) {
-		data = msg_in->hdr + msg_in->page_off;
+		data = (char *)msg_in->hdr + msg_in->page_off;
 		datalen = sizeof(struct pmnet_msg) - msg_in->page_off;
 		ret = read(sc->sockfd, data, datalen);
 
@@ -473,12 +456,6 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 			pushed = true;
 			ret = 1;
 		}
-#if 0
-		putcnt++;
-		log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
-		pushed = true;
-		ret = 1;
-#endif
 	}
 
 out:
@@ -580,8 +557,10 @@ void init_network_server()
 		/* start thread */
 		boost::thread p = boost::thread( producer, sc );
 		p.detach();
-		boost::thread c = boost::thread( consumer, sc );
-		c.detach();
+		boost::thread c1 = boost::thread( consumer, sc );
+		c1.detach();
+//		boost::thread c2 = boost::thread( consumer, sc );
+//		c2.detach();
 //		producer_threads.create_thread( producer, connfd );
 //		consumer_threads.create_thread( consumer, connfd );
 	} 

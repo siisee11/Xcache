@@ -20,7 +20,7 @@
 #endif
 
 
-#define PORT 			(2325)
+#define PORT 			(5432)
 #define CLIENT_PORT 	(2346)
 #define DEST_ADDR		("115.145.173.67")
 #define CLIENT_ADDR		("10.0.2.15")

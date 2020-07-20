@@ -19,4 +19,4 @@ run:
 	sudo ./server ./jy/FILE83
 
 clean: 
-	rm -rf src/*.o
+	rm -rf src/*.o server
