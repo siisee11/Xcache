@@ -401,7 +401,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 
 	ret = sc;
 	sc->sc_page = page;
-	pmnet_debug_add_sc(sc);
+//	pmnet_debug_add_sc(sc);
 	sc = NULL;
 	page = NULL;
 
@@ -871,7 +871,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 		goto out;
 	}
 
-	pmnet_debug_add_nst(&nst);
+//	pmnet_debug_add_nst(&nst);
 
 	pmnet_set_nst_sock_time(&nst);
 	
@@ -948,7 +948,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 			ret, nsw.ns_status);
 
 out:
-	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
+//	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
 	if (sc)
 		sc_put(sc);
 	kfree(vec);
