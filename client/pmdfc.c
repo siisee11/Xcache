@@ -19,14 +19,17 @@
 
 #define PMDFC_NETWORK 1
 //#define PMDFC_DEBUG 1
-//#define PMDFC_GET 1
+#define PMDFC_GET 1
 //#define PMDFC_RDMA 1
-//#define KTRHEAD 1
-#define WORKQUEUE 1
+//#define PMDFC_KTHREAD 1
+#define PMDFC_BLOOM_FILTER 1 
+//#define PMDFC_REMOTIFY 1
+#define PMDFC_WORKQUEUE 1
 
 #if !defined(PMDFC_NETWORK)
-#undef KTRHEAD
-#undef WORKQUEUE
+#undef PMDFC_KTRHEAD
+#undef PMDFC_WORKQUEUE
+#undef PMDFC_REMOTIFY
 #endif
 
 /* Allocation flags */
@@ -57,6 +60,22 @@ static LIST_HEAD(page_list_head);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
 
 /*
+ * For now, just push over a few pages every few seconds to
+ * ensure that it basically works
+ */
+static struct workqueue_struct *pmdfc_remotify_workqueue;
+static void pmdfc_remotify_process(struct work_struct *work);
+static DECLARE_DELAYED_WORK(pmdfc_remotify_worker,
+				pmdfc_remotify_process);
+
+static void pmdfc_remotify_queue_delayed_work(unsigned long delay)
+{
+	if (!queue_delayed_work(pmdfc_remotify_workqueue,
+				&pmdfc_remotify_worker, delay))
+		pr_err("pmdfc_remotify: bad workqueue\n");
+}
+
+/*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
  * properly configured.  These are for information only so are not protected
  * against increment races.
@@ -74,8 +93,7 @@ struct pmdfc_info
 
 static DEFINE_SPINLOCK(info_lock);
 
-
-#if defined(KTHREAD)
+#if defined(PMDFC_KTHREAD)
 /* worker function for kthread */
 static int worker_fn(void *data)
 {
@@ -90,7 +108,6 @@ static int worker_fn(void *data)
 
 	pr_info("pmdfc-msg: worker running...\n");
 
-	allow_signal(SIGUSR1);
 	while (1)
 	{
 		wait_event_interruptible(pmdfc_worker_wq, filled);
@@ -113,13 +130,7 @@ static int worker_fn(void *data)
 
 //		kfree(page);
 		kfree(info);
-//		remain = msleep_interruptible(5000);
-//		if (kthread_should_stop())
-//			break;
-//		pr_info("pmdfc: wake up, remain time: %lums\n", remain);
 	}
-
-	pr_info("pmdfc-msg: remain time: %lums\n", remain);
 
 	return ret;
 }
@@ -151,7 +162,7 @@ void thread_cleanup(void) {
 }
 #endif /* defined(KTHREAD) */
 
-#if defined(WORKQUEUE)
+#if defined(PMDFC_WORKQUEUE)
 /* worker function for workqueue */
 static void work_func(struct work_struct *work)
 {
@@ -177,6 +188,8 @@ static void work_func(struct work_struct *work)
 
 		spin_lock_irqsave(&info_lock, flags);
 		info = list_first_entry(&page_list_head, struct pmdfc_info, list);
+		list_del_init(&info->list);
+		spin_unlock_irqrestore(&info_lock, flags);
 		page = info->page;
 		index = info->index;
 		key = info->key; 
@@ -184,17 +197,84 @@ static void work_func(struct work_struct *work)
 		   0, &status);
 		if ( ret < 0 )
 			pr_info("pmdfc-msg: pmnet_send_message_fail(ret=%d)\n", ret);
-		else
-			list_del(&info->list);
-//		pr_info("pmdfc-msg: send message success\n");
-//
-		spin_unlock_irqrestore(&info_lock, flags);
 
 		kfree(page);
 		kfree(info);
 	}
 }
-#endif /* defined(WORKQUEUE) */
+
+#endif /* defined(PMDFC_WORKQUEUE) */
+
+
+#if defined(PMDFC_REMOTIFY)
+
+int pmdfc_remotify_pageframe(void)
+{
+	struct pmdfc_info *info = NULL;
+	void *page;
+	pgoff_t index;
+	long key; 
+	unsigned long flags;
+
+	int status, ret = 0;
+
+retry:
+	wait_event_interruptible(pmdfc_worker_wq, filled);
+	if (list_empty(&page_list_head)) {
+		filled = 0;
+		goto retry;
+	}
+
+	spin_lock_irqsave(&info_lock, flags);
+	info = list_first_entry(&page_list_head, struct pmdfc_info, list);
+	spin_unlock_irqrestore(&info_lock, flags);
+
+	page = info->page;
+	index = info->index;
+	key = info->key; 
+	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, page, PAGE_SIZE,
+	   0, &status);
+	if ( ret < 0 )
+		pr_info("pmdfc-msg: pmnet_send_message_fail(ret=%d)\n", ret);
+	else {
+		spin_lock_irqsave(&info_lock, flags);
+		list_del_init(&info->list);
+		spin_unlock_irqrestore(&info_lock, flags);
+	}
+
+	kfree(page);
+	kfree(info);
+
+}
+
+
+static void pmdfc_remotify_process(struct work_struct *work)
+{
+	static bool remotify_in_progress;
+	int i;
+
+	pr_info("pmdfc-remotify: worker running...\n");
+
+	BUG_ON(irqs_disabled());
+	if (remotify_in_progress)
+		goto requeue;
+	remotify_in_progress = true;
+	for (i = 0; i < 100; i++) {
+		(void)pmdfc_remotify_pageframe();
+	}
+	remotify_in_progress = false;
+requeue:
+	pmdfc_remotify_queue_delayed_work(HZ);
+}
+
+void pmdfc_remotify_init(void)
+{
+	unsigned long n = 10UL;
+	pmdfc_remotify_workqueue =
+		create_singlethread_workqueue("pmdfc-remotify");
+	pmdfc_remotify_queue_delayed_work(n * HZ);
+}
+#endif /* PMDFC_REMOTIFY */
 
 static struct pmdfc_info* __get_new_info(void* page, long key, pgoff_t index)
 {
@@ -210,7 +290,6 @@ static struct pmdfc_info* __get_new_info(void* page, long key, pgoff_t index)
 	info->page = page;
 	info->key = key;
 	info->index = index;
-//	printk(KERN_INFO "%s %lx %d\n", __func__, key, index);
 
 	return info;
 }
@@ -229,10 +308,12 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	int status = 0;
 	int ret = -1;
 
-	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
 
+	BUG_ON(!irqs_disabled());
+
+	/* bloom filter hash input data */
 	data[4] = idata[0];
 	data[5] = idata[1];
 	data[6] = idata[2];
@@ -276,9 +357,11 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	ret = generate_write_request(&pg_from, (long)oid.oid[0], index, 1);
 #endif 
 
+#if defined(PMDFC_BLOOM_FILTER)
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
+#endif
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
@@ -307,6 +390,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	data[6] = idata[2];
 	data[7] = idata[3];
 
+#if defined(PMDFC_BLOOM_FILTER)
 	/* page is in or not? */
 	bloom_filter_check(bf, data, 24, &isIn);
 
@@ -317,48 +401,46 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		goto not_exists;
 
 	pmdfc_actual_gets++;
-
-	if ( atomic_read(&v) < 1000 ) {
-		atomic_inc(&v);
+#endif
 
 #if defined(PMDFC_DEBUG)
-		/* Send get request and receive page */
-		printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
-			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+	/* Send get request and receive page */
+	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
+		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 #endif
 
 #if defined(PMDFC_NETWORK)
-		pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, NULL, 0,
-			   0, &status);
+	pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, NULL, 0,
+		   0, &status);
 
-		ret = pmnet_recv_message(PMNET_MSG_SENDPAGE, 0, &response, PAGE_SIZE,
-			0, &status);
+	ret = pmnet_recv_message(PMNET_MSG_SENDPAGE, 0, &response, PAGE_SIZE,
+		0, &status);
+	goto not_exists;
 
-		if (status != 0) {
-			/* get page failed */
-			goto not_exists;
-		}
-		/* copy page content from message */
-		to_va = page_address(page);
-		memcpy(to_va, response, PAGE_SIZE);
+	if (status != 0) {
+		/* get page failed */
+		goto not_exists;
+	}
+	/* copy page content from message */
+	to_va = page_address(page);
+	memcpy(to_va, response, PAGE_SIZE);
 
 #endif /* PMDFC_NETWORK end */
 
 #if defined(PMDFC_RDMA)
-		ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
+	ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
 
-		/* copy page content from message */
-		to_va = page_address(page);
-		memcpy(to_va, response, PAGE_SIZE);
+	/* copy page content from message */
+	to_va = page_address(page);
+	memcpy(to_va, response, PAGE_SIZE);
 #endif /* PMDFC_RDMA end */
 
 
 #if defined(PMDFC_DEBUG)
-		printk(KERN_INFO "pmdfc: GET PAGE success\n");
+	printk(KERN_INFO "pmdfc: GET PAGE success\n");
 #endif
 
-		return 0;
-	} /* if */
+	return 0;
 
 not_exists:
 #endif  /* defined(PMDFC_GET) */
@@ -476,11 +558,11 @@ static int __init pmdfc_init(void)
 	struct dentry *root = debugfs_create_dir("pmdfc", NULL);
 #endif
 
-#if defined(KTHREAD)
+#if defined(PMDFC_KTHREAD)
 	thread_init();
 #endif
 
-#if defined(WORKQUEUE)
+#if defined(PMDFC_WORKQUEUE)
 	pmdfc_wq = create_singlethread_workqueue("pmdfc-msg");
 	if (pmdfc_wq == NULL) {
 		printk(KERN_ERR "unable to launch pmdfc thread\n");
@@ -489,9 +571,11 @@ static int __init pmdfc_init(void)
 	queue_work(pmdfc_wq, &pmdfc_work);
 #endif 
 
+#if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
 	bloom_filter_init();
 	pr_info(" *** bloom filter | init | bloom_filter_init *** \n");
+#endif
 
 	ret = pmdfc_cleancache_register_ops();
 
@@ -513,24 +597,30 @@ static int __init pmdfc_init(void)
 	debugfs_create_u64("actual_gets", 0444, root, &pmdfc_actual_gets);
 #endif
 
+#if defined(PMDFC_REMOTIFY)
+	pmdfc_remotify_init();
+#endif
+
 	return 0;
 }
 
 /* TODO: how to exit normally??? */
 static void pmdfc_exit(void)
 {
-#if WORKQUEUE
+#if defined(PMDFC_WORKQUEUE)
 	/* cancle in_process works and destory workqueue */
 	cancel_work_sync(&pmdfc_work);
 	destroy_workqueue(pmdfc_wq);
 #endif
 
-#if defined(KTHREAD)
+#if defined(PMDFC_KTHREAD)
 	/* kthread stop */
 	thread_cleanup();
 #endif 
 
+#if defined(PMDFC_BLOOM_FILTER)
 	bloom_filter_unref(bf);
+#endif
 }
 
 module_init(pmdfc_init);

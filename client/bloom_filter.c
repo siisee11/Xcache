@@ -25,7 +25,7 @@ static struct sdesc *init_sdesc(struct crypto_shash *alg)
     int size;
 
     size = sizeof(struct shash_desc) + crypto_shash_descsize(alg);
-    sdesc = kmalloc(size, GFP_KERNEL);
+    sdesc = kmalloc(size, GFP_ATOMIC);
     if (!sdesc)
         return ERR_PTR(-ENOMEM);
     sdesc->shash.tfm = alg;
@@ -38,7 +38,7 @@ struct bloom_filter *bloom_filter_new(int bit_size)
 	unsigned long bitmap_size = BITS_TO_LONGS(bit_size)
 				  * sizeof(unsigned long);
 
-	filter = kzalloc(sizeof(*filter) + bitmap_size, GFP_KERNEL);
+	filter = kzalloc(sizeof(*filter) + bitmap_size, GFP_ATOMIC);
 	if (!filter)
 		return ERR_PTR(-ENOMEM);
 
@@ -90,7 +90,7 @@ int bloom_filter_add_hash_alg(struct bloom_filter *filter,
 	struct bloom_crypto_alg *alg;
 	int ret = 0;
 
-	alg = kzalloc(sizeof(*alg), GFP_KERNEL);
+	alg = kzalloc(sizeof(*alg), GFP_ATOMIC);
 	if (!alg) {
 		ret = -ENOMEM;
 		goto exit;
@@ -104,7 +104,7 @@ int bloom_filter_add_hash_alg(struct bloom_filter *filter,
 
 	alg->hash_tfm_allocated = true;
 	alg->len = crypto_shash_digestsize(alg->hash_tfm);
-	alg->data = kzalloc(alg->len, GFP_KERNEL);
+	alg->data = kzalloc(alg->len, GFP_ATOMIC);
 	if (!alg->data) {
 		ret = -ENOMEM;
 		goto exit_free_hash;
