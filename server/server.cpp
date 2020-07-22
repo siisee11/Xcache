@@ -109,7 +109,7 @@ void consumer(struct pmnet_sock_container *sc) {
 		/* TODO: Uncomment below after debugging */
 		while (new_queue.pop(msg_in)){
 			getcnt++;
-			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
+//			log<LOG_DEBUG>(L"CONSUMER queue.pop() cnt=%1%") % (int)getcnt;
 			ret = pmnet_process_message(sc->sockfd, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
@@ -157,7 +157,7 @@ static struct pmnet_msg_in *init_msg()
 
 /* initialize message to send */
 static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len, 
-		uint16_t msg_type, uint32_t key)
+		uint16_t msg_type, uint32_t key, uint32_t index)
 {
 	memset(msg, 0, sizeof(struct pmnet_msg));
 	msg->magic = htons(PMNET_MSG_MAGIC);
@@ -167,10 +167,11 @@ static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len,
 //	msg->sys_status = htonl(0);
 	msg->status = 0;
 	msg->key = htonl(key);
+	msg->index = htonl(index);
 }
 
 /* send to client */
-int pmnet_send_message(int sockfd, uint32_t msg_type, uint32_t key, 
+int pmnet_send_message(int sockfd, uint32_t msg_type, uint32_t key, uint32_t index,
 		void *data, uint16_t datalen)
 {
 	int ret = 0;
@@ -186,7 +187,7 @@ int pmnet_send_message(int sockfd, uint32_t msg_type, uint32_t key,
 		goto out;
 	}
 
-	pmnet_init_msg(msg, datalen, msg_type, key); 
+	pmnet_init_msg(msg, datalen, msg_type, key, index); 
 
 	memset(iov_msg, 0, sizeof(iov_msg));
 	iov_msg[0].iov_base = msg;
@@ -264,24 +265,23 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			break;
 	}
 
-	printf("msg_type=%d\n", ntohs(hdr->msg_type));
 	switch(ntohs(hdr->msg_type)) {
 		case PMNET_MSG_PUTPAGE: {
-			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_PUTPAGE");
+//			log<LOG_INFO>(L"CLIENT-->SERVER: PMNET_MSG_PUTPAGE");
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
+//			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
 
 //			ret = pmnet_send_message(sockfd, PMNET_MSG_SUCCESS, 0, 
 //				NULL, 0);
 
 			/* copy page from message to local memory */
-			from_va = msg_in->page;
+//			from_va = msg_in->page;
 
 			/* Insert received page into hash */
 			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
-			printf("[ Inserted %lx : ", key);
-			printf("%lx ]\n", hashTable->Get(key));
+//			printf("[ Inserted %lx : ", key);
+//			printf("%lx ]\n", hashTable->Get(key));
 			break;
 		}
 
@@ -300,18 +300,18 @@ static int pmnet_process_message(int sockfd, struct pmnet_msg *hdr, struct pmnet
 			if (ret != 0) {
 				/* page not exists */
 				memset(&reply, 0, PAGE_SIZE);
-				ret = pmnet_send_message(sockfd, PMNET_MSG_NOTEXIST, 0, 
+				ret = pmnet_send_message(sockfd, PMNET_MSG_NOTEXIST, ntohl(hdr->key), ntohl(hdr->index),
 					reply, PAGE_SIZE);
 				printf("PAGE NOT EXIST (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
-				printf("SERVER-->CLIENT: PMNET_MSG_NOTEXIST(%d)\n",ret);
+//				printf("SERVER-->CLIENT: PMNET_MSG_NOTEXIST(%d)\n",ret);
 			} else {
 				/* page exists */
-				printf("SEND PAGE with long key=%lx\n", key);
-				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, 0, 
+//				printf("SEND PAGE with long key=%lx\n", key);
+				ret = pmnet_send_message(sockfd, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
 					saved_page, PAGE_SIZE);
 				printf("[ Retrived (key=%lx, index=%lx, longkey=%lx) ", ntohl(hdr->key), ntohl(hdr->index), key);
 				printf("%lx ]\n", hashTable->Get(key));
-				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
+//				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
 			break;
 		}
@@ -452,10 +452,18 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		/* TODO: Uncomment below after debugging */
 		if (new_queue.push(msg_in)) {
 			putcnt++;
-			log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
+//			log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
 			pushed = true;
 			ret = 1;
 		}
+		pushed = true;
+#if 0
+		putcnt++;
+		log<LOG_DEBUG>(L"PRODUCER queue.push() cnt=%1%") % (int)putcnt;
+		pushed = true;
+		ret = 1;
+		free(msg_in);
+#endif
 	}
 
 out:
@@ -559,8 +567,16 @@ void init_network_server()
 		p.detach();
 		boost::thread c1 = boost::thread( consumer, sc );
 		c1.detach();
-//		boost::thread c2 = boost::thread( consumer, sc );
-//		c2.detach();
+		boost::thread c2 = boost::thread( consumer, sc );
+		c2.detach();
+		boost::thread c3 = boost::thread( consumer, sc );
+		c3.detach();
+		boost::thread c4 = boost::thread( consumer, sc );
+		c4.detach();
+		boost::thread c5 = boost::thread( consumer, sc );
+		c5.detach();
+		boost::thread c6 = boost::thread( consumer, sc );
+		c6.detach();
 //		producer_threads.create_thread( producer, connfd );
 //		consumer_threads.create_thread( consumer, connfd );
 	} 
@@ -574,7 +590,6 @@ void init_network_server()
  */
 CCEH *init_cceh(char* file)
 {
-	printf("%s\n", file);
 	CCEH* ht = new CCEH(file);
 	log<LOG_INFO>(L"CCEH create...");
 
