@@ -343,14 +343,10 @@ static void sc_kref_release(struct kref *kref)
 
 static void sc_put(struct pmnet_sock_container *sc)
 {
-	if (sc->sc_node->nd_num == 0)
-		sclog(sc, "put\n");
 	kref_put(&sc->sc_kref, sc_kref_release);
 }
 static void sc_get(struct pmnet_sock_container *sc)
 {
-	if (sc->sc_node->nd_num == 0)
-		sclog(sc, "get\n");
 	kref_get(&sc->sc_kref);
 }
 
@@ -401,7 +397,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 
 	ret = sc;
 	sc->sc_page = page;
-	pmnet_debug_add_sc(sc);
+//	pmnet_debug_add_sc(sc);
 	sc = NULL;
 	page = NULL;
 
@@ -519,7 +515,7 @@ static void pmnet_data_ready(struct sock *sk)
 	if (sc) {
 		sclog(sc, "data_ready hit\n");
 		pmnet_set_data_ready_time(sc);
-		pmnet_sc_queue_work(sc, &sc->sc_rx_work);
+//		pmnet_sc_queue_work(sc, &sc->sc_rx_work);
 		ready = sc->sc_data_ready;
 	} else {
 		ready = sk->sk_data_ready;
@@ -871,18 +867,18 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 		goto out;
 	}
 
-	pmnet_debug_add_nst(&nst);
+//	pmnet_debug_add_nst(&nst);
 
 	pmnet_set_nst_sock_time(&nst);
 	
 	/* XXX: wait may cause problem */
-//	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
-//	if (ret)
-//		goto out;
+	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
+	if (ret)
+		goto out;
 	
 	/* XXX: alternative code of above wait_event */
-	kref_get(&nn->nn_sc->sc_kref);
-	sc = nn->nn_sc;
+//	kref_get(&nn->nn_sc->sc_kref);
+//	sc = nn->nn_sc;
 
 	pmnet_set_nst_sock_container(&nst, sc);
 
@@ -948,7 +944,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 			ret, nsw.ns_status);
 
 out:
-	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
+//	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
 	if (sc)
 		sc_put(sc);
 	kfree(vec);
@@ -1204,8 +1200,8 @@ int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
 	/* solved --> WAITALL wait until recv all data 
 	 * It blocked because sender send a portion of data 
 	 */
-	struct msghdr msghdr = {.msg_flags = MSG_DONTWAIT,};
-//	struct msghdr msghdr = {.msg_flags = MSG_WAITALL,};
+//	struct msghdr msghdr = {.msg_flags = MSG_DONTWAIT,};
+	struct msghdr msghdr = {.msg_flags = MSG_WAITALL,};
 
 	DECLARE_WAIT_QUEUE_HEAD(recv_wait);
 
@@ -1230,7 +1226,9 @@ int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
 
 	*status = -1;
 
+	kref_get(&nn->nn_sc->sc_kref);
 	sc = nn->nn_sc;
+
 	if (sc == NULL)
 		pr_info("%s: sc = NULL\n", __func__);
 	conn_socket = sc->sc_sock;
@@ -1275,15 +1273,17 @@ read_again:
 				goto read_again;
 		}
 
+#if defined(PMDFC_DEBUG)
 		pr_info("Client<--SERVER: ( msg_type=%u, data_len=%u )\n", 
 				be16_to_cpu(msg->msg_type), be16_to_cpu(msg->data_len));
+#endif
 
 		if (be16_to_cpu(msg->msg_type) == msg_type) 
 		{
-			pr_info("recv_message: msg_type matched\n");
-			*status = 1;
+//			pr_info("recv_message: msg_type matched\n");
+			*status = 0;
 		} else {
-			pr_info("recv_message: msg_type not matched\n");
+//			pr_info("recv_message: msg_type not matched\n");
 		}
 
 		if (ret < 0)

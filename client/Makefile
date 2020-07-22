@@ -35,3 +35,4 @@ rdma:
 unload:
 	rmmod ./pmnet.ko
 	rmmod ./pmdfc_client.ko
+	rmmod ./pmrdma.ko
