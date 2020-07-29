@@ -1273,10 +1273,11 @@ read_again:
 				goto read_again;
 		}
 
-#if defined(PMDFC_DEBUG)
-		pr_info("Client<--SERVER: ( msg_type=%u, data_len=%u )\n", 
-				be16_to_cpu(msg->msg_type), be16_to_cpu(msg->data_len));
-#endif
+//#if defined(PMDFC_DEBUG)
+		pr_info("Client<--SERVER: ( msg_type=%u, data_len=%u, key=%d, index=%d )\n", 
+				be16_to_cpu(msg->msg_type), be16_to_cpu(msg->data_len),
+				be32_to_cpu(msg->key), be32_to_cpu(msg->index));
+//#endif
 
 		if (be16_to_cpu(msg->msg_type) == msg_type) 
 		{

@@ -1,0 +1,69 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.9~svn20110310	//
+HASH_TABLE_SIZE_BIT	rdma.c	12;"	d	file:
+MR_HASHTABLE_LOCK	rdma.c	/^spinlock_t MR_HASHTABLE_LOCK[1 << HASH_TABLE_SIZE_BIT];$/;"	v
+RDMA_BUFFER_SIZE	rdma.c	/^static const int RDMA_BUFFER_SIZE = 4096;$/;"	v	file:
+RDMA_PAGE_SIZE	rdma.c	/^static const int RDMA_PAGE_SIZE = 4096;$/;"	v	file:
+add_one	rdma.c	/^static void add_one(struct ib_device* dev){$/;"	f	file:
+bit_mask	rdma.c	/^uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){$/;"	f
+bit_unmask	rdma.c	/^void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, uint32_t* num){$/;"	f
+cleanup_resource	rdma.c	/^void cleanup_resource(void){$/;"	f
+client	rdma.c	/^static struct ib_client client = {$/;"	v	typeref:struct:ib_client	file:
+client_class	rdma.c	/^static struct class client_class = {$/;"	v	typeref:struct:class	file:
+client_init_ctx	rdma.c	/^static struct client_context* client_init_ctx(void){$/;"	f	file:
+client_init_interface	rdma.c	/^int client_init_interface(void){$/;"	f
+client_mtu_to_enum	rdma.c	/^enum ib_mtu client_mtu_to_enum(int max_transfer_unit){$/;"	f
+client_poll_cq	rdma.c	/^static int client_poll_cq(struct ib_cq* cq){$/;"	f	file:
+create_qp	rdma.c	/^int create_qp(void){$/;"	f
+ctx	rdma.c	/^struct client_context* ctx = NULL;$/;"	v	typeref:struct:client_context
+ctx_pd	rdma.c	/^struct ib_pd* ctx_pd;$/;"	v	typeref:struct:ib_pd
+establish_conn	rdma.c	/^int establish_conn(void){$/;"	f
+event_handler	rdma.c	/^int event_handler(void){$/;"	f
+exit_net_module	rdma.c	/^module_exit(exit_net_module);$/;"	v
+exit_net_module	rdma.c	/^static void __exit exit_net_module(void){$/;"	f	file:
+find_and_set_nextbit	rdma.c	/^int find_and_set_nextbit(void){$/;"	f
+generate_read_request	rdma.c	/^EXPORT_SYMBOL(generate_read_request);$/;"	v
+generate_read_request	rdma.c	/^int generate_read_request(void** pages, u32 key, u32 index, int num){$/;"	f
+generate_write_request	rdma.c	/^EXPORT_SYMBOL(generate_write_request);$/;"	v
+generate_write_request	rdma.c	/^int generate_write_request(void** pages, u32 key, u32 index, int num){$/;"	f
+handle_read	rdma.c	/^void handle_read(int pid, int num, uint64_t remote_mm){$/;"	f
+handle_read_request	rdma.c	/^void handle_read_request(int pid, int num, uint64_t* keys){$/;"	f
+handle_write	rdma.c	/^void handle_write(int pid, int num, uint64_t remote_mm){$/;"	f
+handle_write_request	rdma.c	/^void handle_write_request(int pid, int num, void** request_pages){$/;"	f
+ib_dereg_mr_addr	rdma.c	/^void ib_dereg_mr_addr(uint64_t addr, uint64_t size){$/;"	f
+ib_dev	rdma.c	/^struct ib_device* ib_dev;$/;"	v	typeref:struct:ib_device
+ib_port	rdma.c	/^int ib_port = 1;$/;"	v
+ib_reg_mr	rdma.c	/^struct mr_info* ib_reg_mr(void* addr, uint64_t length, enum ib_access_flags flags){$/;"	f
+ib_reg_mr_addr	rdma.c	/^uintptr_t ib_reg_mr_addr(void* addr, uint64_t size){$/;"	f
+init_net_module	rdma.c	/^module_init(init_net_module);$/;"	v
+init_net_module	rdma.c	/^static int __init init_net_module(void){$/;"	f	file:
+modify_qp	rdma.c	/^int modify_qp(int my_psn, int sl, struct node_info* remote){$/;"	f
+mtu	rdma.c	/^enum ib_mtu mtu;$/;"	v	typeref:enum:ib_mtu
+param_ip	rdma.c	/^static char param_ip[64];$/;"	v	file:
+param_port	rdma.c	/^static int param_port = 0;$/;"	v	file:
+poll_cq	rdma.c	/^static void poll_cq(struct ib_cq* cq, void* cq_ctx){$/;"	f	file:
+poll_cq_test	rdma.c	/^int poll_cq_test(struct ib_cq* cq, void* cq_txt){$/;"	f
+post_meta_request	rdma.c	/^int post_meta_request(int pid, int type, int num, int tx_state, int len, void* addr, uint64_t offset){$/;"	f
+post_meta_request_batch	rdma.c	/^int post_meta_request_batch(int pid, int type, int num, int tx_state, int len, void* addr, uint64_t offset, int batch_size){$/;"	f
+post_read_request	rdma.c	/^int post_read_request(uintptr_t addr, uint64_t offset){$/;"	f
+post_read_request_batch	rdma.c	/^int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){$/;"	f
+post_recv	rdma.c	/^int post_recv(void){$/;"	f
+post_write_request	rdma.c	/^int post_write_request(int pid, int type, int num, uintptr_t addr, uint64_t offset){$/;"	f
+post_write_request_batch	rdma.c	/^int post_write_request_batch(int pid, int type, int num, uintptr_t* addr, uint64_t offset, int batch_size){$/;"	f
+query_qp	rdma.c	/^int query_qp(struct ib_qp* qp){$/;"	f
+rdma_cas	rdma.c	/^int rdma_cas(void* addr, uint64_t dest, uint64_t compare, uint64_t swap){$/;"	f
+rdma_read	rdma.c	/^int rdma_read(int node_id, int pid, int type, uint32_t size, uintptr_t addr, uint64_t offset){$/;"	f
+rdma_recv	rdma.c	/^int rdma_recv(void* addr, int size){$/;"	f
+rdma_send	rdma.c	/^int rdma_send(void* addr, int size){$/;"	f
+tcp_recv	rdma.c	/^int tcp_recv(struct socket* sock, char* buf, int len){$/;"	f
+tcp_send	rdma.c	/^int tcp_send(struct socket* sock, char* buf, int len){$/;"	f
+test_func	rdma.c	/^int test_func(void){$/;"	f
+test_func2	rdma.c	/^int test_func2(void){$/;"	f
+test_func3	rdma.c	/^int test_func3(void){$/;"	f
+thread_handler	rdma.c	/^struct task_struct* thread_handler;$/;"	v	typeref:struct:task_struct
+thread_poll_cq	rdma.c	/^struct task_struct* thread_poll_cq;$/;"	v	typeref:struct:task_struct
+unset_bit	rdma.c	/^void unset_bit(int idx){$/;"	f
