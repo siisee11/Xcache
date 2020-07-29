@@ -104,9 +104,11 @@ struct pmnet_sock_container {
 
 	/* This struct page stores basic info(like msg) from client */
 	struct page 	*sc_page;
-
-	/* This struct page stores cleancache page from client */
 	size_t			sc_page_off;
+
+	/* This struct page stores page_content from client */
+	struct page 	*sc_page_data;
+	size_t			sc_page_data_off;
 
 	/* original handlers for the sockets */
 	void			(*sc_state_change)(struct sock *sk);
@@ -162,6 +164,7 @@ struct pmnet_status_wait {
 	enum pmnet_system_error	ns_sys_status;
 	s32			ns_status;
 	int			ns_id;
+	void* 		ns_page;
 	wait_queue_head_t	ns_wq;
 	struct list_head	ns_node_item;
 };
