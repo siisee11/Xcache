@@ -48,16 +48,6 @@
 # define PAGE_SIZE 4096
 #endif
 
-struct pmnet_handshake {
-	uint64_t protocol_version;
-	uint64_t connector_id;
-	uint32_t pmhb_heartbeat_timeout_ms;
-	uint32_t pmnet_idle_timeout_ms;
-	uint32_t pmnet_keepalive_delay_ms;
-	uint32_t pmnet_reconnect_delay_ms;
-};
-
-
 struct pmnet_msg
 {
 	uint16_t magic;

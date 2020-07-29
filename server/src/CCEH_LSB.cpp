@@ -193,7 +193,7 @@ Segment** Segment::Split(PMEMobjpool *pop) {
  Segment** split = new Segment*[2];
   split[0] = new Segment(pop, local_depth+1);
   split[1] = new Segment(pop, local_depth+1);
-  printf("Split\n");
+//  printf("Split\n");
   for (unsigned i = 0; i < kNumSlot; ++i) {
     //auto key_hash = h(&_[i].key, sizeof(Key_t));
    Key_t key_ = get_key(i);
@@ -225,7 +225,7 @@ void Directory::LSBUpdate(int local_depth, int global_depth, int dir_cap, int x,
       _[x] = s[1];
       segment_bind_pmem(x, s[1]);
       clflush((char*)&_[x], sizeof(Segment*));
-      printf("lsb update : %d %d\n",x-dir_cap/2, x);
+//      printf("lsb update : %d %d\n",x-dir_cap/2, x);
     } else {
       _[x] = s[0];
       segment_bind_pmem(x, s[0]);
@@ -233,7 +233,7 @@ void Directory::LSBUpdate(int local_depth, int global_depth, int dir_cap, int x,
       _[x+dir_cap/2] = s[1];
       segment_bind_pmem(x+dir_cap/2, s[1]);
       clflush((char*)&_[x+dir_cap/2], sizeof(Segment*));
-      printf("lsb update : %d %d\n",x, x+dir_cap/2);
+//      printf("lsb update : %d %d\n",x, x+dir_cap/2);
     }
   } else {
     if ((x%dir_cap) >= dir_cap/2) {

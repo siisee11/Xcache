@@ -15,6 +15,14 @@
  * on their number */
 //#define PMNET_QUORUM_DELAY_MS	((pmhb_dead_threshold + 2) * PMHB_REGION_TIMEOUT_MS)
 
+struct pmnet_handshake {
+	uint64_t protocol_version;
+	uint64_t connector_id;
+	uint32_t pmhb_heartbeat_timeout_ms;
+	uint32_t pmnet_idle_timeout_ms;
+	uint32_t pmnet_keepalive_delay_ms;
+	uint32_t pmnet_reconnect_delay_ms;
+};
 
 struct pmnet_sock_container {
 	int 			sockfd;
@@ -22,7 +30,7 @@ struct pmnet_sock_container {
 
 //	u32			sc_msg_key;
 //	u16			sc_msg_type;
-//  struct mutex		sc_send_lock;
+//	struct mutex		sc_send_lock;
 };
 
 enum pmnet_system_error {
