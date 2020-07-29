@@ -21,7 +21,6 @@
 //#define PMDFC_DEBUG 1
 #define PMDFC_GET 1
 //#define PMDFC_RDMA 1
-//#define PMDFC_KTHREAD 1
 #define PMDFC_BLOOM_FILTER 1 
 //#define PMDFC_REMOTIFY 1
 #define PMDFC_WORKQUEUE 1
@@ -45,6 +44,9 @@ struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
 /* Global count */
 atomic_t v = ATOMIC_INIT(0);
 atomic_t r = ATOMIC_INIT(0);
+
+struct kmem_cache* info_cache;
+struct kmem_cache* page_cache;
 
 /* kernel thread and wait queue */
 static struct task_struct *pmdfc_worker;
@@ -93,75 +95,6 @@ struct pmdfc_info
 
 static DEFINE_SPINLOCK(info_lock);
 
-#if defined(PMDFC_KTHREAD)
-/* worker function for kthread */
-static int worker_fn(void *data)
-{
-	struct pmdfc_info *info = NULL;
-	unsigned long remain;
-	void *page = NULL;
-	pgoff_t index;
-	long key; 
-	unsigned long flags;
-
-	int status, ret = 0;
-
-	pr_info("pmdfc-msg: worker running...\n");
-
-	while (1)
-	{
-		wait_event_interruptible(pmdfc_worker_wq, filled);
-		if (list_empty(&page_list_head)) {
-			filled = 0;
-			continue;
-		}
-
-		info = list_first_entry(&page_list_head, struct pmdfc_info, list);
-		page = info->page;
-		index = info->index;
-		key = info->key; 
-		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, page, PAGE_SIZE,
-		   0, &status);
-		if ( ret < 0 )
-			pr_info("pmdfc-msg: pmnet_send_message_fail(ret=%d)\n", ret);
-		else
-			list_del(&info->list);
-		pr_info("pmdfc-msg: send message success\n");
-
-//		kfree(page);
-		kfree(info);
-	}
-
-	return ret;
-}
-
-int thread_init (void) {
-
-	printk(KERN_INFO "pmdfc: thread initialization...\n");
-	pmdfc_worker = kthread_create(worker_fn, NULL, "pmdfc-msg");
-	if((pmdfc_worker))
-	{
-		printk(KERN_INFO "pmdfc: Waking up thread...");
-		wake_up_process(pmdfc_worker);
-	}
-
-	return 0;
-}
-
-void thread_cleanup(void) {
-	int ret;
-	pr_info("pmdfc: clean up thread...\n");
-	if (pmdfc_worker)
-	{
-		pr_info("pmdfc: pmdfc_worker found... clean it up...\n");
-		send_sig(SIGUSR1, pmdfc_worker, 0);
-		ret = kthread_stop(pmdfc_worker);
-		if(!ret)
-			printk(KERN_INFO "Thread stopped");
-	}
-}
-#endif /* defined(KTHREAD) */
-
 #if defined(PMDFC_WORKQUEUE)
 /* worker function for workqueue */
 static void work_func(struct work_struct *work)
@@ -181,16 +114,20 @@ static void work_func(struct work_struct *work)
 	while (1)
 	{
 		wait_event_interruptible(pmdfc_worker_wq, filled);
+
+		spin_lock_irqsave(&info_lock, flags);
+
 		if (list_empty(&page_list_head)) {
 			filled = 0;
+			spin_unlock_irqrestore(&info_lock, flags); 
 			continue;
 		}
 
-		spin_lock_irqsave(&info_lock, flags);
 		info = list_first_entry(&page_list_head, struct pmdfc_info, list);
-		list_del_init(&info->list);
-		spin_unlock_irqrestore(&info_lock, flags);
-		page = info->page;
+		list_del_init(&info->list); 
+		spin_unlock_irqrestore(&info_lock, flags); 
+
+		page = info->page; 
 		index = info->index;
 		key = info->key; 
 		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, page, PAGE_SIZE,
@@ -198,8 +135,8 @@ static void work_func(struct work_struct *work)
 		if ( ret < 0 )
 			pr_info("pmdfc-msg: pmnet_send_message_fail(ret=%d)\n", ret);
 
-		kfree(page);
-		kfree(info);
+		kmem_cache_free(page_cache, page);
+		kmem_cache_free(info_cache, info);
 	}
 }
 
@@ -280,7 +217,7 @@ static struct pmdfc_info* __get_new_info(void* page, long key, pgoff_t index)
 {
 	struct pmdfc_info *info;
 
-	info = kmalloc(sizeof(struct pmdfc_info), GFP_ATOMIC);
+	info = kmem_cache_alloc(info_cache, GFP_ATOMIC);
 
 	if(!info) {
 		printk(KERN_ERR "memory allocation failed\n");
@@ -337,9 +274,9 @@ static void pmdfc_cleancache_put_page(int pool_id,
 #if defined(PMDFC_NETWORK)
 	/* get page virtual address */
 	pg_from = page_address(page);
-	
+
 	/* copy page to shadow page */
-	shadow_page = kmalloc(PAGE_SIZE, GFP_ATOMIC);
+	shadow_page = kmem_cache_alloc(page_cache, GFP_ATOMIC);
 	if (shadow_page == NULL)
 		printk(KERN_ERR "shadow_page alloc failed!\n");
 	memcpy(shadow_page, pg_from, PAGE_SIZE);
@@ -349,7 +286,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	list_add_tail(&info->list, &page_list_head);
 	spin_unlock_irqrestore(&info_lock, flags);
 	filled = 1;
-//	pr_info("pmdfc: added to list\n");
 	wake_up_interruptible(&pmdfc_worker_wq);
 #endif
 
@@ -375,7 +311,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #if defined(PMDFC_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	char *to_va;
-	char response[PAGE_SIZE];
+	char response[4096];
 	int ret;
 
 	int status;
@@ -410,21 +346,13 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif
 
 #if defined(PMDFC_NETWORK)
-	pmnet_send_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, NULL, 0,
-		   0, &status);
-
-	ret = pmnet_recv_message(PMNET_MSG_SENDPAGE, 0, &response, PAGE_SIZE,
-		0, &status);
-	goto not_exists;
+	pmnet_send_recv_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, 
+			page, PAGE_SIZE, 0, &status);
 
 	if (status != 0) {
 		/* get page failed */
 		goto not_exists;
 	}
-	/* copy page content from message */
-	to_va = page_address(page);
-	memcpy(to_va, response, PAGE_SIZE);
-
 #endif /* PMDFC_NETWORK end */
 
 #if defined(PMDFC_RDMA)
@@ -558,9 +486,10 @@ static int __init pmdfc_init(void)
 	struct dentry *root = debugfs_create_dir("pmdfc", NULL);
 #endif
 
-#if defined(PMDFC_KTHREAD)
-	thread_init();
-#endif
+	info_cache = kmem_cache_create("info_cache", sizeof(struct pmdfc_info),
+			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
+	page_cache = kmem_cache_create("page_cache", PAGE_SIZE,
+			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
 #if defined(PMDFC_WORKQUEUE)
 	pmdfc_wq = create_singlethread_workqueue("pmdfc-msg");
@@ -607,16 +536,16 @@ static int __init pmdfc_init(void)
 /* TODO: how to exit normally??? */
 static void pmdfc_exit(void)
 {
+	if (info_cache)
+		kmem_cache_destroy(info_cache);
+	if (page_cache)
+		kmem_cache_destroy(page_cache);
+
 #if defined(PMDFC_WORKQUEUE)
 	/* cancle in_process works and destory workqueue */
 	cancel_work_sync(&pmdfc_work);
 	destroy_workqueue(pmdfc_wq);
 #endif
-
-#if defined(PMDFC_KTHREAD)
-	/* kthread stop */
-	thread_cleanup();
-#endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
 	bloom_filter_unref(bf);
