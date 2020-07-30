@@ -33,6 +33,6 @@ rdma:
 	insmod ./pmrdma.ko ip="115.145.173.69" port=2123
 	insmod ./pmdfc_client.ko
 unload:
-	rmmod ./pmnet.ko
 	rmmod ./pmdfc_client.ko
+	rmmod ./pmnet.ko
 	rmmod ./pmrdma.ko
