@@ -90,7 +90,7 @@ int bloom_filter_add_hash_alg(struct bloom_filter *filter,
 	struct bloom_crypto_alg *alg;
 	int ret = 0;
 
-	alg = kzalloc(sizeof(*alg), GFP_ATOMIC);
+	alg = kzalloc(sizeof(*alg), GFP_KERNEL);
 	if (!alg) {
 		ret = -ENOMEM;
 		goto exit;
@@ -104,7 +104,7 @@ int bloom_filter_add_hash_alg(struct bloom_filter *filter,
 
 	alg->hash_tfm_allocated = true;
 	alg->len = crypto_shash_digestsize(alg->hash_tfm);
-	alg->data = kzalloc(alg->len, GFP_ATOMIC);
+	alg->data = kzalloc(alg->len, GFP_KERNEL);
 	if (!alg->data) {
 		ret = -ENOMEM;
 		goto exit_free_hash;
@@ -151,7 +151,7 @@ int __bit_for_crypto_alg(struct bloom_crypto_alg *alg,
 	/* TODO: i range check (alg->len) */
 //	for (i = 0; i < alg->len / 8; i++) {
 	for (i = 0; i < alg->len; i++) {
-		*bit += alg->data[i];
+		*bit += alg->data[i] << i ;
 		*bit %= bitmap_size;
 	}
 
