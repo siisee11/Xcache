@@ -22,13 +22,10 @@
 #define PMDFC_GET 1
 //#define PMDFC_RDMA 1
 #define PMDFC_BLOOM_FILTER 1 
-//#define PMDFC_REMOTIFY 1
 #define PMDFC_WORKQUEUE 1
 
 #if !defined(PMDFC_NETWORK)
-#undef PMDFC_KTRHEAD
 #undef PMDFC_WORKQUEUE
-#undef PMDFC_REMOTIFY
 #endif
 
 /* Allocation flags */
@@ -41,41 +38,17 @@ struct bloom_filter *bf;
 /* Currently handled oid */
 struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
 
-/* Global count */
-atomic_t v = ATOMIC_INIT(0);
-atomic_t r = ATOMIC_INIT(0);
-
 struct kmem_cache* info_cache;
 struct kmem_cache* page_cache;
 
-/* kernel thread and wait queue */
-static struct task_struct *pmdfc_worker;
-static int filled = 0;
-
 /* work queue */
-static void work_func(struct work_struct *work);
+static void pmdfc_remotify_fn(struct work_struct *work);
 static struct workqueue_struct *pmdfc_wq;
-static DECLARE_WORK(pmdfc_work, work_func);
-//INIT_WORK(work, work_func);
+static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
 
 static LIST_HEAD(page_list_head);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
-
-/*
- * For now, just push over a few pages every few seconds to
- * ensure that it basically works
- */
-static struct workqueue_struct *pmdfc_remotify_workqueue;
-static void pmdfc_remotify_process(struct work_struct *work);
-static DECLARE_DELAYED_WORK(pmdfc_remotify_worker,
-				pmdfc_remotify_process);
-
-static void pmdfc_remotify_queue_delayed_work(unsigned long delay)
-{
-	if (!queue_delayed_work(pmdfc_remotify_workqueue,
-				&pmdfc_remotify_worker, delay))
-		pr_err("pmdfc_remotify: bad workqueue\n");
-}
+static int filled = 0;
 
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
@@ -84,6 +57,8 @@ static void pmdfc_remotify_queue_delayed_work(unsigned long delay)
  */
 static u64 pmdfc_total_gets;
 static u64 pmdfc_actual_gets;
+static u64 pmdfc_miss_gets;
+static u64 pmdfc_hit_gets;
 
 struct pmdfc_info 
 {
@@ -97,7 +72,7 @@ static DEFINE_SPINLOCK(info_lock);
 
 #if defined(PMDFC_WORKQUEUE)
 /* worker function for workqueue */
-static void work_func(struct work_struct *work)
+static void pmdfc_remotify_fn(struct work_struct *work)
 {
 	struct pmdfc_info *info = NULL;
 	unsigned long remain;
@@ -142,76 +117,6 @@ static void work_func(struct work_struct *work)
 
 #endif /* defined(PMDFC_WORKQUEUE) */
 
-
-#if defined(PMDFC_REMOTIFY)
-
-int pmdfc_remotify_pageframe(void)
-{
-	struct pmdfc_info *info = NULL;
-	void *page;
-	pgoff_t index;
-	long key; 
-	unsigned long flags;
-
-	int status, ret = 0;
-
-retry:
-	wait_event_interruptible(pmdfc_worker_wq, filled);
-	if (list_empty(&page_list_head)) {
-		filled = 0;
-		goto retry;
-	}
-
-	spin_lock_irqsave(&info_lock, flags);
-	info = list_first_entry(&page_list_head, struct pmdfc_info, list);
-	spin_unlock_irqrestore(&info_lock, flags);
-
-	page = info->page;
-	index = info->index;
-	key = info->key; 
-	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, page, PAGE_SIZE,
-	   0, &status);
-	if ( ret < 0 )
-		pr_info("pmdfc-msg: pmnet_send_message_fail(ret=%d)\n", ret);
-	else {
-		spin_lock_irqsave(&info_lock, flags);
-		list_del_init(&info->list);
-		spin_unlock_irqrestore(&info_lock, flags);
-	}
-
-	kfree(page);
-	kfree(info);
-
-}
-
-
-static void pmdfc_remotify_process(struct work_struct *work)
-{
-	static bool remotify_in_progress;
-	int i;
-
-	pr_info("pmdfc-remotify: worker running...\n");
-
-	BUG_ON(irqs_disabled());
-	if (remotify_in_progress)
-		goto requeue;
-	remotify_in_progress = true;
-	for (i = 0; i < 100; i++) {
-		(void)pmdfc_remotify_pageframe();
-	}
-	remotify_in_progress = false;
-requeue:
-	pmdfc_remotify_queue_delayed_work(HZ);
-}
-
-void pmdfc_remotify_init(void)
-{
-	unsigned long n = 10UL;
-	pmdfc_remotify_workqueue =
-		create_singlethread_workqueue("pmdfc-remotify");
-	pmdfc_remotify_queue_delayed_work(n * HZ);
-}
-#endif /* PMDFC_REMOTIFY */
 
 static struct pmdfc_info* __get_new_info(void* page, long key, pgoff_t index)
 {
@@ -260,10 +165,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		return;
 
 #if defined(PMDFC_DEBUG)
-	atomic_inc(&r);
-	if (atomic_read(&r) % 100 == 0 )
-		pr_info("count =%d\n", atomic_read(&r));
-
 	/* Send page to server */
 	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
 		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
@@ -277,8 +178,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
 	/* copy page to shadow page */
 	shadow_page = kmem_cache_alloc(page_cache, GFP_ATOMIC);
-	if (shadow_page == NULL)
-		printk(KERN_ERR "shadow_page alloc failed!\n");
+	if (shadow_page == NULL) {
+		printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
+		return;
+	}
 	memcpy(shadow_page, pg_from, PAGE_SIZE);
 
 	info = __get_new_info(shadow_page, (long)oid.oid[0], index);
@@ -351,9 +254,16 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 	if (status != 0) {
 		/* get page failed */
+		pmdfc_miss_gets++;
 		goto not_exists;
+	} else {
+		pmdfc_hit_gets++;
 	}
+#else
+	goto not_exists;
 #endif /* PMDFC_NETWORK end */
+
+	return -1;
 
 #if defined(PMDFC_RDMA)
 	ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
@@ -468,13 +378,19 @@ static int pmdfc_cleancache_register_ops(void)
 
 static int bloom_filter_init(void)
 {
-	bf = bloom_filter_new(1000000);
+//	bf = bloom_filter_new(12364167);
+	bf = bloom_filter_new(10000000);
 	bloom_filter_add_hash_alg(bf, "md5");
 	bloom_filter_add_hash_alg(bf, "sha1");
 	bloom_filter_add_hash_alg(bf, "sha224");
+#if 0
 	bloom_filter_add_hash_alg(bf, "sha256");
 	bloom_filter_add_hash_alg(bf, "sha384");
 	bloom_filter_add_hash_alg(bf, "ccm");
+	bloom_filter_add_hash_alg(bf, "rsa");
+	bloom_filter_add_hash_alg(bf, "crc32c");
+	bloom_filter_add_hash_alg(bf, "jitterentropy_rng");
+#endif
 
 	return 0;
 }
@@ -492,12 +408,12 @@ static int __init pmdfc_init(void)
 			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
 #if defined(PMDFC_WORKQUEUE)
-	pmdfc_wq = create_singlethread_workqueue("pmdfc-msg");
+	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
 	if (pmdfc_wq == NULL) {
 		printk(KERN_ERR "unable to launch pmdfc thread\n");
 		return -ENOMEM;
 	}
-	queue_work(pmdfc_wq, &pmdfc_work);
+	queue_work(pmdfc_wq, &pmdfc_remotify_work);
 #endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
@@ -524,10 +440,8 @@ static int __init pmdfc_init(void)
 #ifdef CONFIG_DEBUG_FS
 	debugfs_create_u64("total_gets", 0444, root, &pmdfc_total_gets);
 	debugfs_create_u64("actual_gets", 0444, root, &pmdfc_actual_gets);
-#endif
-
-#if defined(PMDFC_REMOTIFY)
-	pmdfc_remotify_init();
+	debugfs_create_u64("miss_gets", 0444, root, &pmdfc_miss_gets);
+	debugfs_create_u64("hit_gets", 0444, root, &pmdfc_hit_gets);
 #endif
 
 	return 0;
@@ -543,7 +457,7 @@ static void pmdfc_exit(void)
 
 #if defined(PMDFC_WORKQUEUE)
 	/* cancle in_process works and destory workqueue */
-	cancel_work_sync(&pmdfc_work);
+	cancel_work_sync(&pmdfc_remotify_work);
 	destroy_workqueue(pmdfc_wq);
 #endif
 
