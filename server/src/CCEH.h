@@ -231,13 +231,20 @@ class CCEH {
     PMEMobjpool *pop;
     Directory* dir;
     size_t global_depth;
+	struct timespec start, end;
+	uint64_t pmalloc_elapsed = 0;
 
 
     TOID(struct page_pmem) save_page(char* data){
 		TOID(struct page_pmem) tmp;
+
+		clock_gettime(CLOCK_MONOTONIC, &start);
 		POBJ_ALLOC(pop, &tmp, struct page_pmem, sizeof(struct page_pmem), NULL,NULL);
-		for(int i=0;i<page_size; i++)
-			D_RW(tmp)->data[i] = data[i];
+		clock_gettime(CLOCK_MONOTONIC, &end);
+
+		pmalloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+
+		memcpy(D_RW(tmp)->data, data, page_size);
 		return tmp;
     }
 
