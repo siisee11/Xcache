@@ -374,6 +374,8 @@ static void sc_kref_release(struct kref *kref)
 
 //	pmnm_node_put(sc->sc_node);
 	sc->sc_node = NULL;
+	
+	pmnet_debug_del_sc(sc);
 
 	if (sc->sc_page)
 		__free_page(sc->sc_page);
@@ -442,7 +444,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 	ret = sc;
 	sc->sc_page = page;
 	sc->sc_page_data = page_data;
-//	pmnet_debug_add_sc(sc);
+	pmnet_debug_add_sc(sc);
 	sc = NULL;
 	page = NULL;
 
@@ -812,68 +814,19 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 	int ret;
 	struct msghdr msg = {.msg_flags = 0,};
 
-#if 0
-	/* send dummy vec */
-	struct kvec *vec1 = NULL;
-	struct msghdr msg1 = {.msg_flags = 0,};
-	struct pmnet_msg *pmsg = NULL;
-	size_t veclen1, total1;
-//	char buf[4096];
-
-//	memset(buf, 0, 4096);
-
-	vec1 = kmalloc_array(1, sizeof(struct kvec), GFP_ATOMIC);
-	if (vec1 == NULL) {
-		pr_info("failed to %zu element kvec!\n", veclen);
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	pmsg = kmalloc(sizeof(struct pmnet_msg), GFP_ATOMIC);
-	if (!pmsg) {
-		pr_info("failed to allocate a pmnet_msg!\n");
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	pmnet_init_msg(pmsg, 0, 0, 0, 0);
-
-	vec1[0].iov_len = sizeof(struct pmnet_msg);
-	vec1[0].iov_base = pmsg;
-//	vec1[1].iov_len = 4096;
-//	vec1[1].iov_base = buf;
-
-	pmsg->magic = cpu_to_be16(PMNET_MSG_STATUS_MAGIC);  // twiddle the magic
-	pmsg->data_len = 0;
-
-	veclen1 = 1;
-	total1 = sizeof(struct pmnet_msg) ;
-
-#endif
-
 	if (sock == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-#if 0
-	ret = kernel_sendmsg(sock, &msg1, vec1, veclen1, total1);
-
-	if (likely(ret == total1))
-		return 0;
-#endif
-
-#if 1
 	/* TODO: 얘가 잘못 */
 	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
-//	return 0;
 	if (likely(ret == total))
 		return 0;
 
 	pr_info("sendmsg returned %d instead of %zu\n", ret, total);
 	if (ret >= 0)
 		ret = -EPIPE; /* should be smarter, I bet */
-#endif
 out:
 	pr_info("returning error: %d\n", ret);
 	return ret;
@@ -915,9 +868,9 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 		goto out;
 	}
 
-//	pmnet_debug_add_nst(&nst);
+	pmnet_debug_add_nst(&nst);
 
-	pmnet_set_nst_sock_time(&nst);
+	pmnet_set_nst_sock_time(&nst); /* st_sock_time */
 	
 	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
 	if (ret)
@@ -953,7 +906,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	msg->msg_num = cpu_to_be32(nsw.ns_id);
 	pmnet_set_nst_msg_id(&nst, nsw.ns_id);
 
-	pmnet_set_nst_send_time(&nst);
+	pmnet_set_nst_send_time(&nst);  /* st_send_time */
 
 	/*
 	 * finally, convert the message header to network byte-order
@@ -969,7 +922,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	}
 
 	/* wait on other node's handler */
-	pmnet_set_nst_status_time(&nst);
+	pmnet_set_nst_status_time(&nst); /* st_status_time */
 	/* TODO: make wait_event work */
 	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
 
@@ -994,7 +947,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 			ret, nsw.ns_status);
 
 out:
-//	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
+	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
 	if (sc)
 		sc_put(sc);
 	kfree(vec);
@@ -1014,9 +967,9 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	struct kvec *vec = NULL;
 	struct pmnet_sock_container *sc = NULL;
 	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
-	struct pmnet_send_tracking nst;
+//	struct pmnet_send_tracking nst;
 
-	pmnet_init_nst(&nst, msg_type, key, current, target_node);
+//	pmnet_init_nst(&nst, msg_type, key, current, target_node);
 
 	if (pmnet_wq == NULL) {
 		pr_info("attempt to tx without pmnetd running\n");
@@ -1039,7 +992,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 
 //	pmnet_debug_add_nst(&nst);
 
-	pmnet_set_nst_sock_time(&nst);
+//	pmnet_set_nst_sock_time(&nst);
 	
 	/* XXX: wait may cause problem */
 	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
@@ -1050,7 +1003,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 //	kref_get(&nn->nn_sc->sc_kref);
 //	sc = nn->nn_sc;
 
-	pmnet_set_nst_sock_container(&nst, sc);
+//	pmnet_set_nst_sock_container(&nst, sc);
 
 	veclen = caller_veclen + 1;
 	vec = kmalloc_array(veclen, sizeof(struct kvec), GFP_ATOMIC);
@@ -1073,7 +1026,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	vec[0].iov_base = msg;
 	memcpy(&vec[1], caller_vec, caller_veclen * sizeof(struct kvec));
 
-	pmnet_set_nst_send_time(&nst);
+//	pmnet_set_nst_send_time(&nst);
 
 	/*
 	 * finally, convert the message header to network byte-order
@@ -1089,9 +1042,9 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	}
 
 	/* wait on other node's handler */
-	pmnet_set_nst_status_time(&nst);
+//	pmnet_set_nst_status_time(&nst);
 
-	pmnet_update_send_stats(&nst, sc);
+//	pmnet_update_send_stats(&nst, sc);
 
 out:
 //	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
@@ -1191,13 +1144,11 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 	switch(be16_to_cpu(hdr->msg_type)) {
 		case PMNET_MSG_SENDPAGE:
-#if defined(PMDFC_DEBUG)
 			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
 					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
-#endif
 
-			ret_data = kmem_cache_alloc(page_cache, GFP_ATOMIC);
+			ret_data = kmem_cache_alloc(page_cache, GFP_KERNEL);
 			if (ret_data == NULL) {
 				pr_info("failed to kmalloc element!\n");
 				ret = -ENOMEM;
@@ -1217,11 +1168,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			break;
 
 		case PMNET_MSG_NOTEXIST:
-#if defined(PMDFC_DEBUG)
 			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
 					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
-#endif
 
 			pmnet_complete_nsw(nn, NULL,
 					   be32_to_cpu(hdr->msg_num),
@@ -1365,7 +1314,6 @@ static int pmnet_check_handshake(struct pmnet_sock_container *sc)
 }
 
 
-
 static int pmnet_recv_tcp_msg(struct socket *sock, void *data, size_t len)
 {
 	struct kvec vec = { .iov_len = len, .iov_base = data, };
@@ -1373,137 +1321,6 @@ static int pmnet_recv_tcp_msg(struct socket *sock, void *data, size_t len)
 	iov_iter_kvec(&msg.msg_iter, READ, &vec, 1, len);
 	return sock_recvmsg(sock, &msg, MSG_DONTWAIT);
 }
-
-int pmnet_recv_message_vec(u32 msg_type, u32 key, struct kvec *caller_vec,
-		size_t caller_veclen, u8 target_node, int *status)
-{
-	int ret = 0;
-	struct pmnet_msg *msg = NULL;
-	size_t veclen, caller_bytes = 0;
-	struct kvec *vec = NULL;
-	struct pmnet_sock_container *sc = NULL;
-	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
-
-	struct socket *conn_socket = NULL;
-
-	/* XXX: DONTWAIT works WAITALL doesn't work */
-	/* solved --> WAITALL wait until recv all data 
-	 * It blocked because sender send a portion of data 
-	 */
-//	struct msghdr msghdr = {.msg_flags = MSG_DONTWAIT,};
-	struct msghdr msghdr = {.msg_flags = MSG_WAITALL,};
-
-	DECLARE_WAIT_QUEUE_HEAD(recv_wait);
-
-	if (pmnet_wq == NULL) {
-		pr_info("attempt to tx without pmnetd running\n");
-		ret = -ESRCH;
-		goto out;
-	}
-
-	if (caller_veclen == 0) {
-		pr_info("caller_veclen is 0\n");
-		ret = -EINVAL;
-		goto out;
-	}
-
-	caller_bytes = iov_length((struct iovec *)caller_vec, caller_veclen);
-	if (caller_bytes > PMNET_MAX_PAYLOAD_BYTES) {
-		pr_info("caller_bytes(%ld) too large\n", caller_bytes);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	*status = -1;
-
-	kref_get(&nn->nn_sc->sc_kref);
-	sc = nn->nn_sc;
-
-	if (sc == NULL)
-		pr_info("%s: sc = NULL\n", __func__);
-	conn_socket = sc->sc_sock;
-	if (conn_socket == NULL)
-		pr_info("%s: conn_socket = NULL\n", __func__);
-	if (conn_socket->sk == NULL)
-		pr_info("%s: conn_socket->sk = NULL\n", __func__);
-
-	veclen = caller_veclen + 1;
-	vec = kmalloc(sizeof(struct kvec) * veclen, GFP_ATOMIC);
-	if (vec == NULL) {
-		pr_info("failed to %zu element kvec!\n", veclen);
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	msg = kmalloc(sizeof(struct pmnet_msg), GFP_ATOMIC);
-	if (!msg) {
-		pr_info("failed to allocate a pmnet_msg!\n");
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	vec[0].iov_len = sizeof(struct pmnet_msg);
-	vec[0].iov_base = msg;
-	memcpy(&vec[1], caller_vec, caller_veclen * sizeof(struct kvec));
-
-	wait_event_timeout(recv_wait,\
-			!skb_queue_empty(&conn_socket->sk->sk_receive_queue),\
-			5*HZ);
-	if(!skb_queue_empty(&conn_socket->sk->sk_receive_queue))
-	{
-read_again:
-		ret = kernel_recvmsg(conn_socket, &msghdr, vec, veclen, 
-				sizeof(struct pmnet_msg) + caller_bytes, msghdr.msg_flags);
-
-		if(ret == -EAGAIN || ret == -ERESTARTSYS)
-		{
-				pr_info(" *** mtp | error while reading: %d | "
-						"tcp_client_receive *** \n", ret);
-
-				goto read_again;
-		}
-
-//#if defined(PMDFC_DEBUG)
-		pr_info("Client<--SERVER: ( msg_type=%u, data_len=%u, key=%x, index=%x )\n", 
-				be16_to_cpu(msg->msg_type), be16_to_cpu(msg->data_len),
-				be32_to_cpu(msg->key), be32_to_cpu(msg->index));
-//#endif
-
-		if (be16_to_cpu(msg->msg_type) == msg_type) 
-		{
-//			pr_info("recv_message: msg_type matched\n");
-			*status = 0;
-		} else {
-//			pr_info("recv_message: msg_type not matched\n");
-		}
-
-		if (ret < 0)
-			pr_info("ERROR: pmnet_recv_message\n");
-	}
-
-
-out:
-	if (sc)
-		sc_put(sc);
-	kfree(vec);
-	kfree(msg);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmnet_recv_message_vec);
-
-
-/* receive message from target node (pm_server) */
-int pmnet_recv_message(u32 msg_type, u32 key, void *data, u32 len,
-		u8 target_node, int *status)
-{
-	struct kvec vec = {
-		.iov_base = data,
-		.iov_len = len,
-	};
-	return pmnet_recv_message_vec(msg_type, key, &vec, 1,
-			target_node, status);
-}
-EXPORT_SYMBOL_GPL(pmnet_recv_message);
 
 /* ---------------------------------------------------- */
 

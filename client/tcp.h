@@ -71,8 +71,6 @@ int pmnet_send_recv_message_vec(u32, u32, u32, struct page* page,
 		struct kvec *caller_vec, size_t caller_veclen, u8 target_node, int *status);
 int pmnet_send_recv_message(u32 msg_type, u32 key, u32 index, struct page*, u32 len,
 		u8 target_node, int *status);
-int pmnet_recv_message(u32 msg_type, u32 key, void *data, u32 len,
-		       u8 target_node, int *status);
 
 struct pmnm_node;
 int pmnet_start_listening(struct pmnm_node *node);
