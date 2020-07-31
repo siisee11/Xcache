@@ -31,6 +31,10 @@
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
 
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *pmdfc_dentry; 
+#endif
+
 /* bloom filter */
 /* TODO: is it thread safe? */
 struct bloom_filter *bf;
@@ -39,7 +43,6 @@ struct bloom_filter *bf;
 struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
 
 struct kmem_cache* info_cache;
-struct kmem_cache* page_cache;
 
 /* work queue */
 static void pmdfc_remotify_fn(struct work_struct *work);
@@ -48,7 +51,8 @@ static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
 
 static LIST_HEAD(page_list_head);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
-static int filled = 0;
+static atomic_t filled = {.count = 0};
+static int done = 0;
 
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
@@ -83,17 +87,22 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 
 	int status, ret = 0;
 
-	pr_info("pmdfc-msg: workqueue worker running...\n");
+	pr_info("pmdfc-remotify: workqueue worker running...\n");
 
 	allow_signal(SIGUSR1);
 	while (1)
 	{
-		wait_event_interruptible(pmdfc_worker_wq, filled);
+		wait_event_interruptible(pmdfc_worker_wq, atomic_read(&filled));
+
+		/* module unloaded */
+		if (unlikely(done == 1)) 
+			return;
 
 		spin_lock_irqsave(&info_lock, flags);
 
-		if (list_empty(&page_list_head)) {
-			filled = 0;
+		/* if someone stole info then wait again */
+		if (unlikely(list_empty(&page_list_head))) {
+			atomic_andnot(0, &filled)
 			spin_unlock_irqrestore(&info_lock, flags); 
 			continue;
 		}
@@ -108,9 +117,9 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, page, PAGE_SIZE,
 		   0, &status);
 		if ( ret < 0 )
-			pr_info("pmdfc-msg: pmnet_send_message_fail(ret=%d)\n", ret);
+			pr_info("pmdfc-remotify: pmnet_send_message_fail(ret=%d)\n", ret);
 
-		kmem_cache_free(page_cache, page);
+		kfree(page);
 		kmem_cache_free(info_cache, info);
 	}
 }
@@ -177,7 +186,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pg_from = page_address(page);
 
 	/* copy page to shadow page */
-	shadow_page = kmem_cache_alloc(page_cache, GFP_ATOMIC);
+	shadow_page = kmalloc(PAGE_SIZE, GFP_ATOMIC);
 	if (shadow_page == NULL) {
 		printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
 		return;
@@ -188,7 +197,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	spin_lock_irqsave(&info_lock, flags);
 	list_add_tail(&info->list, &page_list_head);
 	spin_unlock_irqrestore(&info_lock, flags);
-	filled = 1;
+	atomic_and(1, &filled);
 	wake_up_interruptible(&pmdfc_worker_wq);
 #endif
 
@@ -325,7 +334,7 @@ static void pmdfc_cleancache_flush_inode(int pool_id,
 #if defined(PMDFC_FLUSH)
 #if defined(PMDFC_DEBUG)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-
+ 
 	printk(KERN_INFO "pmdfc: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2]);
 #endif
@@ -395,19 +404,35 @@ static int bloom_filter_init(void)
 	return 0;
 }
 
+void pmdfc_debugfs_exit(void)
+{
+	debugfs_remove_recursive(pmdfc_dentry);
+}
+
+void pmdfc_debugfs_init(void)
+{
+	umode_t mode = S_IFREG|S_IRUSR;
+
+	pmdfc_dentry = debugfs_create_dir("pmdfc", NULL);
+	debugfs_create_u64("total_gets", 0444, pmdfc_dentry, &pmdfc_total_gets);
+	debugfs_create_u64("actual_gets", 0444, pmdfc_dentry, &pmdfc_actual_gets);
+	debugfs_create_u64("miss_gets", 0444, pmdfc_dentry, &pmdfc_miss_gets);
+	debugfs_create_u64("hit_gets", 0444, pmdfc_dentry, &pmdfc_hit_gets);
+}
+
 static int __init pmdfc_init(void)
 {
 	int ret;
+
 #ifdef CONFIG_DEBUG_FS
-	struct dentry *root = debugfs_create_dir("pmdfc", NULL);
+	pmdfc_debugfs_init();
 #endif
 
 	info_cache = kmem_cache_create("info_cache", sizeof(struct pmdfc_info),
 			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
-	page_cache = kmem_cache_create("page_cache", PAGE_SIZE,
-			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
 #if defined(PMDFC_WORKQUEUE)
+	/* TODO: why we use singlethread here?? */
 	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
 	if (pmdfc_wq == NULL) {
 		printk(KERN_ERR "unable to launch pmdfc thread\n");
@@ -437,25 +462,29 @@ static int __init pmdfc_init(void)
 		printk(KERN_INFO ">> pmdfc: cleancache_disabled\n");
 	}
 
-#ifdef CONFIG_DEBUG_FS
-	debugfs_create_u64("total_gets", 0444, root, &pmdfc_total_gets);
-	debugfs_create_u64("actual_gets", 0444, root, &pmdfc_actual_gets);
-	debugfs_create_u64("miss_gets", 0444, root, &pmdfc_miss_gets);
-	debugfs_create_u64("hit_gets", 0444, root, &pmdfc_hit_gets);
-#endif
+
 
 	return 0;
 }
 
-/* TODO: how to exit normally??? */
+/* 
+ * TODO: how to exit normally??? 
+ * -> We cannot. No exit for cleancache.
+ * Just make operations do nothing.
+ */
 static void pmdfc_exit(void)
 {
+#if defined(PMDFC_DEBUG_FS)
+	pmdfc_debugfs_exit();
+#endif
+
 	if (info_cache)
 		kmem_cache_destroy(info_cache);
-	if (page_cache)
-		kmem_cache_destroy(page_cache);
 
 #if defined(PMDFC_WORKQUEUE)
+	done = 1;
+	atomic_and(1, &filled);
+	wake_up_interruptible(&pmdfc_worker_wq);
 	/* cancle in_process works and destory workqueue */
 	cancel_work_sync(&pmdfc_remotify_work);
 	destroy_workqueue(pmdfc_wq);
@@ -471,3 +500,4 @@ module_exit(pmdfc_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("NAM JAEYOUN");
+
