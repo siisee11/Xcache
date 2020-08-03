@@ -32,6 +32,8 @@
 #include "tcp.h"
 #include "tcp_internal.h"
 
+#define TIME_CHECK 1
+
 #define  BUFF_SIZE   1024
 #define SA struct sockaddr 
 
@@ -46,6 +48,9 @@ struct pmnet_msg_in {
 	struct pmnet_msg *hdr;
 	void *page;
 	size_t page_off;
+#if TIME_CHECK
+	timespec queue_start;
+#endif
 };
 
 /* pre-defined message structure */
@@ -55,12 +60,18 @@ static struct pmnet_msg *pmnet_keep_req, *pmnet_keep_resp;
 /* lock-free-queue */
 boost::lockfree::queue<pmnet_msg_in *> new_queue(128);
 boost::atomic<bool> done (false);
+boost::atomic<bool> alldone (false);
+
 boost::atomic<int> putcnt (0);
 boost::atomic<int> getcnt (0);
 
-
 /* CCEH hashTable */
 CCEH* hashTable;
+
+/* performance timer */
+uint64_t network_elapsed=0, pmput_elapsed=0, pmalloc_elapsed = 0, pmget_elapsed=0;
+uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
+uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
 
 static void pmnet_rx_until_empty(struct pmnet_sock_container *sc);
 static int pmnet_process_message(struct pmnet_sock_container *sc, 
@@ -107,14 +118,12 @@ void consumer(struct pmnet_sock_container *sc) {
 	while (!done) {
 		/* TODO: Uncomment below after debugging */
 		while (new_queue.pop(msg_in)){
-			getcnt++;
 			ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
 			free(msg_in);
 		}
 	}
 
 	while (new_queue.pop(msg_in)) {
-		getcnt++;
 		ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
 	}
 
@@ -148,6 +157,10 @@ static struct pmnet_msg_in *init_msg()
 	msg_in->page_off = 0;
 	msg_in->page = page;
 	msg_in->hdr= msg;
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &msg_in->queue_start);
+#endif
 
 	return msg_in;
 }
@@ -261,6 +274,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 	uint64_t key;
 	uint64_t index;
 	void *saved_page;
+	struct timespec start,end;
 
 	switch(ntohs(hdr->magic)) {
 		case PMNET_MSG_STATUS_MAGIC:
@@ -281,24 +295,38 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 	switch(ntohs(hdr->msg_type)) {
 		case PMNET_MSG_PUTPAGE: {
+			putcnt++;
+			clock_gettime(CLOCK_MONOTONIC, &start);
+
+#if defined(TIME_CHECK)
+			pmput_queue_elapsed += start.tv_nsec - msg_in->queue_start.tv_nsec + 1000000000 * (start.tv_sec - msg_in->queue_start.tv_sec);
+#endif
+
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-//			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)", ntohl(hdr->key), ntohl(hdr->index), key);
+			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
-//			printf(">> PUT: %s\n", from_va);
 
 			/* Insert received page into hash */
 			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
-//			hashTable->Insert(key,hashTable->save_page((char *)temp).oid.off);
 //			printf("[ Inserted %lx : ", key);
 //			printf("%lx ]\n", hashTable->Get(key));
+//
+			clock_gettime(CLOCK_MONOTONIC, &end);
+			pmput_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 			break;
 		}
 
 		case PMNET_MSG_GETPAGE:{
+			getcnt++;
 //			printf("CLIENT-->SERVER: PMNET_MSG_GETPAGE\n");
+			clock_gettime(CLOCK_MONOTONIC, &start);
+
+#if defined(TIME_CHECK)
+			pmget_queue_elapsed += start.tv_nsec - msg_in->queue_start.tv_nsec + 1000000000 * (start.tv_sec - msg_in->queue_start.tv_sec);
+#endif
 
 			/* alloc new page pointer to send */
 			saved_page = calloc(1, PAGE_SIZE);
@@ -314,7 +342,11 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				memset(&reply, 0, PAGE_SIZE);
 				ret = pmnet_send_message(sc, PMNET_MSG_NOTEXIST, ntohl(hdr->key), ntohl(hdr->index), 
 						ntohl(hdr->msg_num), NULL, 0);
-//				printf("PAGE NOT EXIST (key=%lx, index=%lx, msg_num=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
+
+				clock_gettime(CLOCK_MONOTONIC, &end);
+				pmget_notexist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+
+				printf("PAGE NOT EXIST (key=%lx, index=%lx, msg_num=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
 //				printf("SERVER-->CLIENT: PMNET_MSG_NOTEXIST(%d)\n",ret);
 			} else {
 				/* page exists */
@@ -322,11 +354,16 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 //				printf(">> GET: %s\n", saved_page);
 				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
 					ntohl(hdr->msg_num), saved_page, PAGE_SIZE);
-//				printf("[ Retrived (key=%lx, index=%lx, msg_num=%lx) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-//				printf("%lx ]\n", hashTable->Get(key));
+
+				clock_gettime(CLOCK_MONOTONIC, &end);
+				pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+
+				printf("[ Retrived (key=%lx, index=%lx, msg_num=%lx) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
+				printf("%lx ]\n", hashTable->Get(key));
 //				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
 			break;
+
 		}
 
 		case PMNET_MSG_SENDPAGE:
@@ -466,17 +503,9 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		 * works out. after calling this the message is toast */
 		/* TODO: Uncomment below after debugging */
 		if (new_queue.push(msg_in)) {
-			putcnt++;
 			pushed = true;
 			ret = 1;
 		}
-		pushed = true;
-#if 0
-		putcnt++;
-		pushed = true;
-		ret = 1;
-		free(msg_in);
-#endif
 	}
 
 out:
@@ -559,7 +588,6 @@ void init_network_server()
 		printf("Server listening..\n"); 
 
 	/* Thread pool */
-	std::vector<std::thread> threads;
 	boost::thread_group producer_threads, consumer_threads;
 
 	/*
@@ -580,24 +608,57 @@ void init_network_server()
 		sc = sc_alloc();
 		sc->sockfd = connfd;
 
-		/* start thread */
 		boost::thread p = boost::thread( producer, sc );
-		p.detach();
+		producer_threads.add_thread(&p);
 		boost::thread c1 = boost::thread( consumer, sc );
-		c1.detach();
+		consumer_threads.add_thread(&c1);
 		boost::thread c2 = boost::thread( consumer, sc );
-		c2.detach();
+		consumer_threads.add_thread(&c2);
 		boost::thread c3 = boost::thread( consumer, sc );
-		c3.detach();
+		consumer_threads.add_thread(&c3);
 		boost::thread c4 = boost::thread( consumer, sc );
-		c4.detach();
+		consumer_threads.add_thread(&c4);
 		boost::thread c5 = boost::thread( consumer, sc );
-		c5.detach();
+		consumer_threads.add_thread(&c5);
 		boost::thread c6 = boost::thread( consumer, sc );
-		c6.detach();
-//		producer_threads.create_thread( producer, connfd );
-//		consumer_threads.create_thread( consumer, connfd );
+		consumer_threads.add_thread(&c6);
+		boost::thread c7 = boost::thread( consumer, sc );
+		consumer_threads.add_thread(&c7);
+		boost::thread c8 = boost::thread( consumer, sc );
+		consumer_threads.add_thread(&c8);
+
+		producer_threads.join_all();
+		consumer_threads.join_all();
+
+		printf("\n--------------------REPORT---------------------\n");
+
+		printf("PUT : %lu (us), GET_E : %lu (us), GET_NE : %lu (us)\n",
+				pmput_elapsed/1000,
+				pmget_exist_elapsed/1000, 
+				pmget_notexist_elapsed/1000);
+		printf("PM alloc : %lu (us)\n\n",
+				hashTable->pmalloc_elapsed/1000);
+
+		printf("Queuing delay\n");
+		printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
+				pmput_queue_elapsed/1000,
+				pmget_queue_elapsed/1000);
+
+
+		printf("\n--------------------SUMMARY--------------------\n");
+		printf("Average (divided by number of ops)\n");
+		printf("PUT : %lu (us), PUT_ALLOC : %lu (us), GET_TOTAL : %lu (us)\n",
+				pmput_elapsed/1000/putcnt,
+				hashTable->pmalloc_elapsed/1000/putcnt,
+				(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/getcnt);
+
+		printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
+				pmput_queue_elapsed/1000/putcnt,
+				pmget_queue_elapsed/1000/getcnt);
+
+		printf("\n--------------------FIN------------------------\n");
 	} 
+
 
 	close(sockfd); 
 }
@@ -617,11 +678,6 @@ CCEH *init_cceh(char* file)
 
 int main(int argc, char* argv[]) 
 { 	
-	struct timespec start, end;
-	uint64_t elapsed;
-
-	clock_gettime(CLOCK_MONOTONIC, &start);
-
 	/* New CCEH hash table */
 	hashTable = init_cceh(argv[1]);
 
@@ -636,6 +692,7 @@ int main(int argc, char* argv[])
 	 * Looping inside this fuction
 	 */
 	init_network_server();
+
 
 
 	return 0;
