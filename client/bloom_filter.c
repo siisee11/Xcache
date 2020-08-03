@@ -38,7 +38,7 @@ struct bloom_filter *bloom_filter_new(int bit_size)
 	unsigned long bitmap_size = BITS_TO_LONGS(bit_size)
 				  * sizeof(unsigned long);
 
-	filter = kzalloc(sizeof(*filter) + bitmap_size, GFP_ATOMIC);
+	filter = kzalloc(sizeof(*filter) + bitmap_size, GFP_KERNEL);
 	if (!filter)
 		return ERR_PTR(-ENOMEM);
 
@@ -77,6 +77,7 @@ static void __bloom_filter_free(struct kref *kref)
 //	mutex_unlock(&filter->lock);
 
 	kfree(filter);
+	pr_info("bloom_filter freed...\n");
 }
 
 void bloom_filter_unref(struct bloom_filter *filter)
@@ -235,62 +236,4 @@ void bloom_filter_reset(struct bloom_filter *filter)
 //	mutex_lock(&filter->lock);
 	bitmap_zero(filter->bitmap, filter->bitmap_size);
 //	mutex_unlock(&filter->lock);
-}
-
-
-/* ------------------------------------------------------- */
-
-
-static int calc_hash(struct crypto_shash *alg,
-             const unsigned char *data, unsigned int datalen,
-             unsigned char *digest)
-{
-    struct sdesc *sdesc;
-    int ret;
-
-    sdesc = init_sdesc(alg);
-    if (IS_ERR(sdesc)) {
-        pr_info("can't alloc sdesc\n");
-        return PTR_ERR(sdesc);
-    }
-
-	printk("data:%s\n", data);
-    ret = crypto_shash_digest(&sdesc->shash, data, datalen, digest);
-    kfree(sdesc);
-    return ret;
-}
-
-static int test_hash(const unsigned char *data, unsigned int datalen,
-             unsigned char *digest)
-{
-    struct crypto_shash *alg;
-    const char *hash_alg_name = "sha1";
-    int ret;
-
-    alg = crypto_alloc_shash(hash_alg_name, 0, 0);
-    if (IS_ERR(alg)) {
-            pr_info("can't alloc alg %s\n", hash_alg_name);
-            return PTR_ERR(alg);
-    }
-    ret = calc_hash(alg, data, datalen, digest);
-	printk("digest:%s\n", digest);
-    crypto_free_shash(alg);
-    return ret;
-}
-
-int test_main( void )
-{
-	int i = 0;
-	u8 digest[20];
-
-	test_hash("hihi", 4, digest);
-
-	printk("digest: ");
-	for (i = 0; i < 4; ++i) {
-		printk("%02x %02x %02x %02x %02x ", 
-				digest[i], digest[i+1], digest[i+2], digest[i+3], digest[i+4]);
-	}
-	printk("\n");
-
-	return 0;
 }

@@ -51,8 +51,6 @@ static struct pmnet_node pmnet_nodes[PMNM_MAX_NODES];
 static struct pmnet_handshake *pmnet_hand;
 static struct pmnet_msg *pmnet_keep_req, *pmnet_keep_resp;
 
-struct kmem_cache* page_cache;
-
 static int pmnet_sys_err_translations[PMNET_ERR_MAX] =
 		{[PMNET_ERR_NONE]	= 0,
 		 [PMNET_ERR_NO_HNDLR]	= -ENOPROTOOPT,
@@ -154,36 +152,47 @@ static inline void pmnet_set_func_stop_time(struct pmnet_sock_container *sc)
 
 #define CONFIG_PMDFC_FS_STATS
 #ifdef CONFIG_PMDFC_FS_STATS
-#if 0
+
 static ktime_t pmnet_get_func_run_time(struct pmnet_sock_container *sc)
 {
 	return ktime_sub(sc->sc_tv_func_stop, sc->sc_tv_func_start);
 }
-#endif
 
 static void pmnet_update_send_stats(struct pmnet_send_tracking *nst,
 				    struct pmnet_sock_container *sc)
 {
-	sc->sc_tv_status_total = ktime_add(sc->sc_tv_status_total,
-					   ktime_sub(ktime_get(),
-						     nst->st_status_time));
-	sc->sc_tv_send_total = ktime_add(sc->sc_tv_send_total,
-					 ktime_sub(nst->st_status_time,
-						   nst->st_send_time));
-	sc->sc_tv_acquiry_total = ktime_add(sc->sc_tv_acquiry_total,
-					    ktime_sub(nst->st_send_time,
-						      nst->st_sock_time));
+	if (nst->st_msg_type == PMNET_MSG_PUTPAGE) {
+		sc->sc_tv_put_status_total = ktime_add(sc->sc_tv_put_status_total,
+						   ktime_sub(ktime_get(),
+								 nst->st_status_time));
+		sc->sc_tv_put_send_total = ktime_add(sc->sc_tv_put_send_total,
+						 ktime_sub(nst->st_status_time,
+							   nst->st_send_time));
+		sc->sc_tv_put_acquiry_total = ktime_add(sc->sc_tv_put_acquiry_total,
+							ktime_sub(nst->st_send_time,
+								  nst->st_sock_time));
+		sc->sc_put_send_count++;
+	} else {
+		sc->sc_tv_get_status_total = ktime_add(sc->sc_tv_get_status_total,
+						   ktime_sub(ktime_get(),
+								 nst->st_status_time));
+		sc->sc_tv_get_send_total = ktime_add(sc->sc_tv_get_send_total,
+						 ktime_sub(nst->st_status_time,
+							   nst->st_send_time));
+		sc->sc_tv_get_acquiry_total = ktime_add(sc->sc_tv_get_acquiry_total,
+							ktime_sub(nst->st_send_time,
+								  nst->st_sock_time));
+		sc->sc_get_send_count++;
+	}
 	sc->sc_send_count++;
 }
 
-#if 0
 static void pmnet_update_recv_stats(struct pmnet_sock_container *sc)
 {
 	sc->sc_tv_process_total = ktime_add(sc->sc_tv_process_total,
 					    pmnet_get_func_run_time(sc));
 	sc->sc_recv_count++;
 }
-#endif
 
 #else
 
@@ -562,7 +571,6 @@ static void pmnet_data_ready(struct sock *sk)
 	if (sc) {
 		sclog(sc, "data_ready hit\n");
 		pmnet_set_data_ready_time(sc);
-//		pr_info("queue sc_rx_work !!\n");
 		pmnet_sc_queue_work(sc, &sc->sc_rx_work);
 		ready = sc->sc_data_ready;
 	} else {
@@ -918,6 +926,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	mutex_unlock(&sc->sc_send_lock);
 	if (ret < 0) {
 		pr_info("error returned from pmnet_send_tcp_msg=%d\n", ret);
+		*status = -1;
 		goto out;
 	}
 
@@ -935,12 +944,11 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	if (status && !ret)
 		*status = nsw.ns_status;
 
-	/* XXX:page from SERVER */
 	/* PAGE_EXIST */
 	if (*status != -1) {
 		to_va = page_address(page);
 		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
-		kmem_cache_free(page_cache, nsw.ns_page);
+		kfree(nsw.ns_page);
 	}
 
 	mlog(0, "woken, returning system status %d, user status %d\n",
@@ -967,9 +975,9 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	struct kvec *vec = NULL;
 	struct pmnet_sock_container *sc = NULL;
 	struct pmnet_node *nn = pmnet_nn_from_num(target_node);
-//	struct pmnet_send_tracking nst;
+	struct pmnet_send_tracking nst;
 
-//	pmnet_init_nst(&nst, msg_type, key, current, target_node);
+	pmnet_init_nst(&nst, msg_type, key, current, target_node);
 
 	if (pmnet_wq == NULL) {
 		pr_info("attempt to tx without pmnetd running\n");
@@ -990,9 +998,9 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 		goto out;
 	}
 
-//	pmnet_debug_add_nst(&nst);
+	pmnet_debug_add_nst(&nst);
 
-//	pmnet_set_nst_sock_time(&nst);
+	pmnet_set_nst_sock_time(&nst);
 	
 	/* XXX: wait may cause problem */
 	wait_event(nn->nn_sc_wq, pmnet_tx_can_proceed(nn, &sc, &ret));
@@ -1003,7 +1011,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 //	kref_get(&nn->nn_sc->sc_kref);
 //	sc = nn->nn_sc;
 
-//	pmnet_set_nst_sock_container(&nst, sc);
+	pmnet_set_nst_sock_container(&nst, sc);
 
 	veclen = caller_veclen + 1;
 	vec = kmalloc_array(veclen, sizeof(struct kvec), GFP_ATOMIC);
@@ -1026,7 +1034,7 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	vec[0].iov_base = msg;
 	memcpy(&vec[1], caller_vec, caller_veclen * sizeof(struct kvec));
 
-//	pmnet_set_nst_send_time(&nst);
+	pmnet_set_nst_send_time(&nst);
 
 	/*
 	 * finally, convert the message header to network byte-order
@@ -1042,12 +1050,12 @@ int pmnet_send_message_vec(u32 msg_type, u32 key, u32 index, struct kvec *caller
 	}
 
 	/* wait on other node's handler */
-//	pmnet_set_nst_status_time(&nst);
+	pmnet_set_nst_status_time(&nst);
 
-//	pmnet_update_send_stats(&nst, sc);
+	pmnet_update_send_stats(&nst, sc);
 
 out:
-//	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
+	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */
 	if (sc)
 		sc_put(sc);
 	kfree(vec);
@@ -1142,13 +1150,15 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			break;
 	}
 
+	pmnet_set_func_start_time(sc);
 	switch(be16_to_cpu(hdr->msg_type)) {
 		case PMNET_MSG_SENDPAGE:
-			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
-					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
-					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
+//			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
+//					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
+//					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
-			ret_data = kmem_cache_alloc(page_cache, GFP_KERNEL);
+//			ret_data = kmem_cache_alloc(page_cache, GFP_KERNEL);
+			ret_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
 			if (ret_data == NULL) {
 				pr_info("failed to kmalloc element!\n");
 				ret = -ENOMEM;
@@ -1168,9 +1178,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			break;
 
 		case PMNET_MSG_NOTEXIST:
-			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
-					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
-					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
+//			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
+//					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
+//					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			pmnet_complete_nsw(nn, NULL,
 					   be32_to_cpu(hdr->msg_num),
@@ -1178,7 +1188,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 					   -1);
 			break;
 	}
-	goto out;
+	pmnet_set_func_stop_time(sc);
+	pmnet_update_recv_stats(sc);
 
 #if 0
 	/* find a handler for it */
@@ -1424,7 +1435,6 @@ static void pmnet_rx_until_empty(struct work_struct *work)
 		container_of(work, struct pmnet_sock_container, sc_rx_work);
 	int ret;
 
-//	pr_info("rx_until_empty start....\n");
 	do {
 		ret = pmnet_advance_rx(sc);
 	} while (ret > 0);
@@ -1794,11 +1804,6 @@ int pmnet_init(void)
 	pmnet_keep_req->magic = cpu_to_be16(PMNET_MSG_KEEP_REQ_MAGIC);
 	pmnet_keep_resp->magic = cpu_to_be16(PMNET_MSG_KEEP_RESP_MAGIC);
 
-	/* pre-alloc kmem cache */
-	page_cache = kmem_cache_create("page_cache", PAGE_SIZE, 0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
-//	page_cache = kmem_cache_create("page_cache", PAGE_SIZE, PAGE_SIZE, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
-
-
 	/* Codes from o2net_start_listening */
 	BUG_ON(pmnet_wq != NULL);
 	/* perpapre work queue */
@@ -1840,11 +1845,9 @@ out:
 
 void pmnet_exit(void)
 {
-	if(page_cache) 
-		kmem_cache_destroy(page_cache);
-
 	kfree(pmnet_hand);
 	kfree(pmnet_keep_req);
 	kfree(pmnet_keep_resp);
+	pmnet_debugfs_exit();
 }
 

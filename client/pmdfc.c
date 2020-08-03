@@ -51,7 +51,7 @@ static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
 
 static LIST_HEAD(page_list_head);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
-static atomic_t filled = {.count = 0};
+static atomic_t filled = {.counter = 0};
 static int done = 0;
 
 /*
@@ -102,7 +102,7 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 
 		/* if someone stole info then wait again */
 		if (unlikely(list_empty(&page_list_head))) {
-			atomic_andnot(0, &filled)
+			atomic_and(0, &filled);
 			spin_unlock_irqrestore(&info_lock, flags); 
 			continue;
 		}
@@ -119,6 +119,7 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 		if ( ret < 0 )
 			pr_info("pmdfc-remotify: pmnet_send_message_fail(ret=%d)\n", ret);
 
+		info->page=NULL;
 		kfree(page);
 		kmem_cache_free(info_cache, info);
 	}
@@ -186,7 +187,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pg_from = page_address(page);
 
 	/* copy page to shadow page */
-	shadow_page = kmalloc(PAGE_SIZE, GFP_ATOMIC);
+	shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
 	if (shadow_page == NULL) {
 		printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
 		return;
@@ -197,7 +198,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	spin_lock_irqsave(&info_lock, flags);
 	list_add_tail(&info->list, &page_list_head);
 	spin_unlock_irqrestore(&info_lock, flags);
-	atomic_and(1, &filled);
+	atomic_or(1, &filled);
 	wake_up_interruptible(&pmdfc_worker_wq);
 #endif
 
@@ -461,8 +462,6 @@ static int __init pmdfc_init(void)
 	else {
 		printk(KERN_INFO ">> pmdfc: cleancache_disabled\n");
 	}
-
-
 
 	return 0;
 }

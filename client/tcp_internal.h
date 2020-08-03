@@ -131,7 +131,15 @@ struct pmnet_sock_container {
 	ktime_t			sc_tv_acquiry_total;
 	ktime_t			sc_tv_send_total;
 	ktime_t			sc_tv_status_total;
+	ktime_t			sc_tv_put_acquiry_total;
+	ktime_t			sc_tv_put_send_total;
+	ktime_t			sc_tv_put_status_total;
+	ktime_t			sc_tv_get_acquiry_total;
+	ktime_t			sc_tv_get_send_total;
+	ktime_t			sc_tv_get_status_total;
 	u32			sc_send_count;
+	u32			sc_put_send_count;
+	u32			sc_get_send_count;
 	u32			sc_recv_count;
 	ktime_t			sc_tv_process_total;
 #endif

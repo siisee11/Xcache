@@ -263,6 +263,8 @@ static void *sc_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 
 #ifdef CONFIG_PMDFC_FS_STATS
 # define sc_send_count(_s)		((_s)->sc_send_count)
+# define sc_get_send_count(_s)		((_s)->sc_get_send_count)
+# define sc_put_send_count(_s)		((_s)->sc_put_send_count)
 # define sc_recv_count(_s)		((_s)->sc_recv_count)
 # define sc_tv_acquiry_total_ns(_s)	(ktime_to_ns((_s)->sc_tv_acquiry_total))
 # define sc_tv_send_total_ns(_s)	(ktime_to_ns((_s)->sc_tv_send_total))
@@ -270,6 +272,8 @@ static void *sc_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 # define sc_tv_process_total_ns(_s)	(ktime_to_ns((_s)->sc_tv_process_total))
 #else
 # define sc_send_count(_s)		(0U)
+# define sc_get_send_count(_s)		(0U)
+# define sc_put_send_count(_s)		(0U)
 # define sc_recv_count(_s)		(0U)
 # define sc_tv_acquiry_total_ns(_s)	(0LL)
 # define sc_tv_send_total_ns(_s)	(0LL)
@@ -284,30 +288,40 @@ static void sc_show_sock_stats(struct seq_file *seq,
 {
 	if (!sc)
 		return;
-#if 0
-	seq_printf(seq, "%d,%u,%lu,%lld,%lld,%lld,%lu,%lld\n", PMNET_STATS_STR_VERSION,
-		   sc->sc_node->nd_num, (unsigned long)sc_send_count(sc),
-		   (long long)sc_tv_acquiry_total_ns(sc),
-		   (long long)sc_tv_send_total_ns(sc),
-		   (long long)sc_tv_status_total_ns(sc),
-		   (unsigned long)sc_recv_count(sc),
-		   (long long)sc_tv_process_total_ns(sc));
-#endif
 
 	seq_printf(seq,
 		   "node %u\n"
 		   "  send_count:           %lu\n"
+		   "  put_count:           %lu\n"
+		   "  get_count:           %lu\n"
 		   "  acquiry_total_ns:     %lld\n"
 		   "  send_total_ns:        %lld\n"
 		   "  status_total_ns:      %lld\n"
 		   "  recv_count:           %lu\n"
 		   "  process_total_ns:     %lld\n",
 		   sc->sc_node->nd_num, (unsigned long)sc_send_count(sc),
+		   (unsigned long)sc_put_send_count(sc),
+		   (unsigned long)sc_get_send_count(sc),
 		   (long long)sc_tv_acquiry_total_ns(sc),
 		   (long long)sc_tv_send_total_ns(sc),
 		   (long long)sc_tv_status_total_ns(sc),
 		   (unsigned long)sc_recv_count(sc),
 		   (long long)sc_tv_process_total_ns(sc));
+
+	/* print average */
+	if (sc_send_count(sc) > 0 && sc_recv_count(sc) > 0 ) {
+		seq_printf(seq,
+			   "node %u\n"
+			   "  acquiry_avg_ns:     %lld\n"
+			   "  send_avg_ns:        %lld\n"
+			   "  status_avg_ns:      %lld\n"
+			   "  process_avg_ns:     %lld\n",
+			   sc->sc_node->nd_num, 
+			   (long long)sc_tv_acquiry_total_ns(sc)/(unsigned long)sc_send_count(sc),
+			   (long long)sc_tv_send_total_ns(sc)/(unsigned long)sc_send_count(sc),
+			   (long long)sc_tv_status_total_ns(sc)/(unsigned long)sc_send_count(sc),
+			   (long long)sc_tv_process_total_ns(sc)/(unsigned long)sc_recv_count(sc));
+	}
 }
 
 static void sc_show_sock_container(struct seq_file *seq,
