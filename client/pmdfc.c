@@ -1,3 +1,4 @@
+#include <linux/cpu.h>
 #include <linux/cleancache.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -23,6 +24,7 @@
 //#define PMDFC_RDMA 1
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
+#define PMDFC_PERCPU 1
 
 #if !defined(PMDFC_NETWORK)
 #undef PMDFC_WORKQUEUE
@@ -32,16 +34,14 @@
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
 
 #ifdef CONFIG_DEBUG_FS
-	struct dentry *pmdfc_dentry; 
+struct dentry *pmdfc_dentry; 
 #endif
 
 /* bloom filter */
 /* TODO: is it thread safe? */
 struct bloom_filter *bf;
 
-/* Currently handled oid */
-struct tmem_oid coid = {.oid[0]=-1UL, .oid[1]=-1UL, .oid[2]=-1UL};
-
+/* prepare kmem_cache for pmdfc_info */
 struct kmem_cache* info_cache;
 
 /* work queue */
@@ -49,21 +49,35 @@ static void pmdfc_remotify_fn(struct work_struct *work);
 static struct workqueue_struct *pmdfc_wq;
 static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
 
+/* list, lock and condition variables */
 static LIST_HEAD(page_list_head);
+static DEFINE_SPINLOCK(info_lock);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
 static atomic_t filled = {.counter = 0};
 static int done = 0;
+
+/* per_cpu variables */
+static DEFINE_PER_CPU(unsigned int, pmdfc_remoteputmem_occupied);
+static DEFINE_PER_CPU(unsigned char **, pmdfc_remoteputmem);
+//static DEFINE_PER_CPU(unsigned char *, pmdfc_remoteputmem2);
+static DEFINE_PER_CPU(long[5], pmdfc_remoteputmem_key);
+//static DEFINE_PER_CPU(long, pmdfc_remoteputmem2_key);
+static DEFINE_PER_CPU(pgoff_t[5], pmdfc_remoteputmem_index);
+//static DEFINE_PER_CPU(pgoff_t, pmdfc_remoteputmem2_index);
 
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
  * properly configured.  These are for information only so are not protected
  * against increment races.
+ * HEY, is BF works?
  */
 static u64 pmdfc_total_gets;
 static u64 pmdfc_actual_gets;
 static u64 pmdfc_miss_gets;
 static u64 pmdfc_hit_gets;
+static u64 pmdfc_drop_puts;
 
+/* The information from producer to consumer */
 struct pmdfc_info 
 {
 	void *page;
@@ -72,8 +86,6 @@ struct pmdfc_info
 	struct list_head list;
 };
 
-static DEFINE_SPINLOCK(info_lock);
-
 #if defined(PMDFC_WORKQUEUE)
 /* worker function for workqueue */
 static void pmdfc_remotify_fn(struct work_struct *work)
@@ -81,14 +93,50 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	struct pmdfc_info *info = NULL;
 	unsigned long remain;
 	void *page = NULL;
-	pgoff_t index;
-	long key; 
+	pgoff_t *index;
+	long *key; 
 	unsigned long flags;
+	unsigned char **tmpmem;
+//	unsigned char *tmpmem_save[2];
+	unsigned int oflags;
+	int i;
 
 	int status, ret = 0;
+	int cpu = -1;
 
-	pr_info("pmdfc-remotify: workqueue worker running...\n");
+	cpu = smp_processor_id();
+	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
 
+	/* It must sleepable */
+	BUG_ON(irqs_disabled());
+
+#if defined(PMDFC_PERCPU)
+	/* TODO: Reconsider about preemption */
+	oflags = get_cpu_var(pmdfc_remoteputmem_occupied);
+
+	pr_info("pmdfc-remotify: oflags=%d\n", oflags);
+
+	/* Choose occupied slot and send it*/
+	tmpmem = get_cpu_var(pmdfc_remoteputmem);
+	for ( i = 0 ; i < 5; i++) {
+		if ( oflags & (1 << i) ) {
+			/* 11110 if i = 0 */
+			oflags &= ((1 << 5) - 1) ^ (1 << i) ;
+			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags;
+			key = get_cpu_var(pmdfc_remoteputmem_key);
+			index = get_cpu_var(pmdfc_remoteputmem_index);
+			/* XXX: can sendmsg proceed in preempt_disabled context? */
+			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[i], index[i], tmpmem[i], PAGE_SIZE,
+			   0, &status);
+			put_cpu_var(pmdfc_remoteputmem_occupied);
+			put_cpu_var(pmdfc_remoteputmem_key);
+			put_cpu_var(pmdfc_remoteputmem_index);
+			break;
+		}
+	}
+	put_cpu_var(pmdfc_remoteputmem);
+
+#else
 	allow_signal(SIGUSR1);
 	while (1)
 	{
@@ -123,6 +171,7 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 		kfree(page);
 		kmem_cache_free(info_cache, info);
 	}
+#endif
 }
 
 #endif /* defined(PMDFC_WORKQUEUE) */
@@ -156,6 +205,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	void *shadow_page = NULL;
 	struct pmdfc_info *info;
 	unsigned long flags;
+	int i;
 
 	int status = 0;
 	int ret = -1;
@@ -163,6 +213,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
 
+	/* Here is irq disabled context */
 	BUG_ON(!irqs_disabled());
 
 	/* bloom filter hash input data */
@@ -182,15 +233,58 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
 
+
 #if defined(PMDFC_NETWORK)
 	/* get page virtual address */
 	pg_from = page_address(page);
 
+#if defined(PMDFC_PERCPU)
+	unsigned char **tmpmem;
+	long *keys;
+	pgoff_t *indexes;
+	unsigned int oflags;
+	int cpu;
+
+	oflags = get_cpu_var(pmdfc_remoteputmem_occupied);
+	tmpmem = get_cpu_var(pmdfc_remoteputmem);
+//	tmpmem[1] = get_cpu_var(pmdfc_remoteputmem2);
+//	local_bh_disable();
+	
+	keys = get_cpu_var(pmdfc_remoteputmem_key);
+	indexes = get_cpu_var(pmdfc_remoteputmem_index);
+	/* Copy page to empty space */
+	for (i = 0 ; i < 5 ; i++ ) {
+		if ( !(oflags & (1 << i)) ) {
+			memcpy(tmpmem[i], pg_from, PAGE_SIZE);	
+			keys[i] = (long)oid.oid[0];
+			indexes[i] = index;
+			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags | (1 << i);
+			pr_info("CPU %d : put page to pmdfc_remoteputmem[%d]\n", cpu, i);
+			goto found;
+		}
+	}
+
+	/* If not found, Just drop that page */
+	put_cpu_var(pmdfc_remoteputmem_occupied);
+	put_cpu_var(pmdfc_remoteputmem);
+	put_cpu_var(pmdfc_remoteputmem_key);
+	put_cpu_var(pmdfc_remoteputmem_index);
+	pmdfc_drop_puts++;
+	goto out;
+
+found:
+	put_cpu_var(pmdfc_remoteputmem_occupied);
+	put_cpu_var(pmdfc_remoteputmem);
+	put_cpu_var(pmdfc_remoteputmem_key);
+	put_cpu_var(pmdfc_remoteputmem_index);
+	schedule_work_on(cpu, &pmdfc_remotify_work);
+//	queue_work(pmdfc_wq, &pmdfc_remotify_work);
+#else
 	/* copy page to shadow page */
 	shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
 	if (shadow_page == NULL) {
 		printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
-		return;
+		goto out;
 	}
 	memcpy(shadow_page, pg_from, PAGE_SIZE);
 
@@ -200,21 +294,25 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	spin_unlock_irqrestore(&info_lock, flags);
 	atomic_or(1, &filled);
 	wake_up_interruptible(&pmdfc_worker_wq);
-#endif
+
+#endif /* PMDFC_PERCPU */
+#endif /* PMDFC_NETWORK */
 
 #if defined(PMDFC_RDMA)
 	ret = generate_write_request(&pg_from, (long)oid.oid[0], index, 1);
 #endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
-	ret = bloom_filter_add(bf, data, 24);
-	if ( ret < 0 )
-		pr_info("bloom_filter add fail\n");
+		ret = bloom_filter_add(bf, data, 24);
+		if ( ret < 0 )
+			pr_info("bloom_filter add fail\n");
 #endif
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 #endif
+out:
+	return;
 }
 
 static int pmdfc_cleancache_get_page(int pool_id,
@@ -386,6 +484,46 @@ static int pmdfc_cleancache_register_ops(void)
 	return ret;
 }
 
+void pmdfc_cpu_up(int cpu)
+{
+	int i;
+	unsigned char **pp = kzalloc(5 * sizeof(char*), GFP_KERNEL);
+	for ( i = 0 ; i < 5 ; i++){
+		pp[i] = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	}
+//	unsigned char *p1 = kzalloc(PAGE_SIZE, GFP_KERNEL);
+//	unsigned char *p2 = kzalloc(PAGE_SIZE, GFP_KERNEL);
+//	BUG_ON(!p1 || !p2);
+	per_cpu(pmdfc_remoteputmem, cpu) = pp;
+//	per_cpu(pmdfc_remoteputmem2, cpu) = p2;
+}
+
+void pmdfc_cpu_down(int cpu)
+{
+	kfree(per_cpu(pmdfc_remoteputmem, cpu));
+	per_cpu(pmdfc_remoteputmem, cpu) = NULL;
+//	kfree(per_cpu(pmdfc_remoteputmem2, cpu));
+//	per_cpu(pmdfc_remoteputmem2, cpu) = NULL;
+}
+
+static int pmdfc_cpu_notifier(unsigned long action, void *pcpu)
+{
+	int ret, i, cpu = (long)pcpu;
+
+	switch (action) {
+		case CPU_UP_PREPARE:
+			pmdfc_cpu_up(cpu);
+			break;
+		case CPU_DEAD:
+//		case CPU_UP_CANCELED:
+			pmdfc_cpu_down(cpu);
+			break;
+		default:
+			break;
+	}
+	return NOTIFY_OK;
+}
+
 static int bloom_filter_init(void)
 {
 //	bf = bloom_filter_new(12364167);
@@ -412,18 +550,18 @@ void pmdfc_debugfs_exit(void)
 
 void pmdfc_debugfs_init(void)
 {
-	umode_t mode = S_IFREG|S_IRUSR;
-
 	pmdfc_dentry = debugfs_create_dir("pmdfc", NULL);
 	debugfs_create_u64("total_gets", 0444, pmdfc_dentry, &pmdfc_total_gets);
 	debugfs_create_u64("actual_gets", 0444, pmdfc_dentry, &pmdfc_actual_gets);
 	debugfs_create_u64("miss_gets", 0444, pmdfc_dentry, &pmdfc_miss_gets);
 	debugfs_create_u64("hit_gets", 0444, pmdfc_dentry, &pmdfc_hit_gets);
+	debugfs_create_u64("drop_puts", 0444, pmdfc_dentry, &pmdfc_drop_puts);
 }
 
 static int __init pmdfc_init(void)
 {
 	int ret;
+	unsigned int cpu;
 
 #ifdef CONFIG_DEBUG_FS
 	pmdfc_debugfs_init();
@@ -432,14 +570,22 @@ static int __init pmdfc_init(void)
 	info_cache = kmem_cache_create("info_cache", sizeof(struct pmdfc_info),
 			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
+	for_each_online_cpu(cpu) {
+		pr_info("CPU%u UP!!\n", cpu);
+		void *pcpu = (void *)(long)cpu;
+		pmdfc_cpu_notifier(CPU_UP_PREPARE, pcpu);
+	}
+
 #if defined(PMDFC_WORKQUEUE)
 	/* TODO: why we use singlethread here?? */
-	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
+//	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
+//	pmdfc_wq = alloc_ordered_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM);
+	pmdfc_wq = alloc_workqueue("pmdfc-remotify", 2, WQ_MEM_RECLAIM);
 	if (pmdfc_wq == NULL) {
 		printk(KERN_ERR "unable to launch pmdfc thread\n");
 		return -ENOMEM;
 	}
-	queue_work(pmdfc_wq, &pmdfc_remotify_work);
+//	queue_work(pmdfc_wq, &pmdfc_remotify_work);
 #endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
