@@ -18,6 +18,8 @@ echo "miss_get: ";
 cat /sys/kernel/debug/pmdfc/miss_gets;
 echo "hit_get: ";
 cat /sys/kernel/debug/pmdfc/hit_gets;
+echo "dropped_puts: ";
+cat /sys/kernel/debug/pmdfc/drop_puts;
 
 '
 
