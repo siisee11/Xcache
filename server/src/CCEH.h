@@ -263,7 +263,7 @@ class CCEH {
 
 	int init_pmem(const char* path){
 		if(access(path, F_OK) != 0){
-			pop = pmemobj_create(path, LAYOUT, PMEMOBJ_MIN_POOL*100, 0666);
+			pop = pmemobj_create(path, LAYOUT, PMEMOBJ_MIN_POOL*1000, 0666);
 			if(pop==NULL){
 				perror(path);
 				exit(-1);

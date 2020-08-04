@@ -49,7 +49,7 @@ struct pmnet_msg_in {
 	void *page;
 	size_t page_off;
 #if TIME_CHECK
-	timespec queue_start;
+	timespec timer;
 #endif
 };
 
@@ -58,18 +58,19 @@ static struct pmnet_handshake *pmnet_hand;
 static struct pmnet_msg *pmnet_keep_req, *pmnet_keep_resp;
 
 /* lock-free-queue */
-boost::lockfree::queue<pmnet_msg_in *> new_queue(128);
+boost::lockfree::queue<pmnet_msg_in *> new_queue(512);
 boost::atomic<bool> done (false);
 boost::atomic<bool> alldone (false);
 
-boost::atomic<int> putcnt (0);
-boost::atomic<int> getcnt (0);
+int putcnt = 0;
+int getcnt = 0;
 
 /* CCEH hashTable */
 CCEH* hashTable;
 
 /* performance timer */
 uint64_t network_elapsed=0, pmput_elapsed=0, pmalloc_elapsed = 0, pmget_elapsed=0;
+uint64_t pmnet_rx_elapsed=0; 
 uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
 uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
 
@@ -116,7 +117,6 @@ void consumer(struct pmnet_sock_container *sc) {
 
 	/* consume request from queue */
 	while (!done) {
-		/* TODO: Uncomment below after debugging */
 		while (new_queue.pop(msg_in)){
 			ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
 			free(msg_in);
@@ -159,7 +159,7 @@ static struct pmnet_msg_in *init_msg()
 	msg_in->hdr= msg;
 
 #if defined(TIME_CHECK)
-	clock_gettime(CLOCK_MONOTONIC, &msg_in->queue_start);
+	clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
 #endif
 
 	return msg_in;
@@ -299,23 +299,25 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			clock_gettime(CLOCK_MONOTONIC, &start);
 
 #if defined(TIME_CHECK)
-			pmput_queue_elapsed += start.tv_nsec - msg_in->queue_start.tv_nsec + 1000000000 * (start.tv_sec - msg_in->queue_start.tv_sec);
+			pmput_queue_elapsed += start.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (start.tv_sec - msg_in->timer.tv_sec);
 #endif
 
 			/* TODO: 4byte key and index should be change on demand */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
+//			printf("GET PAGE FROM CLIENT (key=%lx, index=%lx, longkey=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), key);
 
 			/* copy page from message to local memory */
 			from_va = msg_in->page;
 
+			clock_gettime(CLOCK_MONOTONIC, &start);
 			/* Insert received page into hash */
 			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
-//			printf("[ Inserted %lx : ", key);
-//			printf("%lx ]\n", hashTable->Get(key));
 //
 			clock_gettime(CLOCK_MONOTONIC, &end);
 			pmput_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+
+			printf("[ Inserted %lx : ", key);
+			printf("%lx ]\n", hashTable->Get(key));
 			break;
 		}
 
@@ -325,7 +327,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			clock_gettime(CLOCK_MONOTONIC, &start);
 
 #if defined(TIME_CHECK)
-			pmget_queue_elapsed += start.tv_nsec - msg_in->queue_start.tv_nsec + 1000000000 * (start.tv_sec - msg_in->queue_start.tv_sec);
+			pmget_queue_elapsed += start.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (start.tv_sec - msg_in->timer.tv_sec);
 #endif
 
 			/* alloc new page pointer to send */
@@ -334,6 +336,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 
+			clock_gettime(CLOCK_MONOTONIC, &start);
 			/* Get page from Hash and copy to saved_page */
 			ret = hashTable->load_page(hashTable->Get(key), (char *)saved_page, 4096);
 
@@ -401,18 +404,6 @@ static int pmnet_check_handshake(struct pmnet_sock_container *sc, struct pmnet_m
 
 	pmnet_sendpage(sc, pmnet_hand, sizeof(*pmnet_hand));
 
-#if 0
-	spin_lock(&nn->nn_lock);
-	/* set valid and queue the idle timers only if it hasn't been
-	 * shut down already */
-	if (nn->nn_sc == sc) {
-		pmnet_sc_reset_idle_timer(sc);
-		atomic_set(&nn->nn_timeout, 0);
-		pmnet_set_nn_state(nn, sc, 1, 0);
-	}
-	spin_unlock(&nn->nn_lock);
-#endif
-
 	/* shift everything up as though it wasn't there */
 	msg_in->page_off -= sizeof(struct pmnet_handshake);
 	if (msg_in->page_off)
@@ -432,6 +423,7 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 	int ret = 0;
 	void *data;
 	size_t datalen;
+	timespec curr_time;
 
 	/* handshake */
 	if ((sc->sc_handshake_ok == 0)) {
@@ -502,6 +494,12 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		 * the payload.. so set ret to progress if the handler
 		 * works out. after calling this the message is toast */
 		/* TODO: Uncomment below after debugging */
+
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &curr_time);
+		pmnet_rx_elapsed += curr_time.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (curr_time.tv_sec - msg_in->timer.tv_sec);
+		clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
+#endif 
 		if (new_queue.push(msg_in)) {
 			pushed = true;
 			ret = 1;
@@ -594,7 +592,7 @@ void init_network_server()
 	 * Loop and accept client.
 	 * create thread for each client.
 	 */
-	while (1) {
+	while (!done) {
 		len = sizeof(cli); 
 		// Accept the data packet from client and verification 
 		connfd = accept(sockfd, (SA*)&cli, &len); 
@@ -626,6 +624,10 @@ void init_network_server()
 		consumer_threads.add_thread(&c7);
 		boost::thread c8 = boost::thread( consumer, sc );
 		consumer_threads.add_thread(&c8);
+		boost::thread c9 = boost::thread( consumer, sc );
+		consumer_threads.add_thread(&c9);
+		boost::thread c10 = boost::thread( consumer, sc );
+		consumer_threads.add_thread(&c10);
 
 		producer_threads.join_all();
 		consumer_threads.join_all();
@@ -639,11 +641,19 @@ void init_network_server()
 		printf("PM alloc : %lu (us)\n\n",
 				hashTable->pmalloc_elapsed/1000);
 
-		printf("Queuing delay\n");
-		printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
+		printf("RX & Queuing delay\n");
+		printf("RX : %lu (us), PUT_Q : %lu (us), GET_Q : %lu (us)\n",
+				pmnet_rx_elapsed/1000,
 				pmput_queue_elapsed/1000,
 				pmget_queue_elapsed/1000);
 
+		printf("# of puts : %d , # of gets : %d \n",
+				putcnt, getcnt);
+
+		if (putcnt == 0)
+			putcnt++;
+		if (getcnt == 0)
+			getcnt++;
 
 		printf("\n--------------------SUMMARY--------------------\n");
 		printf("Average (divided by number of ops)\n");
@@ -660,7 +670,8 @@ void init_network_server()
 	} 
 
 
-	close(sockfd); 
+	if (sockfd)
+		close(sockfd); 
 }
 
 /*
@@ -692,8 +703,6 @@ int main(int argc, char* argv[])
 	 * Looping inside this fuction
 	 */
 	init_network_server();
-
-
 
 	return 0;
 } 
