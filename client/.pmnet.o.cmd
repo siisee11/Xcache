@@ -1,0 +1,1 @@
+cmd_/nfs/pmdfc/client/pmnet.o := ld -m elf_x86_64  -z max-page-size=0x200000    -r -o /nfs/pmdfc/client/pmnet.o /nfs/pmdfc/client/tcp.o /nfs/pmdfc/client/nodemanager.o /nfs/pmdfc/client/netdebug.o /nfs/pmdfc/client/sys.o /nfs/pmdfc/client/masklog.o

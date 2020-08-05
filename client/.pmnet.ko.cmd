@@ -1,0 +1,1 @@
+cmd_/nfs/pmdfc/client/pmnet.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000 -T ./scripts/module-common.lds --build-id  -o /nfs/pmdfc/client/pmnet.ko /nfs/pmdfc/client/pmnet.o /nfs/pmdfc/client/pmnet.mod.o ;  true

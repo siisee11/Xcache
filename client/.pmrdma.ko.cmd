@@ -1,0 +1,1 @@
+cmd_/nfs/pmdfc/client/pmrdma.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000 -T ./scripts/module-common.lds --build-id  -o /nfs/pmdfc/client/pmrdma.ko /nfs/pmdfc/client/pmrdma.o /nfs/pmdfc/client/pmrdma.mod.o ;  true

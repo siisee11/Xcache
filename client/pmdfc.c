@@ -65,6 +65,9 @@ static DEFINE_PER_CPU(long[5], pmdfc_remoteputmem_key);
 static DEFINE_PER_CPU(pgoff_t[5], pmdfc_remoteputmem_index);
 //static DEFINE_PER_CPU(pgoff_t, pmdfc_remoteputmem2_index);
 
+/* Global page storage */
+void **page_storage;
+
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
  * properly configured.  These are for information only so are not protected
@@ -99,13 +102,14 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	unsigned char **tmpmem;
 //	unsigned char *tmpmem_save[2];
 	unsigned int oflags;
+	void *shadow_page = NULL;
 	int i;
 
 	int status, ret = 0;
 	int cpu = -1;
 
 	cpu = smp_processor_id();
-	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
+//	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
 
 	/* It must sleepable */
 	BUG_ON(irqs_disabled());
@@ -114,27 +118,44 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	/* TODO: Reconsider about preemption */
 	oflags = get_cpu_var(pmdfc_remoteputmem_occupied);
 
-	pr_info("pmdfc-remotify: oflags=%d\n", oflags);
+//	pr_info("pmdfc-remotify: CPU %d oflags=%d\n", cpu, oflags);
 
-	/* Choose occupied slot and send it*/
 	tmpmem = get_cpu_var(pmdfc_remoteputmem);
-	for ( i = 0 ; i < 5; i++) {
+	put_cpu_var(pmdfc_remoteputmem);
+	/* Choose occupied slot and send it*/
+	for ( i = 0 ; i < 5 ; i++) {
 		if ( oflags & (1 << i) ) {
 			/* 11110 if i = 0 */
-			oflags &= ((1 << 5) - 1) ^ (1 << i) ;
-			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags;
 			key = get_cpu_var(pmdfc_remoteputmem_key);
 			index = get_cpu_var(pmdfc_remoteputmem_index);
-			/* XXX: can sendmsg proceed in preempt_disabled context? */
-			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[i], index[i], tmpmem[i], PAGE_SIZE,
-			   0, &status);
-			put_cpu_var(pmdfc_remoteputmem_occupied);
 			put_cpu_var(pmdfc_remoteputmem_key);
 			put_cpu_var(pmdfc_remoteputmem_index);
-			break;
+			/* XXX: can sendmsg proceed in preempt_disabled context? */
+
+#if 0 
+			tmpmem = get_cpu_var(pmdfc_remoteputmem);
+			shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
+			if (shadow_page == NULL) {
+				printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
+				goto put_remoteputmem;
+			}
+			memcpy(shadow_page, tmpmem[i], PAGE_SIZE);
+			put_cpu_var(pmdfc_remoteputmem);
+#endif
+
+			pr_info("pmdfc-remotify: CPU %d oflags=%d send tmpmem[%d]\n", cpu, oflags, i);
+			BUG_ON(tmpmem == NULL);
+			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[i], index[i], tmpmem[i], PAGE_SIZE,
+			   0, &status);
+			kfree(shadow_page);
+			oflags &= ((1 << 5) - 1) ^ (1 << i) ;
+			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags;
+			put_cpu_var(pmdfc_remoteputmem_occupied);
 		}
 	}
-	put_cpu_var(pmdfc_remoteputmem);
+put_remoteputmem:
+//	put_cpu_var(pmdfc_remoteputmem);
+	return;
 
 #else
 	allow_signal(SIGUSR1);
@@ -243,43 +264,49 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	long *keys;
 	pgoff_t *indexes;
 	unsigned int oflags;
-	int cpu;
-
-	oflags = get_cpu_var(pmdfc_remoteputmem_occupied);
-	tmpmem = get_cpu_var(pmdfc_remoteputmem);
-//	tmpmem[1] = get_cpu_var(pmdfc_remoteputmem2);
-//	local_bh_disable();
+	long target_cpu;
+	int nr_cpus;
 	
-	keys = get_cpu_var(pmdfc_remoteputmem_key);
-	indexes = get_cpu_var(pmdfc_remoteputmem_index);
+	nr_cpus = num_online_cpus();
+//	target_cpu = (long)oid.oid[0] % nr_cpus;
+	target_cpu = index % nr_cpus;
+	pr_info(">> put page to CPU %d to serve %lx:%x\n", target_cpu, (long)oid.oid[0], index);
+
+	/* TODO: Need preempt_disabled? */
+	oflags = per_cpu(pmdfc_remoteputmem_occupied, target_cpu);
+	tmpmem = per_cpu(pmdfc_remoteputmem, target_cpu);
+	
+	keys = per_cpu(pmdfc_remoteputmem_key, target_cpu);
+	indexes = per_cpu(pmdfc_remoteputmem_index, target_cpu);
 	/* Copy page to empty space */
 	for (i = 0 ; i < 5 ; i++ ) {
 		if ( !(oflags & (1 << i)) ) {
 			memcpy(tmpmem[i], pg_from, PAGE_SIZE);	
 			keys[i] = (long)oid.oid[0];
 			indexes[i] = index;
-			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags | (1 << i);
-			pr_info("CPU %d : put page to pmdfc_remoteputmem[%d]\n", cpu, i);
+			per_cpu(pmdfc_remoteputmem_occupied, target_cpu) = oflags | (1 << i);
+			pr_info(">> put page to pmdfc_remoteputmem[CPU%d][%d]\n", target_cpu, i);
 			goto found;
 		}
 	}
 
 	/* If not found, Just drop that page */
-	put_cpu_var(pmdfc_remoteputmem_occupied);
-	put_cpu_var(pmdfc_remoteputmem);
-	put_cpu_var(pmdfc_remoteputmem_key);
-	put_cpu_var(pmdfc_remoteputmem_index);
 	pmdfc_drop_puts++;
 	goto out;
 
 found:
+#if 0
 	put_cpu_var(pmdfc_remoteputmem_occupied);
 	put_cpu_var(pmdfc_remoteputmem);
 	put_cpu_var(pmdfc_remoteputmem_key);
 	put_cpu_var(pmdfc_remoteputmem_index);
-	schedule_work_on(cpu, &pmdfc_remotify_work);
+#endif
+//	schedule_work_on(target_cpu, &pmdfc_remotify_work);
+	queue_work_on(target_cpu, pmdfc_wq, &pmdfc_remotify_work);
 //	queue_work(pmdfc_wq, &pmdfc_remotify_work);
-#else
+
+#else /* PMDFC_PERCPU */
+
 	/* copy page to shadow page */
 	shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
 	if (shadow_page == NULL) {
@@ -570,17 +597,23 @@ static int __init pmdfc_init(void)
 	info_cache = kmem_cache_create("info_cache", sizeof(struct pmdfc_info),
 			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
+	pr_info("pmdfc: %d CPUs online...\n", num_online_cpus());
 	for_each_online_cpu(cpu) {
 		pr_info("CPU%u UP!!\n", cpu);
 		void *pcpu = (void *)(long)cpu;
 		pmdfc_cpu_notifier(CPU_UP_PREPARE, pcpu);
 	}
 
+#if defined(PMDFC_PREALLOC)
+	page_storage = kmalloc(1024 * PAGE_SIZE, GFP_KERNEL);
+
+#endif
+
 #if defined(PMDFC_WORKQUEUE)
 	/* TODO: why we use singlethread here?? */
 //	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
 //	pmdfc_wq = alloc_ordered_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM);
-	pmdfc_wq = alloc_workqueue("pmdfc-remotify", 2, WQ_MEM_RECLAIM);
+	pmdfc_wq = alloc_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
 	if (pmdfc_wq == NULL) {
 		printk(KERN_ERR "unable to launch pmdfc thread\n");
 		return -ENOMEM;
