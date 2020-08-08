@@ -401,8 +401,8 @@ ret = 0;
 bit = 1;
 }
 }*/
-printk(KERN_ALERT "[%s]: bitmap find err\n", __func__);
-return -1;
+	printk(KERN_ALERT "[%s]: bitmap find err\n", __func__);
+	return -1;
 }
 
 void unset_bit(int idx){
