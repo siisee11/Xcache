@@ -1,6 +1,8 @@
 #ifndef PMNET_TCP_INTERNAL_H
 #define PMNET_TCP_INTERNAL_H
 
+#include <mutex>
+
 #define PMNET_MSG_MAGIC           ((uint16_t)0xfa55)
 #define PMNET_MSG_HOLA_MAGIC      ((uint16_t)0xfa56)
 #define PMNET_MSG_HOLASI_MAGIC    ((uint16_t)0xfa57)
@@ -30,7 +32,7 @@ struct pmnet_sock_container {
 
 //	u32			sc_msg_key;
 //	u16			sc_msg_type;
-//	struct mutex		sc_send_lock;
+	std::mutex		sc_send_lock;
 };
 
 enum pmnet_system_error {

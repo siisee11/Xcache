@@ -55,7 +55,8 @@ struct pmnet_msg_in {
 	void *page;
 	size_t page_off;
 #if TIME_CHECK
-	timespec timer = NULL;
+	bool sampled = false;
+	timespec timer;
 #endif
 };
 
@@ -68,10 +69,13 @@ boost::lockfree::queue<pmnet_msg_in *> new_queue(512);
 boost::atomic<bool> done (false);
 boost::atomic<bool> alldone (false);
 
-queue_t *lfq = NULL;
+unsigned int nr_cpus;
+queue_t **lfqs = NULL;
 
 int putcnt = 0;
 int getcnt = 0;
+int sample_put_q_cnt = 0;
+int sample_get_q_cnt = 0;
 int sample_put_cnt = 0;
 int sample_get_cnt = 0;
 
@@ -91,37 +95,50 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 static void print_stats() {
 	printf("\n--------------------REPORT---------------------\n");
 
-	printf("SAMPLE RATE 1/%d\n", SAMPLE_RATE);
-	printf("Approximate total PUT : %lu (us), GET : %lu (us) (Multipled by sample rate)\n",
-			pmput_elapsed/1000*NR_PUT_TIME_CHECK,
-			(pmget_exist_elapsed + pmget_notexist_elapsed)/1000*NR_GET_TIME_CHECK);
+	printf("SAMPLE RATE [1/%d]\n\n", SAMPLE_RATE);
+
+	printf("Approximate total(Multipled by sample rate)\n PUT %lu (us), GET : %lu (us) \n",
+			pmput_elapsed/1000*SAMPLE_RATE,
+			(pmget_exist_elapsed + pmget_notexist_elapsed)/1000*SAMPLE_RATE);
 	printf("PM alloc : %lu (us)\n\n",
 			hashTable->pmalloc_elapsed/1000);
 
 	printf("Approximate RX & Queuing delay (Multipled by sample rate)\n");
 	printf("RX : %lu (us), PUT_Q : %lu (us), GET_Q : %lu (us)\n",
-			pmnet_rx_elapsed/1000,
-			pmput_queue_elapsed/1000*sample_put_cnt,
-			pmget_queue_elapsed/1000*sample_get_cnt);
+			pmnet_rx_elapsed/1000*SAMPLE_RATE,
+			pmput_queue_elapsed/1000*SAMPLE_RATE,
+			pmget_queue_elapsed/1000*SAMPLE_RATE);
 
 	printf("# of puts : %d , # of gets : %d \n",
 			putcnt, getcnt);
+	printf("[SAMPLE] # of puts : %d , # of gets : %d \n",
+			sample_put_cnt, sample_get_cnt);
+	printf("[SAMPLE] # of put_Q : %d , # of get_Q : %d \n",
+			sample_put_q_cnt, sample_get_q_cnt);
 
 	if (putcnt == 0)
 		putcnt++;
 	if (getcnt == 0)
 		getcnt++;
+	if (sample_get_cnt == 0)
+		sample_get_cnt++;
+	if (sample_put_cnt == 0)
+		sample_put_cnt++;
+	if (sample_get_q_cnt == 0)
+		sample_get_q_cnt++;
+	if (sample_put_q_cnt == 0)
+		sample_put_q_cnt++;
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
 	printf("PUT : %lu (us), PUT_ALLOC : %lu (us), GET_TOTAL : %lu (us)\n",
-			pmput_elapsed/1000/putcnt*NR_PUT_TIME_CHECK,
+			pmput_elapsed/1000/sample_put_cnt,
 			hashTable->pmalloc_elapsed/1000/putcnt,
-			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/getcnt*NR_GET_TIME_CHECK);
+			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/sample_get_cnt);
 
 	printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
-			pmput_queue_elapsed/1000/sample_put_cnt,
-			pmget_queue_elapsed/1000/sample_get_cnt);
+			pmput_queue_elapsed/1000/sample_put_q_cnt,
+			pmget_queue_elapsed/1000/sample_get_q_cnt);
 
 	printf("\n--------------------FIN------------------------\n");
 }
@@ -158,17 +175,17 @@ void producer(struct pmnet_sock_container *sc) {
 	done = true;
 }
 
-void consumer(struct pmnet_sock_container *sc) {
+void consumer(struct pmnet_sock_container *sc, int cpu) {
 	int ret;
 	struct pmnet_msg_in *msg_in;
 
 	std::thread::id this_id = std::this_thread::get_id(); 
-	printf("[ new CONSUMER %lx Running... ]\n", this_id);
+	printf("[ new CONSUMER %lx Running on CPU %d... ]\n", this_id, sched_getcpu());
 
 	/* consume request from queue */
 	while (!done) {
 //		while (new_queue.pop(msg_in)){
-		msg_in = (struct pmnet_msg_in*)dequeue(lfq);
+		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[cpu]);
 		ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
 		free(msg_in);
 	}
@@ -212,8 +229,10 @@ static struct pmnet_msg_in *init_msg()
 	msg_in->hdr= msg;
 
 #if defined(TIME_CHECK)
-	if ( (putcnt + getcnt) % NR_Q_TIME_CHECK)
+	if ( (putcnt + getcnt) % NR_Q_TIME_CHECK == 0) {
+		msg_in->sampled = true;
 		clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
+	}
 #endif
 
 	return msg_in;
@@ -272,9 +291,11 @@ int pmnet_send_message(struct pmnet_sock_container *sc,
 	memset(&msghdr1, 0, sizeof(msghdr1));
 	msghdr1.msg_iov = iov_msg;
 	msghdr1.msg_iovlen = 2;
-	
+
 	/* send message and data at once */
+	sc->sc_send_lock.lock();
 	ret = sendmsg(sc->sockfd, &msghdr1, MSG_DONTWAIT);
+	sc->sc_send_lock.unlock();
 
 out:
 	return ret;
@@ -329,7 +350,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 	uint64_t index;
 	void *saved_page;
 	struct timespec start,end;
-
 #if defined(TIME_CHECK)
 	bool checkit = false;
 #endif
@@ -356,10 +376,10 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			putcnt++;
 
 #if defined(TIME_CHECK)
-			if (msg_in->timer) {
+			if (msg_in->sampled) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				pmput_queue_elapsed += start.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (start.tv_sec - msg_in->timer.tv_sec);
-				sample_put_cnt++;
+				sample_put_q_cnt++;
 			}
 #endif
 
@@ -371,8 +391,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			from_va = msg_in->page;
 
 #if defined(TIME_CHECK)
-			if (putcnt % NR_PUT_TIME_CHECK) {
+			if (putcnt % NR_PUT_TIME_CHECK == 0) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
+				sample_put_cnt++;
 				checkit = true;
 			}
 #endif
@@ -396,10 +417,10 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			getcnt++;
 
 #if defined(TIME_CHECK)
-			if (msg_in->timer) {
+			if (msg_in->sampled) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				pmget_queue_elapsed += start.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (start.tv_sec - msg_in->timer.tv_sec);
-				sample_get_cnt++;
+				sample_get_q_cnt++;
 			}
 #endif
 
@@ -410,8 +431,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 
 #if defined(TIME_CHECK)
-			if (putcnt % NR_GET_TIME_CHECK) {
+			if (getcnt % NR_GET_TIME_CHECK == 0) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
+				sample_get_cnt++;
 				checkit = true;
 			}
 #endif
@@ -583,12 +605,15 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		/* TODO: Uncomment below after debugging */
 
 #if defined(TIME_CHECK)
-//		clock_gettime(CLOCK_MONOTONIC, &curr_time);
-//		pmnet_rx_elapsed += curr_time.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (curr_time.tv_sec - msg_in->timer.tv_sec);
-		clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
+		if (msg_in->sampled) {
+			clock_gettime(CLOCK_MONOTONIC, &curr_time);
+			pmnet_rx_elapsed += curr_time.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (curr_time.tv_sec - msg_in->timer.tv_sec);
+			clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
+		}
 #endif 
 //		if (new_queue.push(msg_in)) {
-		enqueue(lfq, msg_in);
+		int targetQ = msg_in->hdr->key % nr_cpus;
+		enqueue(lfqs[targetQ], msg_in);
 		pushed = true;
 		ret = 1;
 	}
@@ -695,31 +720,30 @@ void init_network_server()
 
 		boost::thread p = boost::thread( producer, sc );
 		producer_threads.add_thread(&p);
-		boost::thread c1 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c1);
-		boost::thread c2 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c2);
-		boost::thread c3 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c3);
-		boost::thread c4 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c4);
-#if 0
-		boost::thread c5 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c5);
-		boost::thread c6 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c6);
-		boost::thread c7 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c7);
-		boost::thread c8 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c8);
-		boost::thread c9 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c9);
-		boost::thread c10 = boost::thread( consumer, sc );
-		consumer_threads.add_thread(&c10);
-#endif
+
+		// A mutex ensures orderly access to std::cout from multiple threads.
+		std::mutex iomutex;
+		std::vector<std::thread> threads(nr_cpus);
+		for (unsigned i = 0; i < nr_cpus; ++i) {
+			threads[i] = std::thread(consumer, sc, i);
+
+			// Create a cpu_set_t object representing a set of CPUs. Clear it and mark
+			// only CPU i as set.
+			cpu_set_t cpuset;
+			CPU_ZERO(&cpuset);
+			CPU_SET(i, &cpuset);
+			int rc = pthread_setaffinity_np(threads[i].native_handle(),
+					sizeof(cpu_set_t), &cpuset);
+			if (rc != 0) {
+				std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
+			}
+		}
+
+		for (auto& t : threads) {
+			t.join();
+		}
 
 		producer_threads.join_all();
-		consumer_threads.join_all();
 
 //		print_stats();
 	} 
@@ -753,7 +777,15 @@ int main(int argc, char* argv[])
 		cout << "not ";
 	cout << "lockfree" << endl;
 
-	lfq = create_queue();
+	/* create multi Q */
+	nr_cpus = std::thread::hardware_concurrency();
+//	nr_cpus = 8;
+	printf("%d threads ready!\n", nr_cpus);
+
+	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
+	for (int i = 0; i < nr_cpus; i++) {
+		lfqs[i] = create_queue();
+	}
 
 	/* 
 	 * Listen and accept socket 
@@ -761,7 +793,9 @@ int main(int argc, char* argv[])
 	 */
 	init_network_server();
 
-	destroy_queue(lfq);
+	for (int i = 0; i < nr_cpus ; i++) {
+		destroy_queue(lfqs[i]);
+	}
 
 	return 0;
 } 

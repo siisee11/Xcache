@@ -12,11 +12,15 @@ export LD_LIBRARY_PATH
 all: main
 
 main: 
-	$(CC) $(CFLAGS) -c src/CCEH_LSB.cpp -o src/CCEH_LSB.o $(LIBS) $(INCLUDES)
-	g++ -g -std=c++11 -o server server.cpp src/CCEH_LSB.cpp $(LIBS) $(INCLUDES)
+#	$(CXX) $(CFLAGS) -c -o src/CCEH.o src/CCEH.cpp -DINPLACE -lpmemobj -lpmem
+	$(CC) $(CFLAGS) -c src/CCEH.cpp -o src/CCEH.o $(LIBS) $(INCLUDES)
+	g++ -g -std=c++11 -o server multiQ_server.cpp src/CCEH.cpp $(LIBS) $(INCLUDES)
 
 run:
 	sudo ./server ./jy/FILE83
+
+free:
+	sudo rm -rf ./jy/*
 
 clean: 
 	rm -rf src/*.o server
