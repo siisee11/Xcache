@@ -17,6 +17,7 @@
 #include "tmem.h"
 #include "tcp.h"
 #include "bloom_filter.h"
+#include "pmdfc.h"
 
 #define PMDFC_NETWORK 1
 //#define PMDFC_DEBUG 1
@@ -25,6 +26,7 @@
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
 #define PMDFC_PERCPU 1
+//#define PMDFC_PREALLOC 1
 
 #if !defined(PMDFC_NETWORK)
 #undef PMDFC_WORKQUEUE
@@ -66,7 +68,9 @@ static DEFINE_PER_CPU(pgoff_t[5], pmdfc_remoteputmem_index);
 //static DEFINE_PER_CPU(pgoff_t, pmdfc_remoteputmem2_index);
 
 /* Global page storage */
-void **page_storage;
+#if defined(PMDFC_PREALLOC)
+struct pmdfc_storage pmdfc_storage;
+#endif
 
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
@@ -117,6 +121,7 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 #if defined(PMDFC_PERCPU)
 	/* TODO: Reconsider about preemption */
 	oflags = get_cpu_var(pmdfc_remoteputmem_occupied);
+	put_cpu_var(pmdfc_remoteputmem_occupied);
 
 //	pr_info("pmdfc-remotify: CPU %d oflags=%d\n", cpu, oflags);
 
@@ -132,32 +137,36 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 			put_cpu_var(pmdfc_remoteputmem_index);
 			/* XXX: can sendmsg proceed in preempt_disabled context? */
 
-#if 0 
-			tmpmem = get_cpu_var(pmdfc_remoteputmem);
-			shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
-			if (shadow_page == NULL) {
-				printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
-				goto put_remoteputmem;
-			}
-			memcpy(shadow_page, tmpmem[i], PAGE_SIZE);
-			put_cpu_var(pmdfc_remoteputmem);
-#endif
-
 			pr_info("pmdfc-remotify: CPU %d oflags=%d send tmpmem[%d]\n", cpu, oflags, i);
 			BUG_ON(tmpmem == NULL);
 			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[i], index[i], tmpmem[i], PAGE_SIZE,
 			   0, &status);
-			kfree(shadow_page);
 			oflags &= ((1 << 5) - 1) ^ (1 << i) ;
 			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags;
 			put_cpu_var(pmdfc_remoteputmem_occupied);
 		}
 	}
 put_remoteputmem:
-//	put_cpu_var(pmdfc_remoteputmem);
 	return;
 
-#else
+#elif defined(PMDFC_PREALLOC)
+	/* TODO: key and index */
+	/*
+	 * 1. Find set bit
+	 * If exist, send that page with corresponding key and index.
+	 * If not, just return.
+	 */
+	unsigned int bit;
+
+	/* TODO: BUT it may need lock or something? */
+	bit = find_first_bit(pmdfc_storage->bitmap, 1024);
+	if (test_bit(bit, pmdfc_storage->bitmap)) {
+		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[bit], index[bit], 
+			pmdfc_storage->page_storage[bit], PAGE_SIZE, 0, &status);
+		clear_bit(bit, pmdfc_storage->bitmap);
+	}
+
+#else /* normal list method */
 	allow_signal(SIGUSR1);
 	while (1)
 	{
@@ -295,17 +304,33 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	goto out;
 
 found:
-#if 0
-	put_cpu_var(pmdfc_remoteputmem_occupied);
-	put_cpu_var(pmdfc_remoteputmem);
-	put_cpu_var(pmdfc_remoteputmem_key);
-	put_cpu_var(pmdfc_remoteputmem_index);
-#endif
-//	schedule_work_on(target_cpu, &pmdfc_remotify_work);
-	queue_work_on(target_cpu, pmdfc_wq, &pmdfc_remotify_work);
+	schedule_work_on(target_cpu, &pmdfc_remotify_work);
+//	queue_work_on(target_cpu, pmdfc_wq, &pmdfc_remotify_work);
 //	queue_work(pmdfc_wq, &pmdfc_remotify_work);
 
-#else /* PMDFC_PERCPU */
+#elif defined(PMDFC_PREALLOC) /* NOT PER-CPU, PREALLOC START HERE */
+
+	/* 
+	 * 1. Find empty slot.
+	 * If exist, then copy page content to it.
+	 * If not, then just drop that page and return.
+	 */
+	unsigned int bit;
+
+	/* TODO: It may need lock */
+	bit = find_first_zero_bit(pmdfc_storage->bitmap, 1024);
+	pr_info("pmdfc_put: find zero bit! %u\n", bit);
+	if (!test_bit(bit, pmdfc_storage->bitmap)) {
+		memcpy(pmdfc_storage->page_storage[bit], pg_from, PAGE_SIZE);	
+	}
+	set_bit(bit, pmdfc_storage->bitmap);
+
+	/*
+	 * 2. Queue work to workqueue
+	 */
+	queue_work(pmdfc_wq, &pmdfc_remotify_work);
+
+#else /* normal list method */
 
 	/* copy page to shadow page */
 	shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
@@ -322,7 +347,7 @@ found:
 	atomic_or(1, &filled);
 	wake_up_interruptible(&pmdfc_worker_wq);
 
-#endif /* PMDFC_PERCPU */
+#endif /* PMDFC_PERCPU || PMDFC_PREALLOC */
 #endif /* PMDFC_NETWORK */
 
 #if defined(PMDFC_RDMA)
@@ -330,9 +355,9 @@ found:
 #endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
-		ret = bloom_filter_add(bf, data, 24);
-		if ( ret < 0 )
-			pr_info("bloom_filter add fail\n");
+	ret = bloom_filter_add(bf, data, 24);
+	if ( ret < 0 )
+		pr_info("bloom_filter add fail\n");
 #endif
 
 #if defined(PMDFC_DEBUG)
@@ -605,8 +630,23 @@ static int __init pmdfc_init(void)
 	}
 
 #if defined(PMDFC_PREALLOC)
-	page_storage = kmalloc(1024 * PAGE_SIZE, GFP_KERNEL);
-
+	/* Maximum continuous memory from kmalloc is 4M 
+	 * So I set bit_size as 1024 */
+	unsigned long bitmap_size = BITS_TO_LONGS(1024) * sizeof(unsigned long);
+	void **page_storage = kzalloc(1024 * PAGE_SIZE, GFP_KERNEL);
+	if (!page_storage){
+		pr_err("pmdfc: cannot allocate page_stoarge\n");
+		return -ENOMEM;
+	}
+	pmdfc_storage = kzalloc(sizeof(*pmdfc_storage) + bitmap_size, GFP_KERNEL);
+	if (!pmdfc_storage){
+		pr_err("pmdfc: cannot allocate page_stoarge\n");
+		return -ENOMEM;
+	}
+	mutex_init(&pmdfc_storage->lock);
+	pmdfc_storage->bitmap_size = 1024;
+	pmdfc_storage->page_storage = page_storage;
+	bitmap_zero(pmdfc_storage->bitmap, pmdfc_storage->bitmap_size);
 #endif
 
 #if defined(PMDFC_WORKQUEUE)
