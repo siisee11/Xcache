@@ -1,9 +1,10 @@
 CONFIG_MODULE_SIG=n
-obj-m := pmdfc_client.o pmnet.o pmrdma.o
+obj-m := pmdfc_client.o pmnet.o 
+#obj-m := pmdfc_client.o pmnet.o pmrdma.o
 
 pmdfc_client-objs := pmdfc.o bloom_filter.o 
 pmnet-objs := tcp.o nodemanager.o netdebug.o sys.o masklog.o
-pmrdma-objs := rdma.o
+#pmrdma-objs := rdma.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD     := $(shell pwd)

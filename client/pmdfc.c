@@ -25,8 +25,8 @@
 //#define PMDFC_RDMA 1
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
-#define PMDFC_PERCPU 1
-//#define PMDFC_PREALLOC 1
+//#define PMDFC_PERCPU 1
+#define PMDFC_PREALLOC 1
 
 #if !defined(PMDFC_NETWORK)
 #undef PMDFC_WORKQUEUE
@@ -69,7 +69,7 @@ static DEFINE_PER_CPU(pgoff_t[5], pmdfc_remoteputmem_index);
 
 /* Global page storage */
 #if defined(PMDFC_PREALLOC)
-struct pmdfc_storage pmdfc_storage;
+struct pmdfc_storage_cluster *ps_cluster = NULL;
 #endif
 
 /*
@@ -98,13 +98,15 @@ struct pmdfc_info
 static void pmdfc_remotify_fn(struct work_struct *work)
 {
 	struct pmdfc_info *info = NULL;
+	struct pmdfc_storage *storage = NULL;
 	unsigned long remain;
 	void *page = NULL;
-	pgoff_t *index;
-	long *key; 
+	pgoff_t *indexes;
+	long *keys; 
+	long key;
+	unsigned int index;
 	unsigned long flags;
 	unsigned char **tmpmem;
-//	unsigned char *tmpmem_save[2];
 	unsigned int oflags;
 	void *shadow_page = NULL;
 	int i;
@@ -131,15 +133,15 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	for ( i = 0 ; i < 5 ; i++) {
 		if ( oflags & (1 << i) ) {
 			/* 11110 if i = 0 */
-			key = get_cpu_var(pmdfc_remoteputmem_key);
-			index = get_cpu_var(pmdfc_remoteputmem_index);
+			keys = get_cpu_var(pmdfc_remoteputmem_key);
+			indexes = get_cpu_var(pmdfc_remoteputmem_index);
 			put_cpu_var(pmdfc_remoteputmem_key);
 			put_cpu_var(pmdfc_remoteputmem_index);
 			/* XXX: can sendmsg proceed in preempt_disabled context? */
 
 			pr_info("pmdfc-remotify: CPU %d oflags=%d send tmpmem[%d]\n", cpu, oflags, i);
 			BUG_ON(tmpmem == NULL);
-			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[i], index[i], tmpmem[i], PAGE_SIZE,
+			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, keys[i], indexes[i], tmpmem[i], PAGE_SIZE,
 			   0, &status);
 			oflags &= ((1 << 5) - 1) ^ (1 << i) ;
 			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags;
@@ -150,21 +152,51 @@ put_remoteputmem:
 	return;
 
 #elif defined(PMDFC_PREALLOC)
-	/* TODO: key and index */
+	/* TODO: DEADLOCK AGAIN? */
 	/*
-	 * 1. Find set bit
-	 * If exist, send that page with corresponding key and index.
+	 * 1. Find full storage 
+	 * If exist, send whole pages in storage with corresponding key and index.
 	 * If not, just return.
 	 */
-	unsigned int bit;
+	unsigned int bit = 0;
 
-	/* TODO: BUT it may need lock or something? */
-	bit = find_first_bit(pmdfc_storage->bitmap, 1024);
-	if (test_bit(bit, pmdfc_storage->bitmap)) {
-		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key[bit], index[bit], 
-			pmdfc_storage->page_storage[bit], PAGE_SIZE, 0, &status);
-		clear_bit(bit, pmdfc_storage->bitmap);
+	for ( i = 0 ; i < 4 ; i++) {
+		if (test_bit(PS_full, &ps_cluster->cl_storages[i]->flags))
+			break;
 	}
+
+	if ( i > 3 )
+		goto not_found;
+
+	storage = ps_cluster->cl_storages[i];
+
+	/* Don't stop it now~ */
+	while(1) {
+retry:
+		/* TODO: BUT it may need lock or something? */
+		bit = find_next_bit(storage->bitmap, 1024, bit);
+		if ( bit >= 1024 ) {
+			/* No page, wait for next round */
+			goto out;
+		}
+
+		/* XXX: after find bit and sleep and wake up after occupied_bit free would cause error */
+		if ( bit < 1024 ) {
+			pr_info("PMDFC_PREALLOC: get and send page from storage[%u]\n", bit);
+			key = storage->key_storage[bit];
+			index = storage->index_storage[bit];
+			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
+				storage->page_storage[bit], PAGE_SIZE, 0, &status);
+			clear_bit(bit, storage->bitmap);
+		} else {
+			goto out;
+		}
+	}
+out:
+	clear_bit(PS_full, &storage->flags);
+	set_bit(PS_empty, &storage->flags);
+not_found:
+	return;
 
 #else /* normal list method */
 	allow_signal(SIGUSR1);
@@ -255,6 +287,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	if ( pool_id < 0 ) 
 		return;
 
+	/* Check whether oid.oid[1] use */
+	BUG_ON(oid.oid[1] != 0);
+	BUG_ON(oid.oid[2] != 0);
+
 #if defined(PMDFC_DEBUG)
 	/* Send page to server */
 	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
@@ -316,19 +352,56 @@ found:
 	 * If not, then just drop that page and return.
 	 */
 	unsigned int bit;
+	struct pmdfc_storage *storage;
+	i = 0;
 
-	/* TODO: It may need lock */
-	bit = find_first_zero_bit(pmdfc_storage->bitmap, 1024);
-	pr_info("pmdfc_put: find zero bit! %u\n", bit);
-	if (!test_bit(bit, pmdfc_storage->bitmap)) {
-		memcpy(pmdfc_storage->page_storage[bit], pg_from, PAGE_SIZE);	
+	BUG_ON(ps_cluster == NULL);
+	BUG_ON(ps_cluster->cl_storages[0] == NULL);
+
+	for ( i = 0 ; i < 4 ; i++) {
+		if (test_bit(PS_put, &ps_cluster->cl_storages[i]->flags))
+			break;
 	}
-	set_bit(bit, pmdfc_storage->bitmap);
 
-	/*
-	 * 2. Queue work to workqueue
-	 */
-	queue_work(pmdfc_wq, &pmdfc_remotify_work);
+	if ( i > 3 ) {
+		/* Cannot find PS_put, So make PS_empty buffer PS_put */
+		for ( i = 0 ; i < 4 ; i++) {
+			if (test_bit(PS_empty, &ps_cluster->cl_storages[i]->flags)) {
+				set_bit(PS_put, &ps_cluster->cl_storages[i]->flags);
+				clear_bit(PS_empty, &ps_cluster->cl_storages[i]->flags);
+				break;
+			}
+		}
+	}
+
+	/* Cannot find PS_put and also PS_empty doesn't exist */
+	if (i > 3) {
+		pmdfc_drop_puts++;
+		goto out;
+	}
+
+	storage = ps_cluster->cl_storages[i];
+	/* TODO: It may need lock */
+retry:
+	bit = find_first_zero_bit(storage->bitmap, 1024);
+	if ( bit < 1024 ) {
+		if (!test_and_set_bit(bit, storage->bitmap)) {
+//			pr_info("PMDFC_PREALLOC: put page to storage[%u]\n", bit);
+			memcpy(storage->page_storage[bit], pg_from, PAGE_SIZE);	
+			storage->key_storage[bit] = (long)oid.oid[0];
+			storage->index_storage[bit] = index;
+			set_bit(bit, storage->bitmap);
+		} else 
+			goto retry;
+	} else {
+		/*
+		 * 2. Queue work to workqueue when it full.
+		 */
+		clear_bit(PS_put, &storage->flags);
+		set_bit(PS_full, &storage->flags);
+		queue_work(pmdfc_wq, &pmdfc_remotify_work);
+		goto out;
+	}
 
 #else /* normal list method */
 
@@ -543,19 +616,13 @@ void pmdfc_cpu_up(int cpu)
 	for ( i = 0 ; i < 5 ; i++){
 		pp[i] = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	}
-//	unsigned char *p1 = kzalloc(PAGE_SIZE, GFP_KERNEL);
-//	unsigned char *p2 = kzalloc(PAGE_SIZE, GFP_KERNEL);
-//	BUG_ON(!p1 || !p2);
 	per_cpu(pmdfc_remoteputmem, cpu) = pp;
-//	per_cpu(pmdfc_remoteputmem2, cpu) = p2;
 }
 
 void pmdfc_cpu_down(int cpu)
 {
 	kfree(per_cpu(pmdfc_remoteputmem, cpu));
 	per_cpu(pmdfc_remoteputmem, cpu) = NULL;
-//	kfree(per_cpu(pmdfc_remoteputmem2, cpu));
-//	per_cpu(pmdfc_remoteputmem2, cpu) = NULL;
 }
 
 static int pmdfc_cpu_notifier(unsigned long action, void *pcpu)
@@ -595,6 +662,57 @@ static int bloom_filter_init(void)
 	return 0;
 }
 
+static int init_ps_cluster(void){
+	struct pmdfc_storage_cluster *cluster = NULL;
+	struct pmdfc_storage *storage = NULL;
+	int i, j;
+
+	pr_info("pmdfc: init_ps_cluster\n");
+
+	cluster = kzalloc(sizeof(struct pmdfc_storage_cluster), GFP_KERNEL);
+	if (cluster == NULL) {
+		pr_err("pmdfc: cannot allocate cluster\n");
+		return -ENOMEM;
+	}
+
+	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
+		storage = kzalloc(sizeof(struct pmdfc_storage), GFP_KERNEL);
+
+		/* Maximum continuous memory from kmalloc is 4M 
+		 * So I set bit_size as 1024 */
+//		int numa = i < 2 ? 0 : 1;
+		unsigned long bitmap_size = BITS_TO_LONGS(1024) * sizeof(unsigned long);
+		long *key_storage = kzalloc(1024 * sizeof(long), GFP_KERNEL);
+		unsigned int *index_storage = kzalloc(1024 * sizeof(unsigned int), GFP_KERNEL);
+		unsigned long *bitmap = kzalloc(bitmap_size, GFP_KERNEL);
+		void **page_storage = kzalloc(1024 * sizeof(void*), GFP_KERNEL);
+		if (!page_storage){
+			pr_err("pmdfc: cannot allocate page_storage\n");
+			return -ENOMEM;
+		}
+		for ( j = 0 ; j < 1024; j++) {
+			page_storage[j] = kzalloc(PAGE_SIZE, GFP_KERNEL);
+		}
+
+//		mutex_init(&pmdfc_storages[i].lock);
+		storage->bitmap_size = 1024;
+		storage->flags = 0;
+		set_bit(PS_empty, &storage->flags);
+		storage->page_storage = page_storage;
+		storage->key_storage = key_storage;
+		storage->index_storage = index_storage;
+		storage->bitmap = bitmap;
+		bitmap_zero(storage->bitmap, storage->bitmap_size);
+		
+		cluster->cl_storages[i] = storage;
+		pr_info("pmdfc: cluster->cl_storages[%d]=%p\n", i, cluster->cl_storages[i]);
+	}
+
+	ps_cluster = cluster;
+
+	return 0;
+}
+
 void pmdfc_debugfs_exit(void)
 {
 	debugfs_remove_recursive(pmdfc_dentry);
@@ -614,6 +732,7 @@ static int __init pmdfc_init(void)
 {
 	int ret;
 	unsigned int cpu;
+	int i;
 
 #ifdef CONFIG_DEBUG_FS
 	pmdfc_debugfs_init();
@@ -622,6 +741,10 @@ static int __init pmdfc_init(void)
 	info_cache = kmem_cache_create("info_cache", sizeof(struct pmdfc_info),
 			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
+	pr_info("PS_empty=%d!!!\n", PS_empty);
+	pr_info("PS_full=%d!!!\n", PS_full);
+
+#if defined(PMDFC_PERCPU)
 	pr_info("pmdfc: %d CPUs online...\n", num_online_cpus());
 	for_each_online_cpu(cpu) {
 		pr_info("CPU%u UP!!\n", cpu);
@@ -629,24 +752,18 @@ static int __init pmdfc_init(void)
 		pmdfc_cpu_notifier(CPU_UP_PREPARE, pcpu);
 	}
 
-#if defined(PMDFC_PREALLOC)
-	/* Maximum continuous memory from kmalloc is 4M 
-	 * So I set bit_size as 1024 */
-	unsigned long bitmap_size = BITS_TO_LONGS(1024) * sizeof(unsigned long);
-	void **page_storage = kzalloc(1024 * PAGE_SIZE, GFP_KERNEL);
-	if (!page_storage){
-		pr_err("pmdfc: cannot allocate page_stoarge\n");
-		return -ENOMEM;
+#elif defined(PMDFC_PREALLOC)
+	/*
+	 * PREALLOC - make free spaces while load module 
+	 * Two buffers for a one CPU node
+	 * Since our testbed has two CPU node, we would create 4 buffers.
+	 */
+	ret = init_ps_cluster();
+	if (ret != 0) {
+		printk(KERN_ERR "unable to init ps_cluster\n");
+		return ret;
 	}
-	pmdfc_storage = kzalloc(sizeof(*pmdfc_storage) + bitmap_size, GFP_KERNEL);
-	if (!pmdfc_storage){
-		pr_err("pmdfc: cannot allocate page_stoarge\n");
-		return -ENOMEM;
-	}
-	mutex_init(&pmdfc_storage->lock);
-	pmdfc_storage->bitmap_size = 1024;
-	pmdfc_storage->page_storage = page_storage;
-	bitmap_zero(pmdfc_storage->bitmap, pmdfc_storage->bitmap_size);
+	BUG_ON(ps_cluster == NULL);
 #endif
 
 #if defined(PMDFC_WORKQUEUE)
