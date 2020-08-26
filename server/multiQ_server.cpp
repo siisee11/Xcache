@@ -6,6 +6,7 @@
 #include <sys/socket.h> 
 #include <sys/types.h> 
 #include <fcntl.h> 
+#include <signal.h>
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
@@ -765,9 +766,16 @@ CCEH *init_cceh(char* file)
 	return ht;
 }
 
+void sigint_callback_handler(int signum) {
+	print_stats();
+	// Terminate program
+	exit(signum);
+}
 
 int main(int argc, char* argv[]) 
 { 	
+	signal(SIGINT, sigint_callback_handler);
+
 	/* New CCEH hash table */
 	hashTable = init_cceh(argv[1]);
 

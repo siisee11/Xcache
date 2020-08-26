@@ -6,7 +6,7 @@ LIBS=-lrt -lm -lpmemobj -lpthread -lboost_thread -lboost_system
 CFLAGS=-O3 -std=c++11 -w 
 INCLUDES=-I./ 
 
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./lib/pmdk:/root/downloads/boost_1_73_0/stage/lib
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./lib/pmdk:/root/downloads/boost_1_74_0/stage/lib
 export LD_LIBRARY_PATH
 
 all: main
