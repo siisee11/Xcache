@@ -27,12 +27,13 @@
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
 
-#include "util/pair.h"
 #include "src/CCEH.h"
 
 #include "tcp.h"
 #include "tcp_internal.h"
 #include "queue.h"
+#include "server.h"
+#include "log.h"
 
 #define TIME_CHECK 1
 
@@ -73,6 +74,7 @@ boost::atomic<bool> alldone (false);
 unsigned int nr_cpus;
 queue_t **lfqs = NULL;
 
+/* counting valuse */
 int putcnt = 0;
 int getcnt = 0;
 int sample_put_q_cnt = 0;
@@ -80,11 +82,10 @@ int sample_get_q_cnt = 0;
 int sample_put_cnt = 0;
 int sample_get_cnt = 0;
 
-/* CCEH hashTable */
-CCEH* hashTable;
+struct server_context* ctx = NULL;
 
 /* performance timer */
-uint64_t network_elapsed=0, pmput_elapsed=0, pmalloc_elapsed = 0, pmget_elapsed=0;
+uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0;
 uint64_t pmnet_rx_elapsed=0; 
 uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
 uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
@@ -101,8 +102,6 @@ static void print_stats() {
 	printf("Approximate total(Multipled by sample rate)\n PUT %lu (us), GET : %lu (us) \n",
 			pmput_elapsed/1000*SAMPLE_RATE,
 			(pmget_exist_elapsed + pmget_notexist_elapsed)/1000*SAMPLE_RATE);
-	printf("PM alloc : %lu (us)\n\n",
-			hashTable->pmalloc_elapsed/1000);
 
 	printf("Approximate RX & Queuing delay (Multipled by sample rate)\n");
 	printf("RX : %lu (us), PUT_Q : %lu (us), GET_Q : %lu (us)\n",
@@ -132,9 +131,8 @@ static void print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("PUT : %lu (us), PUT_ALLOC : %lu (us), GET_TOTAL : %lu (us)\n",
+	printf("PUT : %lu (us), GET_TOTAL : %lu (us)\n",
 			pmput_elapsed/1000/sample_put_cnt,
-			hashTable->pmalloc_elapsed/1000/putcnt,
 			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/sample_get_cnt);
 
 	printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
@@ -399,8 +397,20 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			}
 #endif
 
-			/* Insert received page into hash */
-			hashTable->Insert(key,hashTable->save_page((char *)msg_in->page).oid.off);
+			/* 
+			 * Insert received page into hash 
+			 * 1. Alloc POBJ and get its address
+			 */
+			TOID(char) temp;
+			POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
+			uint64_t temp_addr = (uint64_t)ctx->log_pop + temp.oid.off;
+			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
+			pmemobj_persist(ctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);	
+
+			/*
+			 * 2. Save that address with key
+			 */
+			D_RW(ctx->hashtable)->Insert(ctx->index_pop, key, (Value_t)temp_addr);
 
 #if defined(TIME_CHECK)
 			if (checkit) {
@@ -410,10 +420,11 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 #endif
 
 			printf("[ Inserted %lx : ", key);
-			printf("%lx ]\n", hashTable->Get(key));
+			printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
 			break;
 		}
 
+		/* PMNET_MSG_GETPAGE */
 		case PMNET_MSG_GETPAGE:{
 			getcnt++;
 
@@ -439,10 +450,35 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			}
 #endif
 
-			/* Get page from Hash and copy to saved_page */
-			ret = hashTable->load_page(hashTable->Get(key), (char *)saved_page, 4096);
+			/*
+			 * Get saved page.
+			 * 1. get POBJ address of page with key
+			 * 2. get page by POBJ address
+			 */
+			bool abort = false;
+			void* addr = (void*)D_RW(ctx->hashtable)->Get(key);
+			if(!addr){
+				//dprintf("Value for key[%llu] not found\n", new_request->keys[i]);
+				printf("Value is not found!!\n");
+				abort = true;
+			}
 
-			if (ret != 0) {
+			if(!abort){
+				/* page exists */
+				memcpy(saved_page, addr, PAGE_SIZE);
+				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
+					ntohl(hdr->msg_num), saved_page, PAGE_SIZE);
+
+#if defined(TIME_CHECK)
+				if (checkit) {
+					clock_gettime(CLOCK_MONOTONIC, &end);
+					pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+				}
+#endif
+				printf("[ Retrived (key=%lx, index=%lx, msg_num=%lx) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
+				printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
+			}
+			else{
 				/* page not exists */
 				memset(&reply, 0, PAGE_SIZE);
 				ret = pmnet_send_message(sc, PMNET_MSG_NOTEXIST, ntohl(hdr->key), ntohl(hdr->index), 
@@ -456,27 +492,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 #endif
 
 				printf("PAGE NOT EXIST (key=%lx, index=%lx, msg_num=%lx)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-//				printf("SERVER-->CLIENT: PMNET_MSG_NOTEXIST(%d)\n",ret);
-			} else {
-				/* page exists */
-//				printf("SEND PAGE with long key=%lx\n", key);
-//				printf(">> GET: %s\n", saved_page);
-				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
-					ntohl(hdr->msg_num), saved_page, PAGE_SIZE);
-
-#if defined(TIME_CHECK)
-				if (checkit) {
-					clock_gettime(CLOCK_MONOTONIC, &end);
-					pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-				}
-#endif
-
-				printf("[ Retrived (key=%lx, index=%lx, msg_num=%lx) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-				printf("%lx ]\n", hashTable->Get(key));
-//				printf("SERVER-->CLIENT: PMNET_MSG_SENDPAGE(%d)\n",ret);
 			}
 			break;
-
 		}
 
 		case PMNET_MSG_SENDPAGE:
@@ -487,7 +504,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 			/* delete key */
-			hashTable->Delete(key);
+			D_RW(ctx->hashtable)->Delete(key);
 
 			break;
 		}
@@ -745,8 +762,6 @@ void init_network_server()
 		}
 
 		producer_threads.join_all();
-
-//		print_stats();
 	} 
 
 
@@ -754,18 +769,57 @@ void init_network_server()
 		close(sockfd); 
 }
 
-/*
- * Initialize CCEH
- * return: CCEH
- */
-CCEH *init_cceh(char* file)
-{
-	CCEH* ht = new CCEH(file);
-	printf("CCEH create....\n");
+/* Initialize server context including log and hashtable */
+static struct server_context* server_init_ctx(char *path){
+	int flags;
+	void* ptr;
+	char log_path[32] = "./jy/log";
+	const size_t hashtable_initialSize = 1024*16*4; 
+	ctx = (struct server_context*)malloc(sizeof(struct server_context));
+	ctx->node_id = 0;
+	ctx->hashtable = OID_NULL;
 
-	return ht;
+	printf("wait for log initialization\n");
+	if(access(log_path, 0) != 0){
+		ctx->log_pop = pmemobj_create(log_path, "log", LOG_SIZE, 0666);
+		if(!ctx->log_pop){
+			perror("pmemobj_create");
+			exit(0);
+		}
+	}
+	else{
+		ctx->log_pop = pmemobj_open(log_path, "log");
+		if(!ctx->log_pop){
+			perror("pmemobj_open");
+			exit(0);
+		}
+	}
+	printf("log initialized\n");
+
+	printf("wait for hashtable initialization\n");
+	if(access(path, 0) != 0){
+		ctx->index_pop = pmemobj_create(path, "index", INDEX_SIZE, 0666);
+		if(!ctx->index_pop){
+			perror("pmemobj_create");
+			exit(0);
+		}
+		ctx->hashtable = POBJ_ROOT(ctx->index_pop, CCEH);
+		D_RW(ctx->hashtable)->initCCEH(ctx->index_pop, hashtable_initialSize);
+	}
+	else{
+		ctx->index_pop = pmemobj_open(path, "index");
+		if(!ctx->index_pop){
+			perror("pmemobj_open");
+			exit(0);
+		}
+		ctx->hashtable = POBJ_ROOT(ctx->index_pop, CCEH);
+	}
+	printf("hashtable initialized\n");
+
+	return ctx;
 }
 
+/* SIGINT handler */
 void sigint_callback_handler(int signum) {
 	print_stats();
 	// Terminate program
@@ -776,8 +830,9 @@ int main(int argc, char* argv[])
 { 	
 	signal(SIGINT, sigint_callback_handler);
 
-	/* New CCEH hash table */
-	hashTable = init_cceh(argv[1]);
+	server_init_ctx(argv[1]);
+
+	/* New CCEH hash table : Deprecated */
 
 	using namespace std;
 	cout << "boost::lockfree::queue is ";
