@@ -82,9 +82,6 @@ int sample_get_q_cnt = 0;
 int sample_put_cnt = 0;
 int sample_get_cnt = 0;
 
-/* CCEH hashTable */
-CCEH* hashTable;
-
 struct server_context* ctx = NULL;
 
 /* performance timer */
@@ -423,7 +420,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 #endif
 
 			printf("[ Inserted %lx : ", key);
-			printf("%lx ]\n", hashTable->Get(key));
+			printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
 			break;
 		}
 
@@ -479,7 +476,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				}
 #endif
 				printf("[ Retrived (key=%lx, index=%lx, msg_num=%lx) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-				printf("%lx ]\n", hashTable->Get(key));
+				printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
 			}
 			else{
 				/* page not exists */
@@ -507,7 +504,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 			/* delete key */
-			hashTable->Delete(key);
+			D_RW(ctx->hashtable)->Delete(key);
 
 			break;
 		}
@@ -776,8 +773,7 @@ void init_network_server()
 static struct server_context* server_init_ctx(char *path){
 	int flags;
 	void* ptr;
-	char index_path[32] = "/mnt/pmem0/hk/pmem";
-	char log_path[32] = "/mnt/pmem0/hk/log";
+	char log_path[32] = "./jy/log";
 	const size_t hashtable_initialSize = 1024*16*4; 
 	ctx = (struct server_context*)malloc(sizeof(struct server_context));
 	ctx->node_id = 0;
@@ -837,7 +833,6 @@ int main(int argc, char* argv[])
 	server_init_ctx(argv[1]);
 
 	/* New CCEH hash table : Deprecated */
-//	hashTable = init_cceh(argv[1]);
 
 	using namespace std;
 	cout << "boost::lockfree::queue is ";

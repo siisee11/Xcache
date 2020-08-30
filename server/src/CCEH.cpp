@@ -4,8 +4,8 @@
 #include <cassert>
 #include <unordered_map>
 #include <vector>
-#include "CCEH.h"
-#include "hash.h"
+#include "src/CCEH.h"
+#include "src/hash.h"
 
 int Segment::Insert(PMEMobjpool* pop, Key_t& key, Value_t value, size_t loc, size_t key_hash){
 #ifdef INPLACE
@@ -134,6 +134,9 @@ TOID(struct Segment)* Segment::Split(PMEMobjpool* pop){
 
 void CCEH::initCCEH(PMEMobjpool* pop){
 	POBJ_ALLOC(pop, &dir, struct Directory, sizeof(struct Directory), NULL, NULL);
+	auto pointer = D_RO(dir);
+	if (!pointer)
+		printf("null pointer::%s\n", __func__);
 	D_RW(dir)->initDirectory();
 	POBJ_ALLOC(pop, &D_RW(dir)->segment, TOID(struct Segment), sizeof(TOID(struct Segment))*D_RO(dir)->capacity, NULL, NULL);
 
@@ -186,82 +189,82 @@ RETRY:
 #ifdef INPLACE
 			if(D_RO(target)->local_depth-1 < D_RO(dir)->depth)
 #else
-			if(D_RO(target)->local_depth < D_RO(dir)->depth)
+				if(D_RO(target)->local_depth < D_RO(dir)->depth)
 #endif
-			{
-				unsigned depth_diff = D_RO(dir)->depth - D_RW(s[0])->local_depth;
-				if(depth_diff == 0){
-					if(x%2 == 0){
-						D_RW(D_RW(dir)->segment)[x+1] = s[1];
+				{
+					unsigned depth_diff = D_RO(dir)->depth - D_RW(s[0])->local_depth;
+					if(depth_diff == 0){
+						if(x%2 == 0){
+							D_RW(D_RW(dir)->segment)[x+1] = s[1];
 #ifdef INPLACE
-						pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x+1], 8);
+							pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x+1], 8);
 #else
-						D_RW(D_RW(dir)->segment)[x] = s[0];
-						pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x], 16);
+							D_RW(D_RW(dir)->segment)[x] = s[0];
+							pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x], 16);
 #endif
+						}
+						else{
+							D_RW(D_RW(dir)->segment)[x] = s[1];
+#ifdef INPLACE
+							pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x], 8);
+#else
+							D_RW(D_RW(dir)->segment)[x-1] = s[0];
+							pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x-1], 16);
+#endif
+						}
 					}
 					else{
-						D_RW(D_RW(dir)->segment)[x] = s[1];
-#ifdef INPLACE
-						pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x], 8);
-#else
-						D_RW(D_RW(dir)->segment)[x-1] = s[0];
-						pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x-1], 16);
-#endif
-					}
-				}
-				else{
-					int chunk_size = pow(2, D_RO(dir)->depth - (D_RO(s[0])->local_depth - 1));
-					x = x - (x%chunk_size);
-					for(int i=0; i<chunk_size/2; ++i){
-						D_RW(D_RW(dir)->segment)[x+chunk_size/2+1] = s[1];
-					}
-					pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x+chunk_size/2], sizeof(void*)*chunk_size/2);
+						int chunk_size = pow(2, D_RO(dir)->depth - (D_RO(s[0])->local_depth - 1));
+						x = x - (x%chunk_size);
+						for(int i=0; i<chunk_size/2; ++i){
+							D_RW(D_RW(dir)->segment)[x+chunk_size/2+1] = s[1];
+						}
+						pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x+chunk_size/2], sizeof(void*)*chunk_size/2);
 #ifndef INPLACE
-					for(int i=0; i<chunk_size/2; ++i){
-						D_RW(D_RW(dir)->segment)[x+i] = s[0];
-					}
-					pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x], sizeof(void*)*chunk_size/2);
+						for(int i=0; i<chunk_size/2; ++i){
+							D_RW(D_RW(dir)->segment)[x+i] = s[0];
+						}
+						pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x], sizeof(void*)*chunk_size/2);
 #endif
-				}
-
-				while(!D_RW(dir)->Release()){
-					asm("nop");
-				}
-			}
-			else{ // directory doubling
-				auto dir_old = dir;
-				TOID_ARRAY(TOID(struct Segment)) d = D_RO(dir)->segment;
-				TOID(struct Directory) _dir;
-				POBJ_ALLOC(pop, &_dir, struct Directory, sizeof(struct Directory), NULL, NULL);
-				D_RW(_dir)->initDirectory(D_RO(dir)->depth+1);
-				POBJ_ALLOC(pop, &D_RW(_dir)->segment, TOID(struct Segment), sizeof(TOID(struct Segment))*D_RO(_dir)->capacity, NULL, NULL);
-				for(int i=0; i<D_RO(_dir)->capacity; ++i){
-					POBJ_ALLOC(pop, &D_RO(D_RO(_dir)->segment)[i], struct Segment, sizeof(struct Segment), NULL, NULL);
-					D_RW(D_RW(D_RW(_dir)->segment)[i])->initSegment(D_RO(_dir)->capacity);
-				}
-				for(int i=0; i<D_RO(dir)->capacity; ++i){
-					if(i == x){
-						D_RW(D_RW(_dir)->segment)[2*i] = s[0];
-						D_RW(D_RW(_dir)->segment)[2*i+1] = s[1];
 					}
-					else{
-						D_RW(D_RW(_dir)->segment)[2*i] = D_RO(d)[i];
-						D_RW(D_RW(_dir)->segment)[2*i+1] = D_RO(d)[i];
+
+					while(!D_RW(dir)->Release()){
+						asm("nop");
 					}
 				}
-
-				pmemobj_persist(pop, (char*)&D_RO(D_RO(_dir)->segment)[0], sizeof(struct Segment*)*D_RO(_dir)->capacity);
-				pmemobj_persist(pop, (char*)&_dir, sizeof(struct Directory));
-				dir = _dir;
-				pmemobj_persist(pop, (char*)&dir, sizeof(void*));
-				POBJ_FREE(&dir_old);
+				else{ // directory doubling
+					auto dir_old = dir;
+					TOID_ARRAY(TOID(struct Segment)) d = D_RO(dir)->segment;
+					TOID(struct Directory) _dir;
+					POBJ_ALLOC(pop, &_dir, struct Directory, sizeof(struct Directory), NULL, NULL);
+					D_RW(_dir)->initDirectory(D_RO(dir)->depth+1);
+					POBJ_ALLOC(pop, &D_RW(_dir)->segment, TOID(struct Segment), sizeof(TOID(struct Segment))*D_RO(_dir)->capacity, NULL, NULL);
+					for(int i=0; i<D_RO(_dir)->capacity; ++i){
+						POBJ_ALLOC(pop, &D_RO(D_RO(_dir)->segment)[i], struct Segment, sizeof(struct Segment), NULL, NULL);
+						D_RW(D_RW(D_RW(_dir)->segment)[i])->initSegment(D_RO(_dir)->capacity);
+					}
+					for(int i=0; i<D_RO(dir)->capacity; ++i){
+						if(i == x){
+							D_RW(D_RW(_dir)->segment)[2*i] = s[0];
+							D_RW(D_RW(_dir)->segment)[2*i+1] = s[1];
 			}
+			else{
+				D_RW(D_RW(_dir)->segment)[2*i] = D_RO(d)[i];
+				D_RW(D_RW(_dir)->segment)[2*i+1] = D_RO(d)[i];
+			}
+		}
+
+		pmemobj_persist(pop, (char*)&D_RO(D_RO(_dir)->segment)[0], sizeof(struct Segment*)*D_RO(_dir)->capacity);
+		pmemobj_persist(pop, (char*)&_dir, sizeof(struct Directory));
+		dir = _dir;
+		pmemobj_persist(pop, (char*)&dir, sizeof(void*));
+		POBJ_FREE(&dir_old);
+		}
 #ifdef INPLACE
-			D_RW(s[0])->sema = 0;
+		D_RW(s[0])->sema = 0;
 #endif
-		} // End of critical section
-		goto RETRY;
+	} // End of critical section
+	goto RETRY;
 	}
 	else if(ret == 2){
 		goto STARTOVER;
@@ -274,7 +277,11 @@ bool CCEH::Delete(Key_t& key){
 
 Value_t CCEH::Get(Key_t& key){
 	auto key_hash = h(&key, sizeof(key));
-	auto x = (key_hash >> (8*sizeof(key_hash)-D_RO(dir)->depth));
+	auto pointer = D_RO(dir);
+	if (!pointer)
+		printf("null pointer!\n");
+
+	auto x = (key_hash >> (8 * sizeof(key_hash) - D_RO(dir)->depth));
 	auto y = (key_hash & kMask) * kNumPairPerCacheLine;
 
 	auto dir_ = D_RO(D_RO(dir)->segment)[x];

@@ -53,7 +53,6 @@ struct Segment{
 	}
 	local_depth = 0;
 	sema = 0;
-	//printf("[%s] called\n", __func__);
     }
 
     void initSegment(size_t depth){
@@ -62,7 +61,6 @@ struct Segment{
 	}
 	local_depth = depth;
 	sema = 0;
-	//printf("[%s] called with %lld depth\n", __func__, depth);
     }
 
     int Insert(PMEMobjpool*, Key_t&, Value_t, size_t, size_t);
@@ -97,7 +95,6 @@ struct Directory{
 	capacity = pow(2, depth);
 	lock = false;
 	sema = 0;
-	printf("[%s] called\n", __func__);
     }
 
     void initDirectory(size_t _depth){
@@ -105,7 +102,6 @@ struct Directory{
 	capacity = pow(2, _depth);
 	lock = false;
 	sema = 0;
-	printf("[%s] called with %lld depth\n", __func__, _depth);
     }
 
     bool Acquire(void){
