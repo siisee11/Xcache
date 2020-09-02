@@ -121,7 +121,6 @@ retry:
 
 		/* XXX: after find bit and sleep and wake up after occupied_bit free would cause error */
 		if ( bit < 1024 ) {
-			pr_info("PMDFC_PREALLOC: get and send page from storage[%u]\n", bit);
 			key = storage->key_storage[bit];
 			index = storage->index_storage[bit];
 			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
@@ -282,6 +281,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	data[5] = idata[1];
 	data[6] = idata[2];
 	data[7] = idata[3];
+
+	/* Check whether oid.oid[1] use */
+	BUG_ON(oid.oid[1] != 0);
+	BUG_ON(oid.oid[2] != 0);
 
 	BUG_ON(page == NULL);
 
