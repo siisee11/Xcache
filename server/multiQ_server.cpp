@@ -419,8 +419,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			}
 #endif
 
-			printf("[ Inserted %lx : ", key);
-			printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
+//			printf("[ Inserted %lx : ", key);
+//			printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
 			break;
 		}
 
@@ -459,7 +459,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			void* addr = (void*)D_RW(ctx->hashtable)->Get(key);
 			if(!addr){
 				//dprintf("Value for key[%llu] not found\n", new_request->keys[i]);
-				printf("Value is not found!!\n");
+//				printf("Value is not found!!\n");
 				abort = true;
 			}
 
@@ -826,9 +826,18 @@ void sigint_callback_handler(int signum) {
 	exit(signum);
 }
 
+/* SIGSEGV handler */
+void sigsegv_callback_handler(int signum) {
+	printf("segfault\n");
+	print_stats();
+	// Terminate program
+	exit(signum);
+}
+
 int main(int argc, char* argv[]) 
 { 	
 	signal(SIGINT, sigint_callback_handler);
+	signal(SIGSEGV, sigsegv_callback_handler);
 
 	server_init_ctx(argv[1]);
 

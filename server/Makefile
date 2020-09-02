@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := all
 
 CC=g++
-LIBS=-lrt -lm -lpmemobj -lpthread -lboost_thread -lboost_system
+LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -lboost_thread -lboost_system
 CFLAGS=-O3 -std=c++11 -w 
 INCLUDES=-I./ 
 
