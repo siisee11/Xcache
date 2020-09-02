@@ -1,7 +1,10 @@
 # read_big_file.py
 
-fr = open("./5Gdummyfile", 'r')
-fw = open("./5Gdummyfile.copied", 'w')
+#file_name = "hihi.txt"
+file_name = "2Gdummyfile"
+
+fr = open(file_name, 'r')
+fw = open(file_name + ".copy", 'w')
 
 while True:
     line = fr.readline()

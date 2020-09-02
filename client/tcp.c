@@ -855,6 +855,8 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	struct pmnet_send_tracking nst;
 	void *to_va;
 
+	BUG_ON(page == NULL);
+
 	pmnet_init_nst(&nst, msg_type, key, current, target_node);
 
 	if (pmnet_wq == NULL) {
