@@ -525,9 +525,16 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 	}
 
 	/* keep track of the nn's sc ref for the caller */
-	if ((old_sc == NULL) && sc)
+	if ((old_sc == NULL) && sc){
+		if (sc)
+			pr_info("1: sc->ref: %d\n", kref_read(&sc->sc_kref));
+
 		sc_get(sc);
+	}
 	if (old_sc && (old_sc != sc)) {
+		if (sc)
+			pr_info("2: sc->ref: %d\n", kref_read(&sc->sc_kref));
+
 		pmnet_sc_queue_work(old_sc, &old_sc->sc_shutdown_work);
 		sc_put(old_sc);
 	}
@@ -679,6 +686,7 @@ static void pmnet_shutdown_sc(struct work_struct *work)
 		 * races with pending sc work structs are harmless */
 		del_timer_sync(&sc->sc_idle_timeout);
 		pmnet_sc_cancel_delayed_work(sc, &sc->sc_keepalive_work);
+		pr_info("%s unregicallback: nn[%d] (kref=%d)\n", __func__, sc->sc_node->nd_num, kref_read(&sc->sc_kref));
 		sc_put(sc);
 		kernel_sock_shutdown(sc->sc_sock, SHUT_RDWR);
 	}
@@ -686,6 +694,7 @@ static void pmnet_shutdown_sc(struct work_struct *work)
 	/* not fatal so failed connects before the other guy has our
 	 * heartbeat can be retried */
 	pmnet_ensure_shutdown(nn, sc, 0);
+	pr_info("%s unregicallback: nn[%d] (kref=%d)\n", __func__, sc->sc_node->nd_num, kref_read(&sc->sc_kref));
 	sc_put(sc);
 }
 
@@ -921,6 +930,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	/* PAGE_EXIST */
 	if (*status != -1) {
 		to_va = page_address(page);
+		pr_info("page copy to ptr=%p\n", (void *)to_va);
 		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
 		kfree(nsw.ns_page);
 	}
@@ -1128,8 +1138,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 	pmnet_set_func_start_time(sc);
 	switch(be16_to_cpu(hdr->msg_type)) {
 		case PMNET_MSG_SENDPAGE:
-			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
-					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
+			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n", 
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			ret_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
@@ -1735,7 +1744,7 @@ int pmnet_init(void)
 		return -ENOMEM; /* ? */
 	}
 
-	for (i = 0; i < ARRAY_SIZE(pmnet_nodes); i++) {
+	for (i = 0; i < ARRAY_SIZE(pmnet_nodes) - 1; i++) {
 		struct pmnet_node *nn = pmnet_nn_from_num(i);
 		
 		pr_info("pmnet_init::set pmnet_node\n");
