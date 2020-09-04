@@ -458,8 +458,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			bool abort = false;
 			void* addr = (void*)D_RW(ctx->hashtable)->Get(key);
 			if(!addr){
-				//dprintf("Value for key[%llu] not found\n", new_request->keys[i]);
-//				printf("Value is not found!!\n");
 				abort = true;
 			}
 
