@@ -23,7 +23,7 @@
 //#define PMDFC_DEBUG 1
 #define PMDFC_GET 1
 //#define PMDFC_RDMA 1
-#define PMDFC_BLOOM_FILTER 1 
+//#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
 //#define PMDFC_PERCPU 1
 #define PMDFC_PREALLOC 1
@@ -322,7 +322,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	goto not_exists;
 #endif /* PMDFC_NETWORK end */
 
-	return -1;
+//	return -1;
 
 #if defined(PMDFC_RDMA)
 	ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
@@ -529,9 +529,6 @@ static int __init pmdfc_init(void)
 #ifdef CONFIG_DEBUG_FS
 	pmdfc_debugfs_init();
 #endif
-
-	pr_info("PS_empty=%d!!!\n", PS_empty);
-	pr_info("PS_full=%d!!!\n", PS_full);
 
 	/*
 	 * PREALLOC - make free spaces while load module 

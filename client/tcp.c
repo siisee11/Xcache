@@ -273,7 +273,7 @@ static void pmnet_complete_nsw_locked(struct pmnet_node *nn,
 		list_del_init(&nsw->ns_node_item);
 		nsw->ns_sys_status = sys_status;
 		nsw->ns_status = status;
-//		idr_remove(&nn->nn_status_idr, nsw->ns_id);
+		idr_remove(&nn->nn_status_idr, nsw->ns_id);
 		wake_up(&nsw->ns_wq);
 	}
 }
@@ -290,7 +290,7 @@ static void pmnet_complete_nsw_locked_with_page(struct pmnet_node *nn,
 		nsw->ns_page = page;
 		nsw->ns_sys_status = sys_status;
 		nsw->ns_status = status;
-//		idr_remove(&nn->nn_status_idr, nsw->ns_id);
+		idr_remove(&nn->nn_status_idr, nsw->ns_id);
 		wake_up(&nsw->ns_wq);
 	}
 }
@@ -309,7 +309,7 @@ static void pmnet_complete_nsw_with_page(struct pmnet_node *nn,
 		if (nsw == NULL)
 			goto out;
 	}
-	pr_info("%s: idr_find find nsw (%x)\n", __func__, id);
+//	pr_info("%s: idr_find find nsw (%x)\n", __func__, id);
 	pmnet_complete_nsw_locked_with_page(nn, nsw, page, sys_status, status);
 	spin_unlock(&nn->nn_lock);
 	return;
@@ -335,7 +335,7 @@ static void pmnet_complete_nsw(struct pmnet_node *nn,
 			goto out;
 	}
 
-	pr_info("%s: idr_find find nsw (%x)\n", __func__, id);
+//	pr_info("%s: idr_find find nsw (%x)\n", __func__, id);
 	pmnet_complete_nsw_locked(nn, nsw, sys_status, status);
 	spin_unlock(&nn->nn_lock);
 	return;
@@ -464,6 +464,7 @@ static struct pmnet_sock_container *sc_alloc(struct pmnm_node *node)
 	pmnet_debug_add_sc(sc);
 	sc = NULL;
 	page = NULL;
+	page_data = NULL;
 
 out:
 	if (page)
@@ -526,15 +527,9 @@ static void pmnet_set_nn_state(struct pmnet_node *nn,
 
 	/* keep track of the nn's sc ref for the caller */
 	if ((old_sc == NULL) && sc){
-		if (sc)
-			pr_info("1: sc->ref: %d\n", kref_read(&sc->sc_kref));
-
 		sc_get(sc);
 	}
 	if (old_sc && (old_sc != sc)) {
-		if (sc)
-			pr_info("2: sc->ref: %d\n", kref_read(&sc->sc_kref));
-
 		pmnet_sc_queue_work(old_sc, &old_sc->sc_shutdown_work);
 		sc_put(old_sc);
 	}
@@ -894,6 +889,8 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	if (ret)
 		goto out;
 
+	BUG_ON(nsw.ns_id > 8);
+
 	msg->msg_num = cpu_to_be32(nsw.ns_id);
 	pmnet_set_nst_msg_id(&nst, nsw.ns_id);
 
@@ -906,6 +903,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	mutex_lock(&sc->sc_send_lock);
 	ret = pmnet_send_tcp_msg(sc->sc_sock, vec, veclen,
 			sizeof(struct pmnet_msg) + caller_bytes);
+	pr_info("%s: send nsw(ns_id=%x, key=%x, index=%x\n", __func__, nsw.ns_id, key, index);
 	mutex_unlock(&sc->sc_send_lock);
 	if (ret < 0) {
 		pr_info("error returned from pmnet_send_tcp_msg=%d\n", ret);
@@ -930,7 +928,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	/* PAGE_EXIST */
 	if (*status != -1) {
 		to_va = page_address(page);
-		pr_info("page copy to ptr=%p\n", (void *)to_va);
+//		pr_info("page copy to page(%p), page_address=%p\n", (void *)page, (void *)to_va);
 		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
 		kfree(nsw.ns_page);
 	}
@@ -1161,9 +1159,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			break;
 
 		case PMNET_MSG_NOTEXIST:
-//			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (msg_type=%u, data_len=%u, key=%x, index=%x, msg_num=%x)\n", 
-//					be16_to_cpu(hdr->msg_type), be16_to_cpu(hdr->data_len),
-//					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
+			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (key=%x, index=%x, msg_num=%x)\n", 
+					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			pmnet_complete_nsw(nn, NULL,
 					   be32_to_cpu(hdr->msg_num),
@@ -1259,6 +1256,7 @@ static int pmnet_recv_tcp_msg(struct socket *sock, void *data, size_t len)
 {
 	struct kvec vec = { .iov_len = len, .iov_base = data, };
 	struct msghdr msg = { .msg_flags = MSG_DONTWAIT, };
+	BUG_ON(data == NULL);
 	iov_iter_kvec(&msg.msg_iter, READ, &vec, 1, len);
 	return sock_recvmsg(sock, &msg, MSG_DONTWAIT);
 }
@@ -1780,4 +1778,5 @@ void pmnet_exit(void)
 	kfree(pmnet_keep_resp);
 	pmnet_debugfs_exit();
 }
+
 
