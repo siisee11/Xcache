@@ -170,7 +170,8 @@ RETRY:
     //auto ret = D_RW(target)->Insert(pop, key, value, y, key_hash);
 
     if(ret == 1){
-	TOID(struct Segment)* s = D_RW(target)->Split(pop);
+	//TOID(struct Segment)* s = D_RW(target)->Split(pop);
+	TOID(struct Segment)* s = D_RW(D_RW(D_RW(dir)->segment)[x])->Split(pop);
 	if(s == nullptr){
 	    // another thread is doing split
 	    goto RETRY;
@@ -235,16 +236,19 @@ RETRY:
 		}
 	    }
 	    else{ // directory doubling
-		auto dir_old = dir;
+		printf("doubling directory\n");
+		TOID(struct Directory) dir_old = dir;
+		//auto dir_old = dir;
 		TOID_ARRAY(TOID(struct Segment)) d = D_RO(dir)->segment;
 		TOID(struct Directory) _dir;
 		POBJ_ALLOC(pop, &_dir, struct Directory, sizeof(struct Directory), NULL, NULL);
 		D_RW(_dir)->initDirectory(D_RO(dir)->depth+1);
 		POBJ_ALLOC(pop, &D_RW(_dir)->segment, TOID(struct Segment), sizeof(TOID(struct Segment))*D_RO(_dir)->capacity, NULL, NULL);
+		/*
 		for(int i=0; i<D_RO(_dir)->capacity; ++i){
 		    POBJ_ALLOC(pop, &D_RO(D_RO(_dir)->segment)[i], struct Segment, sizeof(struct Segment), NULL, NULL);
 		    D_RW(D_RW(D_RW(_dir)->segment)[i])->initSegment(D_RO(_dir)->capacity);
-		}
+		}*/
 		for(int i=0; i<D_RO(dir)->capacity; ++i){
 		    if(i == x){
 			D_RW(D_RW(_dir)->segment)[2*i] = s[0];
@@ -260,7 +264,8 @@ RETRY:
 		pmemobj_persist(pop, (char*)&_dir, sizeof(struct Directory));
 		dir = _dir;
 		pmemobj_persist(pop, (char*)&dir, sizeof(void*));
-		POBJ_FREE(&dir_old);
+		printf("doubling directory done\n");
+		//POBJ_FREE(&dir_old);
 	    }
 #ifdef INPLACE
 	    D_RW(s[0])->sema = 0;

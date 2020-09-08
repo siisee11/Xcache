@@ -48,7 +48,7 @@ struct Segment{
     ~Segment(void){ }
 
     void initSegment(void){
-	for(int i=0; i<kNumSlot; ++i){
+	for(int i=0; i<kNumSlot; ++i){	    
 	    pair[i].key = INVALID;
 	}
 	local_depth = 0;
@@ -79,12 +79,9 @@ struct Segment{
 struct Directory{
     static const size_t kDefaultDepth = 10;
     TOID_ARRAY(TOID(struct Segment)) segment;
-    //TOID(struct Segment)* segment;
-    //Segment** segment;
-    //TOID(void*) segment;
     size_t capacity;
     size_t depth;
-    bool lock;
+    int lock;
     int sema = 0;
 
     Directory(void){ }
