@@ -17,7 +17,12 @@ main:
 	g++ -g -std=c++11 -o server multiQ_server.cpp src/CCEH.cpp $(LIBS) $(INCLUDES)
 
 run:
-	sudo ./server ./jy/FILE83
+	sudo rm -rf ./jy/*
+	sudo ./server ./jy/FILE
+
+gdb:
+	sudo rm -rf ./jy/*
+	sudo gdb ./server
 
 free:
 	sudo rm -rf ./jy/*
