@@ -889,8 +889,6 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	if (ret)
 		goto out;
 
-	BUG_ON(nsw.ns_id > 8);
-
 	msg->msg_num = cpu_to_be32(nsw.ns_id);
 	pmnet_set_nst_msg_id(&nst, nsw.ns_id);
 
@@ -903,7 +901,6 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	mutex_lock(&sc->sc_send_lock);
 	ret = pmnet_send_tcp_msg(sc->sc_sock, vec, veclen,
 			sizeof(struct pmnet_msg) + caller_bytes);
-	pr_info("%s: send nsw(ns_id=%x, key=%x, index=%x\n", __func__, nsw.ns_id, key, index);
 	mutex_unlock(&sc->sc_send_lock);
 	if (ret < 0) {
 		pr_info("error returned from pmnet_send_tcp_msg=%d\n", ret);
@@ -911,9 +908,10 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 		goto out;
 	}
 
+	pr_info("%s: send nsw( key=%x, index=%x, ns_id=%x )\n", __func__, key, index, nsw.ns_id);
+
 	/* wait on other node's handler */
 	pmnet_set_nst_status_time(&nst); /* st_status_time */
-	/* TODO: make wait_event work */
 	wait_event(nsw.ns_wq, pmnet_nsw_completed(nn, &nsw));
 
 	pmnet_update_send_stats(&nst, sc);
@@ -928,7 +926,6 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	/* PAGE_EXIST */
 	if (*status != -1) {
 		to_va = page_address(page);
-//		pr_info("page copy to page(%p), page_address=%p\n", (void *)page, (void *)to_va);
 		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
 		kfree(nsw.ns_page);
 	}
@@ -942,8 +939,9 @@ out:
 		sc_put(sc);
 	kfree(vec);
 	kfree(msg);
-	/* XXX: Why pmnet_complete_nsw is needed here?? */
-//	pmnet_complete_nsw(nn, &nsw, 0, 0, 0);
+	/* XXX: Why pmnet_complete_nsw is needed here?? 
+	 * -> To remove abnormal nsw */
+	pmnet_complete_nsw(nn, &nsw, 0, 0, 0);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pmnet_send_recv_message_vec);

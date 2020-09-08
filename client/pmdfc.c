@@ -23,7 +23,7 @@
 //#define PMDFC_DEBUG 1
 #define PMDFC_GET 1
 //#define PMDFC_RDMA 1
-//#define PMDFC_BLOOM_FILTER 1 
+#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
 //#define PMDFC_PERCPU 1
 #define PMDFC_PREALLOC 1
