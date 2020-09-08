@@ -1,5 +1,5 @@
 obj-m := pmrdma.o
-pmrdma-objs := pmrdma.o
+pmrdma-objs := net.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD		:= $(shell pwd)
