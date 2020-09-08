@@ -43,9 +43,6 @@ struct dentry *pmdfc_dentry;
 /* TODO: is it thread safe? */
 struct bloom_filter *bf;
 
-/* prepare kmem_cache for pmdfc_info */
-struct kmem_cache* info_cache;
-
 /* work queue */
 static void pmdfc_remotify_fn(struct work_struct *work);
 static struct workqueue_struct *pmdfc_wq;
@@ -53,19 +50,9 @@ static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
 
 /* list, lock and condition variables */
 static LIST_HEAD(page_list_head);
-static DEFINE_SPINLOCK(info_lock);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
 static atomic_t filled = {.counter = 0};
 static int done = 0;
-
-/* per_cpu variables */
-static DEFINE_PER_CPU(unsigned int, pmdfc_remoteputmem_occupied);
-static DEFINE_PER_CPU(unsigned char **, pmdfc_remoteputmem);
-//static DEFINE_PER_CPU(unsigned char *, pmdfc_remoteputmem2);
-static DEFINE_PER_CPU(long[5], pmdfc_remoteputmem_key);
-//static DEFINE_PER_CPU(long, pmdfc_remoteputmem2_key);
-static DEFINE_PER_CPU(pgoff_t[5], pmdfc_remoteputmem_index);
-//static DEFINE_PER_CPU(pgoff_t, pmdfc_remoteputmem2_index);
 
 /* Global page storage */
 #if defined(PMDFC_PREALLOC)
@@ -84,31 +71,15 @@ static u64 pmdfc_miss_gets;
 static u64 pmdfc_hit_gets;
 static u64 pmdfc_drop_puts;
 
-/* The information from producer to consumer */
-struct pmdfc_info 
-{
-	void *page;
-	long key;
-	pgoff_t index;
-	struct list_head list;
-};
 
 #if defined(PMDFC_WORKQUEUE)
 /* worker function for workqueue */
 static void pmdfc_remotify_fn(struct work_struct *work)
 {
-	struct pmdfc_info *info = NULL;
 	struct pmdfc_storage *storage = NULL;
-	unsigned long remain;
-	void *page = NULL;
 	pgoff_t *indexes;
-	long *keys; 
 	long key;
 	unsigned int index;
-	unsigned long flags;
-	unsigned char **tmpmem;
-	unsigned int oflags;
-	void *shadow_page = NULL;
 	int i;
 
 	int status, ret = 0;
@@ -120,38 +91,6 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	/* It must sleepable */
 	BUG_ON(irqs_disabled());
 
-#if defined(PMDFC_PERCPU)
-	/* TODO: Reconsider about preemption */
-	oflags = get_cpu_var(pmdfc_remoteputmem_occupied);
-	put_cpu_var(pmdfc_remoteputmem_occupied);
-
-//	pr_info("pmdfc-remotify: CPU %d oflags=%d\n", cpu, oflags);
-
-	tmpmem = get_cpu_var(pmdfc_remoteputmem);
-	put_cpu_var(pmdfc_remoteputmem);
-	/* Choose occupied slot and send it*/
-	for ( i = 0 ; i < 5 ; i++) {
-		if ( oflags & (1 << i) ) {
-			/* 11110 if i = 0 */
-			keys = get_cpu_var(pmdfc_remoteputmem_key);
-			indexes = get_cpu_var(pmdfc_remoteputmem_index);
-			put_cpu_var(pmdfc_remoteputmem_key);
-			put_cpu_var(pmdfc_remoteputmem_index);
-			/* XXX: can sendmsg proceed in preempt_disabled context? */
-
-			pr_info("pmdfc-remotify: CPU %d oflags=%d send tmpmem[%d]\n", cpu, oflags, i);
-			BUG_ON(tmpmem == NULL);
-			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, keys[i], indexes[i], tmpmem[i], PAGE_SIZE,
-			   0, &status);
-			oflags &= ((1 << 5) - 1) ^ (1 << i) ;
-			get_cpu_var(pmdfc_remoteputmem_occupied) = oflags;
-			put_cpu_var(pmdfc_remoteputmem_occupied);
-		}
-	}
-put_remoteputmem:
-	return;
-
-#elif defined(PMDFC_PREALLOC)
 	/* TODO: DEADLOCK AGAIN? */
 	/*
 	 * 1. Find full storage 
@@ -160,12 +99,12 @@ put_remoteputmem:
 	 */
 	unsigned int bit = 0;
 
-	for ( i = 0 ; i < 4 ; i++) {
+	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
 		if (test_bit(PS_full, &ps_cluster->cl_storages[i]->flags))
 			break;
 	}
 
-	if ( i > 3 )
+	if ( i > PMDFC_MAX_STORAGE - 1 )
 		goto not_found;
 
 	storage = ps_cluster->cl_storages[i];
@@ -182,7 +121,6 @@ retry:
 
 		/* XXX: after find bit and sleep and wake up after occupied_bit free would cause error */
 		if ( bit < 1024 ) {
-			pr_info("PMDFC_PREALLOC: get and send page from storage[%u]\n", bit);
 			key = storage->key_storage[bit];
 			index = storage->index_storage[bit];
 			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
@@ -197,65 +135,10 @@ out:
 	set_bit(PS_empty, &storage->flags);
 not_found:
 	return;
-
-#else /* normal list method */
-	allow_signal(SIGUSR1);
-	while (1)
-	{
-		wait_event_interruptible(pmdfc_worker_wq, atomic_read(&filled));
-
-		/* module unloaded */
-		if (unlikely(done == 1)) 
-			return;
-
-		spin_lock_irqsave(&info_lock, flags);
-
-		/* if someone stole info then wait again */
-		if (unlikely(list_empty(&page_list_head))) {
-			atomic_and(0, &filled);
-			spin_unlock_irqrestore(&info_lock, flags); 
-			continue;
-		}
-
-		info = list_first_entry(&page_list_head, struct pmdfc_info, list);
-		list_del_init(&info->list); 
-		spin_unlock_irqrestore(&info_lock, flags); 
-
-		page = info->page; 
-		index = info->index;
-		key = info->key; 
-		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, page, PAGE_SIZE,
-		   0, &status);
-		if ( ret < 0 )
-			pr_info("pmdfc-remotify: pmnet_send_message_fail(ret=%d)\n", ret);
-
-		info->page=NULL;
-		kfree(page);
-		kmem_cache_free(info_cache, info);
-	}
-#endif
 }
 
 #endif /* defined(PMDFC_WORKQUEUE) */
 
-
-static struct pmdfc_info* __get_new_info(void* page, long key, pgoff_t index)
-{
-	struct pmdfc_info *info;
-
-	info = kmem_cache_alloc(info_cache, GFP_ATOMIC);
-
-	if(!info) {
-		printk(KERN_ERR "memory allocation failed\n");
-		return NULL;
-	}
-
-	info->page = page;
-	info->key = key;
-	info->index = index;
-
-	return info;
-}
 
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
@@ -264,9 +147,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 {
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	void *pg_from;
-	void *shadow_page = NULL;
-	struct pmdfc_info *info;
-	unsigned long flags;
 	int i;
 
 	int status = 0;
@@ -304,48 +184,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	/* get page virtual address */
 	pg_from = page_address(page);
 
-#if defined(PMDFC_PERCPU)
-	unsigned char **tmpmem;
-	long *keys;
-	pgoff_t *indexes;
-	unsigned int oflags;
-	long target_cpu;
-	int nr_cpus;
-	
-	nr_cpus = num_online_cpus();
-//	target_cpu = (long)oid.oid[0] % nr_cpus;
-	target_cpu = index % nr_cpus;
-	pr_info(">> put page to CPU %d to serve %lx:%x\n", target_cpu, (long)oid.oid[0], index);
-
-	/* TODO: Need preempt_disabled? */
-	oflags = per_cpu(pmdfc_remoteputmem_occupied, target_cpu);
-	tmpmem = per_cpu(pmdfc_remoteputmem, target_cpu);
-	
-	keys = per_cpu(pmdfc_remoteputmem_key, target_cpu);
-	indexes = per_cpu(pmdfc_remoteputmem_index, target_cpu);
-	/* Copy page to empty space */
-	for (i = 0 ; i < 5 ; i++ ) {
-		if ( !(oflags & (1 << i)) ) {
-			memcpy(tmpmem[i], pg_from, PAGE_SIZE);	
-			keys[i] = (long)oid.oid[0];
-			indexes[i] = index;
-			per_cpu(pmdfc_remoteputmem_occupied, target_cpu) = oflags | (1 << i);
-			pr_info(">> put page to pmdfc_remoteputmem[CPU%d][%d]\n", target_cpu, i);
-			goto found;
-		}
-	}
-
-	/* If not found, Just drop that page */
-	pmdfc_drop_puts++;
-	goto out;
-
-found:
-	schedule_work_on(target_cpu, &pmdfc_remotify_work);
-//	queue_work_on(target_cpu, pmdfc_wq, &pmdfc_remotify_work);
-//	queue_work(pmdfc_wq, &pmdfc_remotify_work);
-
-#elif defined(PMDFC_PREALLOC) /* NOT PER-CPU, PREALLOC START HERE */
-
 	/* 
 	 * 1. Find empty slot.
 	 * If exist, then copy page content to it.
@@ -358,12 +196,12 @@ found:
 	BUG_ON(ps_cluster == NULL);
 	BUG_ON(ps_cluster->cl_storages[0] == NULL);
 
-	for ( i = 0 ; i < 4 ; i++) {
+	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
 		if (test_bit(PS_put, &ps_cluster->cl_storages[i]->flags))
 			break;
 	}
 
-	if ( i > 3 ) {
+	if ( i > PMDFC_MAX_STORAGE - 1 ) {
 		/* Cannot find PS_put, So make PS_empty buffer PS_put */
 		for ( i = 0 ; i < 4 ; i++) {
 			if (test_bit(PS_empty, &ps_cluster->cl_storages[i]->flags)) {
@@ -375,7 +213,7 @@ found:
 	}
 
 	/* Cannot find PS_put and also PS_empty doesn't exist */
-	if (i > 3) {
+	if ( i > PMDFC_MAX_STORAGE - 1 ) {
 		pmdfc_drop_puts++;
 		goto out;
 	}
@@ -403,24 +241,6 @@ retry:
 		goto out;
 	}
 
-#else /* normal list method */
-
-	/* copy page to shadow page */
-	shadow_page = kzalloc(PAGE_SIZE, GFP_ATOMIC);
-	if (shadow_page == NULL) {
-		printk(KERN_ERR "shadow_page alloc failed! do nothing and return\n");
-		goto out;
-	}
-	memcpy(shadow_page, pg_from, PAGE_SIZE);
-
-	info = __get_new_info(shadow_page, (long)oid.oid[0], index);
-	spin_lock_irqsave(&info_lock, flags);
-	list_add_tail(&info->list, &page_list_head);
-	spin_unlock_irqrestore(&info_lock, flags);
-	atomic_or(1, &filled);
-	wake_up_interruptible(&pmdfc_worker_wq);
-
-#endif /* PMDFC_PERCPU || PMDFC_PREALLOC */
 #endif /* PMDFC_NETWORK */
 
 #if defined(PMDFC_RDMA)
@@ -462,6 +282,12 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	data[6] = idata[2];
 	data[7] = idata[3];
 
+	/* Check whether oid.oid[1] use */
+	BUG_ON(oid.oid[1] != 0);
+	BUG_ON(oid.oid[2] != 0);
+
+	BUG_ON(page == NULL);
+
 #if defined(PMDFC_BLOOM_FILTER)
 	/* page is in or not? */
 	bloom_filter_check(bf, data, 24, &isIn);
@@ -496,7 +322,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	goto not_exists;
 #endif /* PMDFC_NETWORK end */
 
-	return -1;
+//	return -1;
 
 #if defined(PMDFC_RDMA)
 	ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
@@ -609,40 +435,6 @@ static int pmdfc_cleancache_register_ops(void)
 	return ret;
 }
 
-void pmdfc_cpu_up(int cpu)
-{
-	int i;
-	unsigned char **pp = kzalloc(5 * sizeof(char*), GFP_KERNEL);
-	for ( i = 0 ; i < 5 ; i++){
-		pp[i] = kzalloc(PAGE_SIZE, GFP_KERNEL);
-	}
-	per_cpu(pmdfc_remoteputmem, cpu) = pp;
-}
-
-void pmdfc_cpu_down(int cpu)
-{
-	kfree(per_cpu(pmdfc_remoteputmem, cpu));
-	per_cpu(pmdfc_remoteputmem, cpu) = NULL;
-}
-
-static int pmdfc_cpu_notifier(unsigned long action, void *pcpu)
-{
-	int ret, i, cpu = (long)pcpu;
-
-	switch (action) {
-		case CPU_UP_PREPARE:
-			pmdfc_cpu_up(cpu);
-			break;
-		case CPU_DEAD:
-//		case CPU_UP_CANCELED:
-			pmdfc_cpu_down(cpu);
-			break;
-		default:
-			break;
-	}
-	return NOTIFY_OK;
-}
-
 static int bloom_filter_init(void)
 {
 //	bf = bloom_filter_new(12364167);
@@ -738,21 +530,6 @@ static int __init pmdfc_init(void)
 	pmdfc_debugfs_init();
 #endif
 
-	info_cache = kmem_cache_create("info_cache", sizeof(struct pmdfc_info),
-			0, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
-
-	pr_info("PS_empty=%d!!!\n", PS_empty);
-	pr_info("PS_full=%d!!!\n", PS_full);
-
-#if defined(PMDFC_PERCPU)
-	pr_info("pmdfc: %d CPUs online...\n", num_online_cpus());
-	for_each_online_cpu(cpu) {
-		pr_info("CPU%u UP!!\n", cpu);
-		void *pcpu = (void *)(long)cpu;
-		pmdfc_cpu_notifier(CPU_UP_PREPARE, pcpu);
-	}
-
-#elif defined(PMDFC_PREALLOC)
 	/*
 	 * PREALLOC - make free spaces while load module 
 	 * Two buffers for a one CPU node
@@ -764,7 +541,6 @@ static int __init pmdfc_init(void)
 		return ret;
 	}
 	BUG_ON(ps_cluster == NULL);
-#endif
 
 #if defined(PMDFC_WORKQUEUE)
 	/* TODO: why we use singlethread here?? */
@@ -813,8 +589,6 @@ static void pmdfc_exit(void)
 	pmdfc_debugfs_exit();
 #endif
 
-	if (info_cache)
-		kmem_cache_destroy(info_cache);
 
 #if defined(PMDFC_WORKQUEUE)
 	done = 1;

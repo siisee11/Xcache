@@ -27,6 +27,8 @@ prepare:
 load:
 	insmod ./pmdfc_client.ko
 #	script/bit_mask_set.sh
+pmnet:
+	insmod ./pmnet.ko ip="115.145.173.69" port=5432
 net:
 	insmod ./pmnet.ko ip="115.145.173.69" port=5432
 	insmod ./pmdfc_client.ko
