@@ -1,5 +1,6 @@
-obj-m := pmrdma.o
+obj-m := pmrdma.o pmrdma_testing.o
 pmrdma-objs := net.o
+pmrdma_testing-objs := page_test.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD		:= $(shell pwd)
@@ -12,6 +13,6 @@ modules:
 clean:
 	make -C $(KDIR) M=$(PWD) clean
 load:
-	insmod ./pmrdma.ko ip="115.145.173.69" port=5432
-test:
-	insmod test/test_page.ko
+	insmod ./pmrdma.ko ip="115.145.173.69" port=2123
+testing:
+	insmod ./pmrdma_testing.ko

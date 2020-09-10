@@ -1558,13 +1558,8 @@ static int __init init_net_module(void){
 	pr_info(" PMDFC network module has benn installed ");
 	pr_info("*****************************************\n");
 
-	//    ret = single_write_test();
-	//    ret = test_func2();
-	/*
-	   ssleep(1);
-	   ib_unregister_client(&client);
-	   class_unregister(&client_class);*/
-	return 1;
+	/* follow 0/-E semantic */
+	return 0;
 }
 
 static void __exit exit_net_module(void){
