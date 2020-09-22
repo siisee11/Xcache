@@ -34,7 +34,7 @@ void die(const char* str){
 #define TEST_Z  do{ if(!(x)) die("Error: " #x " failed (returned zero).");}while(0)
 
 //#define MAX_NODE 				(64)
-#define MAX_NODE 				(4)
+#define MAX_NODE 				(1)
 #define SERVER_NODE_ID 				(MAX_NODE)
 #define NUM_ENTRY				(4)
 //#define REGION_PER_NODE				(4)

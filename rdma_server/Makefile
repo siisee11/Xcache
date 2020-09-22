@@ -20,6 +20,7 @@ objs: server.h rdma_server.cpp net.h net.cpp queue.h CCEH.h CCEH.cpp
 	g++ -std=c++17 -c -o net.o net.cpp ${EXTRA_CFLAGS}
 
 run:
+	sudo rm -rf /mnt/pmem0/jy/*
 	sudo ./pmdfc_server -t 2123
 
 free:

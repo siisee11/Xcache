@@ -33,9 +33,10 @@ enum ibv_mtu server_mtu_to_enum(int max_transfer_unit){
 }
 
 int poll_cq(struct ibv_cq* cq){
-	printf("polling...............\n");
 	struct ibv_wc wc;
 	int ne, i;
+
+	printf("polling...............\n");
 
 	do{
 		ne = ibv_poll_cq(cq, 1, &wc);
@@ -58,7 +59,7 @@ struct ibv_mr* ibv_register_mr(void* addr, int size, int flags){
 	return ret;
 }
 /*
-   int rdma_read(int node_id, int type, struct ibv_mr* input, uint64_t addr){
+int rdma_read(int node_id, int type, struct ibv_mr* input, uint64_t addr){
    struct ibv_send_wr wr;
    struct ibv_send_wr* bad_wr;
    struct ibv_sge sge[2];
@@ -109,7 +110,7 @@ struct ibv_mr* ibv_register_mr(void* addr, int size, int flags){
    }
    ibv_dereg_mr(output);
    return 1;
-   }*/
+}*/
 
 int post_recv(int node_id){
 	struct ibv_recv_wr wr;
@@ -155,8 +156,8 @@ int post_meta_request(int node_id, int pid, int type, uint32_t num, int tx_state
 	wr.wr.rdma.remote_addr = (uintptr_t)(ctx->remote_mm[node_id] + offset);
 	wr.wr.rdma.rkey = ctx->rkey[node_id];
 
-	//dprintf("[%s]: sending wr.imm_data: %lu\t htonl(wr.imm_data): %lu\n", __func__, wr.imm_data, htonl(wr.imm_data));
-	//dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, num, tx_state, num);
+	dprintf("[%s]: sending wr.imm_data: %u\t htonl(wr.imm_data): %u\n", __func__, wr.imm_data, htonl(wr.imm_data));
+	dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 	if(ibv_post_send(ctx->qp[node_id], &wr, &bad_wr)){
 		fprintf(stderr, "[%s] ibv_post_send to node %d failed\n", __func__, node_id);
 		return 1;
@@ -487,21 +488,16 @@ void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, 
 	*type = (int)((target >> 12) & 0x0000000f);
 	*pid = (int)((target >> 16) & 0x000000ff);
 	*node_id = (int)((target >> 24) & 0x000000ff);
-	/*
-	 *size = (uint32_t)(target & 0xffffffff);
-	 *type = (int)((target >> 32) & 0xffff);
-	 *pid = (int)((target >> 48) & 0xff);
-	 *node_id = (int)((target >> 56) & 0xff);*/
 }
 
-//void server_poll_cq(struct ibv_cq* cq){
-void* server_poll_cq(void* cq_context){
+void* server_recv_poll_cq(void* cq_context){
 	struct ibv_cq* cq = (struct ibv_cq*)cq_context;
 	struct ibv_wc wc;
 	int ne;
 	static int num = 1;
 	printf("[%s] polling ready...\n", __func__);
 	while(1){
+		printf("[%s] polling start...\n", __func__);
 		ne = 0;
 		do{
 			ne += ibv_poll_cq(cq, 1, &wc);
@@ -523,10 +519,10 @@ void* server_poll_cq(void* cq_context){
 			uint32_t num;
 			//bit_unmask(htonl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
 			bit_unmask(ntohl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
-			dprintf("[%s]: imm_data: %lu\t htonl(imm_data): %lu\n", __func__, wc.imm_data, htonl(wc.imm_data));
+			dprintf("[%s]: imm_data: %x\t htonl(imm_data): %x\n", __func__, wc.imm_data, htonl(wc.imm_data));
 			post_recv(node_id);
 			if(type == MSG_WRITE_REQUEST){
-				//dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
+				dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
@@ -535,7 +531,7 @@ void* server_poll_cq(void* cq_context){
 				enqueue(request_queue, (void*)new_request);
 			}
 			else if(type == MSG_WRITE){
-				//dprintf("[%s]: received MSG_WRITE\n", __func__);
+				dprintf("[%s]: received MSG_WRITE\n", __func__);
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
@@ -544,7 +540,7 @@ void* server_poll_cq(void* cq_context){
 				enqueue(request_queue, (void*)new_request);
 			}
 			else if(type == MSG_READ_REQUEST){
-				//dprintf("[%s]: received MSG_READ_REQUEST\n", __func__);
+				dprintf("[%s]: received MSG_READ_REQUEST\n", __func__);
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
@@ -553,13 +549,13 @@ void* server_poll_cq(void* cq_context){
 				enqueue(request_queue, (void*)new_request);
 			}
 			else if(type == MSG_READ_REPLY){
-				//dprintf("[%s]: received MSG_READ_REPLY\n", __func__);
+				dprintf("[%s]: received MSG_READ_REPLY\n", __func__);
 				free((void*)ctx->temp_log[node_id][pid]);
 				//munmap((void*)ctx->temp_log[node_id][pid], num*PAGE_SIZE);
 			}
 		}
 		else if((int)wc.opcode == IBV_WC_RDMA_READ){
-			//dprintf("[%s]: received WC_RDMA_READ\n", __func__);
+			dprintf("[%s]: received WC_RDMA_READ\n", __func__);
 			/* the client is reading data from read region*/
 		}
 		else{
@@ -606,7 +602,7 @@ void* event_handler(void*){
 				TOID(char) temp;
 				POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
 				uint64_t temp_addr = (uint64_t)ctx->log_pop + temp.oid.off;
-				memcpy((void*)temp_addr, (ptr+i*PAGE_SIZE), PAGE_SIZE);
+				memcpy((void*)temp_addr, (void *)((uint8_t*)ptr+i*PAGE_SIZE), PAGE_SIZE);
 				pmemobj_persist(ctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);
 
 				//char* temp = (char*)malloc(sizeof(char)*PAGE_SIZE);
@@ -616,7 +612,7 @@ void* event_handler(void*){
 
 				D_RW(ctx->hashtable)->Insert(ctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(ctx->hashtable)->Get(*key);
-				fprintf(stderr, "Inserted value for key %llu (%llx)\n", *key, *key);
+				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
 
 				key += METADATA_SIZE;
 			}
@@ -635,12 +631,12 @@ void* event_handler(void*){
 			void* values[new_request->num];
 			bool abort = false;
 			for(int i=0; i<new_request->num; i++){
-				uint64_t* key = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + i*METADATA_SIZE);
-				dprintf("Target Key is %llu (%llx)\n", *key, *key);
+				uint64_t* key = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + i*METADATA_SIZE); 
+				dprintf("Target Key is %lu (%lx)\n", *key, *key);
 				values[i] = (void*)D_RW(ctx->hashtable)->Get(*key);
 				//search_cnt++;
 				if(!values[i]){
-					//dprintf("Value for key[%llu] not found\n", new_request->keys[i]);
+//					dprintf("Value for key[%llu] not found\n", new_request->keys[i]);
 					printf("Value is not found!!\n");
 					abort = true;
 				}
@@ -659,9 +655,9 @@ void* event_handler(void*){
 				//*addr = (uint64_t)&ptr;
 				//*addr = (uint64_t)values[0];
 				*addr = (uint64_t)page;
-				dprintf("allocated page addr: %llx\n", *addr);
-				//dprintf("[%s]: addr: %llx, page: %llx\n", __func__, *addr, &page);
-				//dprintf("[%s]: msg double check: %s\n", __func__, (char*)page);
+				dprintf("allocated page addr: %lx\n", *addr);
+				dprintf("[%s]: addr: %lx, page: %p\n", __func__, *addr, &page);
+				dprintf("[%s]: msg double check: %s\n", __func__, (char*)page);
 				post_meta_request(new_request->node_id, new_request->pid, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_READY, sizeof(uint64_t), addr, offset);
 			}
 			else{
@@ -759,6 +755,8 @@ static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* de
 				IBV_QP_MAX_QP_RD_ATOMIC)){
 		die("ibv_modify_qp to RTS failed\n");
 	}
+
+	printf("[%s] modify_qp to RTS succeeded\n", __func__);
 	return 0;
 }
 
@@ -769,6 +767,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 	char index_path[32] = "/mnt/pmem0/jy/pmem";
 	char log_path[32] = "/mnt/pmem0/jy/log";
 	const size_t hashtable_initialSize = 1024*16*4; 
+
 	ctx = (struct server_context*)malloc(sizeof(struct server_context));
 	ctx->node_id = SERVER_NODE_ID;
 	ctx->size = size;
@@ -830,9 +829,6 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 	if(!ctx->pd)
 		die("ibv_alloc_pd failed\n");
 
-	struct ibv_odp_caps caps;
-
-
 	flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_ON_DEMAND;
 	//    flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 	//    ctx->mr = ibv_reg_mr(ctx->pd, (void*)ctx->mm, sizeof(char)*4096 * 4, flags);
@@ -859,20 +855,21 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 	//    ctx->recv_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, NULL, 0);
 	//    ctx->recv_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, ctx->channel, 0);
 	QP_DEPTH = rx_depth+1;
-	ctx->recv_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, NULL, 0);
+	ctx->recv_cq = ibv_create_cq(ctx->context, QP_DEPTH, NULL, NULL, 0);
 	if(!ctx->recv_cq){
 		fprintf(stderr, "ibv_create_cq for recv_cq failed\n");
 		goto dereg_mr;
 	}
 
 	//    ctx->send_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, NULL, 0);
-	ctx->send_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, ctx->channel, 0);
+//	ctx->send_cq = ibv_create_cq(ctx->context, QP_DEPTH, NULL, ctx->channel, 0);
+	ctx->send_cq = ibv_create_cq(ctx->context, QP_DEPTH, NULL, NULL, 0);
 	if(!ctx->send_cq){
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
 		goto destroy_qp;
 	}
 
-	printf("[%s] Allocate queue pair region\n", __func__);
+//	printf("[%s] Allocate queue pair region\n", __func__);
 	ctx->qp = (struct ibv_qp**)malloc(MAX_NODE * sizeof(struct ibv_qp*));
 	for(int i=0; i<MAX_NODE; i++){
 		struct ibv_qp_init_attr init_attr;
@@ -895,6 +892,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 			fprintf(stderr, "ibv_create_qp[%d] failed\n", i);
 			goto destroy_qp;
 		}
+		printf("[%s] queue pair[%d] created\n", __func__, i);
 	}
 
 	return ctx;
@@ -978,6 +976,7 @@ void* establish_conn(void*){
 		local_node.mm = ctx->local_mm + (cur_node * LOCAL_META_REGION_SIZE);
 		local_node.rkey = ctx->mr->rkey;
 		local_node.gid = gid;
+		dprintf("[TCP] sent local data: node_id(%d), lid(%d), qpn(%d), psn(%d), mm(%lx), rkey(%x)\n", local_node.node_id, local_node.lid, local_node.qpn, local_node.psn, local_node.mm, local_node.rkey);
 		//	ret = tcp_send(fd, &local_node, sizeof(struct node_info));
 		ret = write(fd, (char*)&local_node, sizeof(struct node_info));
 		if(ret != sizeof(struct node_info)){
@@ -995,6 +994,7 @@ void* establish_conn(void*){
 			close(sock);
 			exit(1);
 		}
+		dprintf("[TCP] received node_id(%d), lid(%d), qpn(%d), psn(%d), mm(%lx), rkey(%x)\n", remote_node.node_id, remote_node.lid, remote_node.qpn, remote_node.psn, remote_node.mm, remote_node.rkey);
 
 		ctx->remote_mm[remote_node.node_id] = remote_node.mm;
 		ctx->rkey[remote_node.node_id] = remote_node.rkey;
@@ -1074,7 +1074,7 @@ int test_func3(){
 
 	ret = query_qp(ctx->qp[0]);
 	ret = rdma_send(0, (void*)msg[0], 64);
-	printf("posted rdma_send at addr %llu\n", (uint64_t)msg[0]);
+	printf("posted rdma_send at addr %lu\n", (uint64_t)msg[0]);
 	if(ret){
 		fprintf(stderr, "rdma_send failed, rechecking...\n");
 	}
@@ -1088,16 +1088,6 @@ int test_func3(){
 	return 0;
 }
 
-int test_func1(){
-	uint64_t* addr = (uint64_t*)ctx->local_mm;
-	*addr = 0;
-	printf("checking %x addr\n", addr);
-	while(*addr == 0){
-		usleep(1);
-	}
-	return 0;
-}
-
 int test_func2(){
 	char* msg[64];
 	int ret;
@@ -1108,11 +1098,7 @@ int test_func2(){
 	if(ret){
 		fprintf(stderr, "rdma_receive failed, rechecking...\n");
 	}
-	printf("posted rdma_recv at addr %llu\n", addr);
-	/*    ret = poll_cq(ctx->send_cq);
-		  if(ret){
-		  fprintf(stderr, "poll_send_cq failed\n");
-		  }*/
+	printf("posted rdma_recv at addr %lu\n", addr);
 
 	ret = poll_cq(ctx->recv_cq);
 	if(ret){
@@ -1124,7 +1110,7 @@ int test_func2(){
 }
 
 int test_func(){
-	printf("local_mm(%llu) mr_addr(%llu)\n", ctx->local_mm, ctx->mr->addr);
+	printf("local_mm(%lu) mr_addr(%p)\n", ctx->local_mm, ctx->mr->addr);
 	uint64_t* check = (uint64_t*)ctx->local_mm;
 	while(*check == 0){
 		usleep(1);
@@ -1180,7 +1166,7 @@ int server_init_interface(){
 	ibv_free_device_list(dev_list);
 
 	pthread_create(&connection_thread, NULL, &establish_conn, NULL);
-	pthread_create(&thread_poll_cq, NULL, &server_poll_cq, (void*)ctx->recv_cq);
+	pthread_create(&thread_poll_cq, NULL, &server_recv_poll_cq, (void*)ctx->recv_cq);
 	pthread_create(&event_handler_thread, NULL, &event_handler, NULL);
 
 	return 0;

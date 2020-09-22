@@ -12,7 +12,7 @@
 #include <stddef.h>
 
 
-//#define DEBUG
+#define DEBUG
 #ifdef DEBUG
 #define dprintf(...) do{ fprintf(stderr, __VA_ARGS__); fflush(stdout);} while(0)
 #else
