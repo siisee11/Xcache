@@ -7,10 +7,10 @@
 #include <linux/mm_types.h>
 #include <linux/random.h>
 #include <linux/kthread.h>
-#include "net.h"
+#include "rdma.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 65)
+#define TOTAL_CAPACITY (PAGE_SIZE * 64)
 //#define TOTAL_CAPACITY (1024*1024*1024)
 //#define TOTAL_CAPACITY (PAGE_SIZE * 4)
 //#define TOTAL_CAPACITY (1024*1024)
@@ -32,47 +32,81 @@ struct thread_data{
 struct task_struct** write_threads;
 struct task_struct** read_threads;
 
+int single_write_test(void* arg){
+	struct thread_data* my_data = (struct thread_data*)arg;
+	int tid = my_data->tid;
+	int ret;
+	uint64_t key;
+
+	key = keys[tid][0];
+	ret = generate_single_write_request(vpages[tid][0], key);
+
+	complete(my_data->comp);
+	return 0;
+}
+
 int write_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int tid = my_data->tid;
 	int i, ret;
-	uint64_t key[1];
-
+	uint64_t key;
+#if 0
 	for(i=0; i<ITERATIONS; i++){
 		key[0] = keys[tid][i];
 		ret = generate_write_request((void**)&vpages[tid][i], key, 1);
+	}
+#endif
+
+	for(i = 0; i < ITERATIONS; i++){
+		key = keys[tid][i];
+		ret = generate_single_write_request(vpages[tid][i], key);
 	}
 
 	complete(my_data->comp);
 	return 0;
 }
 
+int single_read_test(void* arg){
+	struct thread_data* my_data = (struct thread_data*)arg;
+	int ret;
+	int tid = my_data->tid;
+	int result = 0;
+	uint64_t key;
+
+	key = keys[tid][0];
+	ret = generate_single_read_request(return_page[tid], key);
+
+	if(memcmp(return_page[tid], vpages[tid][0], PAGE_SIZE) != 0){
+		printk("failed Searching for key %llu\n", key);
+		result++;
+	}
+	printk("failedSearch: %d\n", result);
+	complete(my_data->comp);
+	return 0;
+}
+
+
 int read_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int i, ret;
 	int tid = my_data->tid;
-	//char temp[PAGE_SIZE];
-	//void* temp = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
-	//void* temp[PAGE_SIZE];
-	//char temp[PAGE_SIZE];
 	int result = 0;
-	uint64_t key[1];
+	uint64_t key;
 
-	for(i=0; i<ITERATIONS; i++){
-		//memcpy(&key[tid][i], vpages[tid][i], sizeof(uint64_t));
-		key[0] = keys[tid][i];
-		ret = generate_read_request((void**)&return_page[tid], key, 1);
+	for(i = 0; i < ITERATIONS; i++){
+		key = keys[tid][i];
+		ret = generate_single_read_request(return_page[tid], key);
 
 		if(memcmp(return_page[tid], vpages[tid][i], PAGE_SIZE) != 0){
-			printk("failed Searching for key %llu\n", key[0]);
+			printk("failed Searching for key %llu\n", key);
 			result++;
-			//atomic_inc(&failedSearch);
 		}
 	}
 	printk("failedSearch: %d\n", result);
 	complete(my_data->comp);
 	return 0;
 }
+
 /*
    int write_page(void* arg){
    struct thread_data* my_data = (struct thread_data*)arg;
@@ -127,7 +161,7 @@ int main(void){
 	pr_info("************************************************");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
-		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
 		//write_threads[i] = kthread_create((void*)&write_page, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
@@ -153,8 +187,7 @@ int main(void){
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){
-		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
-		//read_threads[i] = kthread_create((void*)&read_page, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
@@ -237,7 +270,7 @@ int init_pages(void){
 		goto ALLOC_ERR;
 	}
 	for(i=0; i<THREAD_NUM; i++){
-		keys[i] = (uint64_t*)vmalloc(sizeof(uint64_t)*ITERATIONS);
+		keys[i] = (uint64_t*)kmalloc(sizeof(uint64_t)*ITERATIONS, GFP_KERNEL);
 		for(j=0; j<ITERATIONS; j++){
 			keys[i][j] = ++key;
 		}
@@ -258,9 +291,13 @@ int init_pages(void){
 
 
 ALLOC_ERR:
-	if(write_threads) kfree(write_threads);
-	if(read_threads) kfree(read_threads);
-	if(comp) kfree(comp);
+	if(write_threads) 
+		kfree(write_threads);
+	if(read_threads) 
+		kfree(read_threads);
+	if(comp) 
+		kfree(comp);
+
 	for(i=0; i<THREAD_NUM; i++){
 		if(return_page[i]) kfree(return_page[i]);
 		for(j=0; j<ITERATIONS; j++){
@@ -268,8 +305,11 @@ ALLOC_ERR:
 		}
 		if(vpages[i]) vfree(vpages[i]);
 	}
-	if(return_page) kfree(return_page);
-	if(vpages) kfree(vpages);
+
+	if(return_page) 
+		kfree(return_page);
+	if(vpages) 
+		kfree(vpages);
 	return 1;
 }
 

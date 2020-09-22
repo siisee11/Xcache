@@ -27,6 +27,7 @@
 #include <rdma/ib_verbs.h>
 #include <rdma/ib_umem.h>
 #include <rdma/ib_user_verbs.h>
+#include <rdma/rdma_cm.h>
 
 #define DEPTH 64
 
@@ -48,8 +49,13 @@
 #define GET_LOCAL_META_REGION(addr, id)	 (addr + NUM_ENTRY * METADATA_SIZE * id)
 #define GET_REMOTE_META_REGION(addr, id) (addr + NUM_ENTRY * METADATA_SIZE * id)
 
+#define REQUEST_MAX_BATCH (4)
 
+#define PMDFC_RDMA_CONNECT_TIMEOUT_MS 	3000
 
+#define PMDFC_RDMA_MAX_SEGMENTS 		256
+
+#define PMDFC_RDMA_MAX_INLINE_SEGMENTS 	4
 
 enum{
 	MSG_WRITE_REQUEST,
@@ -81,7 +87,7 @@ enum{
 	PROCESS_STATE_DONE		/* returning read pages completed */
 };
 
-struct kmem_cache* page_cache;
+//struct kmem_cache* page_cache;
 struct kmem_cache* request_cache;
 struct kmem_cache* buffer_cache;
 
@@ -115,7 +121,9 @@ struct client_context{
 	volatile int* process_state;
 
 	//atomic64_t bitmap;
-	DECLARE_BITMAP(bitmap, 64);
+//	DECLARE_BITMAP(bitmap, 64);
+	unsigned int bitmap_size;
+	unsigned long *bitmap;
 	//uint64_t bitmap;
 	uint64_t** temp_log;
 
@@ -163,6 +171,45 @@ struct request_struct{
 	   };*/
 };
 
+struct pmdfc_rdma_queue;
+struct pmdfc_rdma_request {
+//	struct pmdfc_request	req;
+	struct ib_mr		*mr;
+//	struct pmdfc_rdma_qe	sqe;
+//	union pmdfc_result	result;
+	__le16			status;
+	refcount_t		ref;
+	struct ib_sge		sge[1 + PMDFC_RDMA_MAX_INLINE_SEGMENTS];
+	u32			num_sge;
+	int			nents;
+	struct ib_reg_wr	reg_wr;
+	struct ib_cqe		reg_cqe;
+	struct pmdfc_rdma_queue  *queue;
+	struct sg_table		sg_table;
+	struct scatterlist	first_sgl[];
+};
+
+enum pmdfc_rdma_queue_flags {
+	PMDFC_RDMA_Q_ALLOCATED		= 0,
+	PMDFC_RDMA_Q_LIVE		= 1,
+	PMDFC_RDMA_Q_TR_READY		= 2,
+};
+
+struct pmdfc_rdma_queue {
+//	struct pmdfc_rdma_qe	*rsp_ring;
+	int			queue_size;
+	size_t			cmnd_capsule_len;
+//	struct pmdfc_rdma_ctrl	*ctrl;
+//	struct pmdfc_rdma_device	*device;
+	struct ib_cq		*ib_cq;
+	struct ib_qp		*qp;
+
+	unsigned long		flags;
+	struct rdma_cm_id	*cm_id;
+	int			cm_error;
+	struct completion	cm_done;
+};
+
 /*
    struct request_struct{
    int node_id;
@@ -186,9 +233,6 @@ struct node_info{
 	union ib_gid gid;
 };
 
-static void poll_cq(struct ib_cq* cq, void* cq_ctx);
-static void add_one(struct ib_device* dev);
-
 uintptr_t ib_reg_mr_addr(void* addr, uint64_t length);
 struct mr_info* ib_reg_mr(void* addr, uint64_t length, enum ib_access_flags flags);
 static struct client_context* client_init_ctx(void);
@@ -204,9 +248,11 @@ int modify_qp(int my_psn, int sl, struct node_info* server);
 void cleanup_resource(void);
 
 int generate_write_request(void** pages, uint64_t* keys, int num);
+int generate_single_write_request(void*, uint64_t);
 //int generate_write_request(struct page** pages, int size);
 //int generate_read_request(uint64_t* keys, int size);
 int generate_read_request(void** pages, uint64_t* keys, int num);
+int generate_single_read_request(void* ,uint64_t);
 
 
 int find_and_set_nextbit(void);
@@ -228,6 +274,7 @@ int post_write_request(int pid, int type, int size, uintptr_t addr, uint64_t off
 int post_data_request(int node_id, int type, int size, uintptr_t addr, int imm_data, uint64_t offset);
 int post_recv(void);
 
+int query_qp(struct ib_qp* qp);
 
 int send_message(int node_id, int type, void* addr, int size, uint64_t inbox_addr);
 int recv_message(int node_id);
