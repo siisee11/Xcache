@@ -156,7 +156,7 @@ int post_meta_request(int node_id, int pid, int type, uint32_t num, int tx_state
 	wr.wr.rdma.remote_addr = (uintptr_t)(ctx->remote_mm[node_id] + offset);
 	wr.wr.rdma.rkey = ctx->rkey[node_id];
 
-	dprintf("[%s]: sending wr.imm_data: %u\t htonl(wr.imm_data): %u\n", __func__, wr.imm_data, htonl(wr.imm_data));
+//	dprintf("[%s]: sending wr.imm_data: %u\t htonl(wr.imm_data): %u\n", __func__, wr.imm_data, htonl(wr.imm_data));
 	dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 	if(ibv_post_send(ctx->qp[node_id], &wr, &bad_wr)){
 		fprintf(stderr, "[%s] ibv_post_send to node %d failed\n", __func__, node_id);
@@ -497,7 +497,6 @@ void* server_recv_poll_cq(void* cq_context){
 	static int num = 1;
 	printf("[%s] polling ready...\n", __func__);
 	while(1){
-		printf("[%s] polling start...\n", __func__);
 		ne = 0;
 		do{
 			ne += ibv_poll_cq(cq, 1, &wc);
@@ -519,7 +518,7 @@ void* server_recv_poll_cq(void* cq_context){
 			uint32_t num;
 			//bit_unmask(htonl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
 			bit_unmask(ntohl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
-			dprintf("[%s]: imm_data: %x\t htonl(imm_data): %x\n", __func__, wc.imm_data, htonl(wc.imm_data));
+			dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 			post_recv(node_id);
 			if(type == MSG_WRITE_REQUEST){
 				dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
@@ -578,7 +577,9 @@ void* event_handler(void*){
 		new_request = (struct request_struct*)dequeue(request_queue);
 
 		if(new_request->type == MSG_WRITE_REQUEST){
-			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
+			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
+			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages (node=%x, pid=%x, key=%lx)\n", 
+					new_request->num, new_request->node_id, new_request->pid, *key);
 			//TOID(char) page;
 			//POBJ_ALLOC(ctx->pop, &page, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
 			void* page = (void*)malloc(new_request->num * PAGE_SIZE);
@@ -592,12 +593,13 @@ void* event_handler(void*){
 			*addr = (uint64_t)page;
 			//*addr = (uint64_t)&ptr;
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REQUEST_REPLY, new_request->num, TX_WRITE_READY, sizeof(uint64_t), addr, offset);
-			dprintf("Processed [MSG_WRITE_REQUEST] %d num pages from node %d with %d pid, addr(%lx)\n", new_request->num, new_request->node_id, new_request->pid, *addr);
+			dprintf("Processed  [MSG_WRITE_REQUEST] %d num pages (node=%x pid=%x)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else if(new_request->type == MSG_WRITE){
-			dprintf("Processing [MSG_WRITE] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
 			void* ptr = (void*)ctx->temp_log[new_request->node_id][new_request->pid];
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
+			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, pid=%x, key=%lx)\n", 
+					new_request->num, new_request->node_id, new_request->pid, *key);
 			for(int i=0; i<new_request->num; i++){
 				TOID(char) temp;
 				POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
@@ -619,10 +621,8 @@ void* event_handler(void*){
 			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
 			/* if successfully inserted */
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REPLY, new_request->num, TX_WRITE_COMMITTED, 0, NULL, offset);
-			/* if insertion failed */
-			//	    post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REPLY, new_request->size, TX_WRITE_ABORTED, NULL, offset);
 			free(ptr);
-			dprintf("Processed [MSG_WRITE] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
+			dprintf("Processed  [MSG_WRITE] %d num pages (node=%d pid=%d)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else if(new_request->type == MSG_READ_REQUEST){
 			dprintf("Processing [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
