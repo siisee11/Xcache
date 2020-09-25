@@ -87,9 +87,7 @@ enum{
 	PROCESS_STATE_DONE		/* returning read pages completed */
 };
 
-//struct kmem_cache* page_cache;
 struct kmem_cache* request_cache;
-struct kmem_cache* buffer_cache;
 
 char* test_mm;
 uintptr_t test_ptr;
@@ -106,6 +104,10 @@ struct client_context{
 	struct ib_qp* qp;
 	struct ib_mr* mr;
 	struct ib_port_attr port_attr;
+
+	struct kref 		kref;
+	struct list_head 	req_list;
+	spinlock_t   lock;
 
 	int node_id;
 	uint64_t local_mm;
@@ -159,7 +161,7 @@ struct send_struct{
 };
 
 struct request_struct{
-	struct list_head list; // 16
+	struct list_head entry; // 16
 	int type; // 4
 	int pid;  // 4
 	int64_t num; // 8
@@ -235,8 +237,6 @@ struct node_info{
 
 uintptr_t ib_reg_mr_addr(void* addr, uint64_t length);
 struct mr_info* ib_reg_mr(void* addr, uint64_t length, enum ib_access_flags flags);
-static struct client_context* client_init_ctx(void);
-static int client_init_interface(void);
 int establish_conn(void);
 int tcp_conn(void);
 int tcp_recv(struct socket* sock, char* buf, int len);
@@ -264,13 +264,10 @@ uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num);
 void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, uint32_t* num);
 
 int post_meta_request_batch(int pid, int type, int size, int tx_state, int len, void* addr, uint64_t offset, int batch_size);
-int post_meta_request(int pid, int type, int size, int tx_state, int len, void* addr, uint64_t offset);
 //int post_read_request_batch(int pid, int type, uint32_t size, uintptr_t* addr, uint64_t offset, int batch_size);
 //int post_read_request(int pid, int type, uint32_t size, uintptr_t addr, uint64_t offset);
 int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size);
-int post_read_request(uintptr_t addr, uint64_t offset);
 int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uint64_t offset, int batch_size);
-int post_write_request(int pid, int type, int size, uintptr_t addr, uint64_t offset);
 int post_data_request(int node_id, int type, int size, uintptr_t addr, int imm_data, uint64_t offset);
 int post_recv(void);
 
