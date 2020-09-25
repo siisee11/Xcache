@@ -11,12 +11,7 @@
 
 #define THREAD_NUM 1
 #define TOTAL_CAPACITY (PAGE_SIZE * 64)
-//#define TOTAL_CAPACITY (1024*1024*1024)
-//#define TOTAL_CAPACITY (PAGE_SIZE * 4)
-//#define TOTAL_CAPACITY (1024*1024)
-//#define TOTAL_CAPACITY (1024*1024*1024) // 1G
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
-//#define ITERATIONS 512
 
 void*** vpages;
 atomic_t failedSearch;
@@ -50,16 +45,11 @@ int write_test(void* arg){
 	int tid = my_data->tid;
 	int i, ret;
 	uint64_t key;
-#if 0
-	for(i=0; i<ITERATIONS; i++){
-		key[0] = keys[tid][i];
-		ret = generate_write_request((void**)&vpages[tid][i], key, 1);
-	}
-#endif
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
 		ret = generate_single_write_request(vpages[tid][i], key);
+		ssleep(1);
 	}
 
 	complete(my_data->comp);
@@ -107,43 +97,6 @@ int read_test(void* arg){
 	return 0;
 }
 
-/*
-   int write_page(void* arg){
-   struct thread_data* my_data = (struct thread_data*)arg;
-   int from, to;
-   int i, ret;
-
-   from = (ITERATIONS / THREAD_NUM) * (my_data->tid);
-   to = (ITERATIONS / THREAD_NUM) * (my_data->tid+1);
-   for(i=from; i<to; i++){
-   ret = generate_write_request((void**)&pages[i], 1);
-   }
-
-   complete(my_data->comp);
-   return 0;
-   }
-
-   int read_page(void* arg){
-   struct thread_data* my_data = (struct thread_data*)arg;
-   int from, to;
-   int i, ret;
-   void* page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
-   uint64_t key[1];
-
-   from = (ITERATIONS / THREAD_NUM) * (my_data->tid);
-   to = (ITERATIONS / THREAD_NUM) * (my_data->tid+1);
-
-   for(i=from; i<to; i++){
-   key[0] = pages[i]->index;
-   ret = generate_read_request(&page, key, 1);
-   if(((struct page*)page)->index != key[0])
-   atomic_inc(&failedSearch);
-   }
-   complete(my_data->comp);
-   return 0;
-   }*/
-
-
 int main(void){
 	int i;
 	ktime_t start, end;
@@ -161,8 +114,8 @@ int main(void){
 	pr_info("************************************************");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
-		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
-		//write_threads[i] = kthread_create((void*)&write_page, (void*)args[i], "page_writer");
+//		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
 
@@ -181,6 +134,7 @@ int main(void){
 		args[i]->comp = &comp[i];
 	}
 
+#if 0
 	pr_info("************************************************");
 	pr_info("   running read thread functions               ");
 	pr_info("************************************************");
@@ -200,6 +154,7 @@ int main(void){
 	pr_info("************************************************");
 	pr_info("   complete read thread functions: time( %llu ) usec", elapsed);
 	pr_info("************************************************");
+#endif
 
 	for(i=0; i<THREAD_NUM; i++){
 		kfree(args[i]);
@@ -213,8 +168,6 @@ int init_pages(void){
 	int i, j;
 	uint64_t key = 0;
 	u64 rand;
-
-	pr_info("pmrdma test: initialize pages\n");
 
 	write_threads = (struct task_struct**)kmalloc(sizeof(struct task_struct*)*THREAD_NUM, GFP_KERNEL);
 	if(!write_threads){
@@ -287,6 +240,8 @@ int init_pages(void){
 	}
 
 	atomic_set(&failedSearch, 0);
+
+	printk(KERN_INFO "[  OK  ] pmdfc rdma initialization pass");
 	return 0;
 
 
@@ -313,15 +268,31 @@ ALLOC_ERR:
 	return 1;
 }
 
+void show_test_info(void){
+
+	pr_info("+------------ PMDFC RDMA TEST INFO --------------+\n");
+	pr_info("| NUMBER OF THREAD: %d  \t\t\t\t|\n", THREAD_NUM);
+	pr_info("| TOTAL CAPACITY  : %ld \t\t\t|\n", TOTAL_CAPACITY);
+	pr_info("| ITERATIONS      : %ld \t\t\t\t|\n", ITERATIONS);
+	pr_info("+------------------------------------------------+\n");
+
+	return;
+}
+
 
 static int __init init_test_module(void){
-	int ret = 0;;
+	int ret = 0;
+
+	show_test_info();
+	ssleep(3);
 
 	ret = init_pages();
 	if(ret){
 		printk(KERN_ALERT "module initialization failed\n");
 		return -1;
 	}
+
+	ssleep(3);
 
 	ret = main();
 	if(ret){

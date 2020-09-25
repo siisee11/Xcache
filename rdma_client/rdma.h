@@ -107,7 +107,7 @@ struct client_context{
 
 	struct kref 		kref;
 	struct list_head 	req_list;
-	struct mutex 		lock;
+	spinlock_t   lock;
 
 	int node_id;
 	uint64_t local_mm;
