@@ -25,8 +25,6 @@
 #include <net/tcp.h>
 
 #include <rdma/ib_verbs.h>
-#include <rdma/ib_umem.h>
-#include <rdma/ib_user_verbs.h>
 #include <rdma/rdma_cm.h>
 
 #define DEPTH 64
@@ -97,8 +95,9 @@ spinlock_t list_lock;
 struct client_context{
 	struct rdma_cm_id* cm_id;
 	struct ib_context* context;
-	struct ib_comp_channel* channel;
+	struct ib_device 	*dev;
 	struct ib_pd* pd;
+	struct ib_comp_channel* channel;
 	struct ib_cq* recv_cq;
 	struct ib_cq* send_cq;
 	struct ib_qp* qp;
@@ -235,7 +234,7 @@ struct node_info{
 	union ib_gid gid;
 };
 
-uintptr_t ib_reg_mr_addr(void* addr, uint64_t length);
+uint64_t ib_reg_mr_addr(void* addr, uint64_t length);
 struct mr_info* ib_reg_mr(void* addr, uint64_t length, enum ib_access_flags flags);
 int establish_conn(void);
 int tcp_conn(void);
