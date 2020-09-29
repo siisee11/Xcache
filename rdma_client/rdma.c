@@ -10,6 +10,23 @@ struct client_context* ctx = NULL;
 int ib_port = 1;
 enum ib_mtu mtu;
 
+enum pmnet_system_error {
+	PMNET_ERR_NONE = 0,
+	PMNET_ERR_NO_HNDLR,
+	PMNET_ERR_OVERFLOW,
+	PMNET_ERR_DIED,
+	PMNET_ERR_MAX
+};
+
+struct pmdfc_rdma_status_wait {
+	enum pmnet_system_error	ns_sys_status;
+	s32			ns_status;
+	int			ns_id;
+	void* 		ns_page;
+	wait_queue_head_t	ns_wq;
+	struct list_head	ns_node_item;
+};
+
 struct pmdfc_rdma_device {
 	struct ib_device	*dev;
 	struct ib_pd		*pd;
@@ -33,6 +50,14 @@ struct ib_pd* ctx_pd;
 
 int pmdfc_rdma_post_recv(void);
 
+/**
+ * ib_reg_mr_addr - map DMA mapping to addr and validate it.
+ *
+ * @addr: base address of target area.
+ * @size: size from base address.
+ *
+ * If succeeds, return DMA-able address.
+ */
 uint64_t ib_reg_mr_addr(void* addr, uint64_t size){
 	uint64_t ret;	
 	ret = ib_dma_map_single(ctx->dev, addr, size, DMA_BIDIRECTIONAL);
@@ -82,25 +107,26 @@ static int client_poll_recv_cq(struct ib_cq* cq){
 			int node_id, pid, type, tx_state;
 			uint32_t num;
 			bit_unmask(ntohl(wc.ex.imm_data), &node_id, &pid, &type, &tx_state, &num);
-			dprintk("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
+//			dprintk("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 			if(type == MSG_WRITE_REQUEST_REPLY){
 				struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-				dprintk("[%s]: received MSG_WRITE_REQUEST_REPLY\n", __func__);
+//				dprintk("[%s]: received MSG_WRITE_REQUEST_REPLY\n", __func__);
 				new_request->type = MSG_WRITE;
 				new_request->pid = pid;
 				new_request->num = num;
 
 				spin_lock(&ctx->lock);
 				list_add_tail(&new_request->entry, &ctx->req_list);
+				wake_up(&ctx->req_wq);
 				spin_unlock(&ctx->lock);
 			}
 			else if(type == MSG_WRITE_REPLY){
-				dprintk("[%s]: received MSG_WRITE_REPLY\n", __func__);
+//				dprintk("[%s]: received MSG_WRITE_REPLY\n", __func__);
 				unset_bit(pid);
 				/* TODO: need to distinguish committed or aborted? */
 			}
 			else if(type == MSG_READ_REQUEST_REPLY){
-				dprintk("[%s]: received MSG_READ_REQUEST_REPLY\n", __func__);
+//				dprintk("[%s]: received MSG_READ_REQUEST_REPLY\n", __func__);
 				if(tx_state == TX_READ_READY){
 					struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
 					new_request->type = MSG_READ;
@@ -109,10 +135,11 @@ static int client_poll_recv_cq(struct ib_cq* cq){
 
 					spin_lock(&ctx->lock);
 					list_add_tail(&new_request->entry, &ctx->req_list);
+					wake_up(&ctx->req_wq);
 					spin_unlock(&ctx->lock);
 				}
 				else{
-					dprintk("[%s]: remote server aborted read request\n", __func__);
+//					dprintk("[%s]: remote server aborted read request\n", __func__);
 					ctx->process_state[pid] = PROCESS_STATE_ABORT;
 					/*
 					   unset_bit(pid);*/
@@ -191,9 +218,10 @@ int generate_single_write_request(void* page, uint64_t key){
 
 	spin_lock(&ctx->lock);
 	list_add_tail(&new_request->entry, &ctx->req_list);
+	wake_up(&ctx->req_wq);
 	spin_unlock(&ctx->lock);
 
-	dprintk("[%s]: added write request (key=%llx, pid=%x, num=%x)\n", __func__, *addr, pid, 1);
+//	dprintk("[%s]: added write request (key=%llx, pid=%x, num=%x)\n", __func__, *addr, pid, 1);
 
 	return 0;
 }
@@ -226,6 +254,7 @@ int generate_write_request(void** pages, uint64_t* keys, int num){
 
 	spin_lock(&ctx->lock);
 	list_add_tail(&new_request->entry, &ctx->req_list);
+	wake_up(&ctx->req_wq);
 	spin_unlock(&ctx->lock);
 
 	dprintk("[%s]: added write request (key=%llx, pid=%x, num=%x\n", __func__, *addr, pid, num);
@@ -247,7 +276,7 @@ int generate_single_read_request(void* page, uint64_t key){
 	new_request->num = 1;
 
 	*(addr) = key;
-	dprintk("[%s]: generate read request with key=%llx\n", __func__, key);
+//	dprintk("[%s]: generate read request with key=%llx\n", __func__, key);
 	request_page = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!request_page) {
 		pr_err("[%s]: cannot kmalloc request_pages\n", __func__);
@@ -259,6 +288,7 @@ int generate_single_read_request(void* page, uint64_t key){
 
 	spin_lock(&ctx->lock);
 	list_add_tail(&new_request->entry, &ctx->req_list);
+	wake_up(&ctx->req_wq);
 	spin_unlock(&ctx->lock);
 
 	while(*process_state != PROCESS_STATE_WAIT){
@@ -276,7 +306,7 @@ int generate_single_read_request(void* page, uint64_t key){
 
 	*process_state = PROCESS_STATE_DONE;
 
-	dprintk("[%s]: completed read request with key %llu\n\n", __func__, key);
+//	dprintk("[%s]: completed read request with key %llu\n\n", __func__, key);
 	return 0;
 }
 EXPORT_SYMBOL(generate_single_read_request);
@@ -303,6 +333,7 @@ int generate_read_request(void** pages, uint64_t* keys, int num){
 
 	spin_lock(&ctx->lock);
 	list_add_tail(&new_request->entry, &ctx->req_list);
+	wake_up(&ctx->req_wq);
 	spin_unlock(&ctx->lock);
 	//dprintk("[%s]: added read request with key %llu into request_list\n", __func__, *addr);
 
@@ -426,6 +457,7 @@ int event_handler(void){
 	struct request_struct* new_request;
 	allow_signal(SIGKILL);
 	while(1){
+		wait_event(ctx->req_wq, !list_empty(&ctx->req_list));
 		spin_lock(&ctx->lock);
 
 		if (list_empty(&ctx->req_list)){
@@ -444,7 +476,7 @@ int event_handler(void){
 		list_del_init(&new_request->entry);
 		spin_unlock(&ctx->lock);
 
-		pr_info("[%s]: handle new request(type=%d, pid=%d, num=%lld)\n", 
+		dprintk("[%s]: handle new request(type=%d, pid=%d, num=%lld)\n", 
 				__func__, new_request->type, new_request->pid, new_request->num);
 
 		switch(new_request->type) {
@@ -563,7 +595,7 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 		wr[i].wr.send_flags = (i == batch_size-1) ? IB_SEND_SIGNALED : 0;
 		wr[i].remote_addr = (uintptr_t)(offset + i*PAGE_SIZE);
 		wr[i].rkey = ctx->rkey;
-		dprintk("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
+//		dprintk("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
 	}
 
 	ret = ib_post_send(ctx->qp, &wr[0].wr, &bad_wr);
@@ -1032,6 +1064,7 @@ static struct client_context* client_init_ctx(void){
 	kref_init(&ctx->kref);
 	spin_lock_init(&ctx->lock);
 	INIT_LIST_HEAD(&ctx->req_list);
+	init_waitqueue_head(&ctx->req_wq);
 
 	atomic_set(&ctx->connected, 0);
 	ctx->node_id = -1;

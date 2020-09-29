@@ -9,7 +9,7 @@
 #include <linux/kthread.h>
 #include "rdma.h"
 
-#define THREAD_NUM 1
+#define THREAD_NUM 4
 #define TOTAL_CAPACITY (PAGE_SIZE * 64)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
@@ -115,15 +115,13 @@ int main(void){
 	uint64_t elapsed;
 	struct thread_data** args = (struct thread_data**)kmalloc(sizeof(struct thread_data*)*THREAD_NUM, GFP_KERNEL);
 
-	for(i=0; i<THREAD_NUM; i++){
+	for(i = 0; i < THREAD_NUM; i++){
 		args[i] = (struct thread_data*)kmalloc(sizeof(struct thread_data), GFP_KERNEL);
 		args[i]->tid = i;
 		args[i]->comp = &comp[i];
 	}
 
-	pr_info("************************************************");
-	pr_info("   running write thread functions               ");
-	pr_info("************************************************");
+	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
 //		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
@@ -144,9 +142,7 @@ int main(void){
 		args[i]->comp = &comp[i];
 	}
 
-	pr_info("************************************************");
-	pr_info("   running read thread functions               ");
-	pr_info("************************************************");
+	pr_info("Start running read thread functions...\n");
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){

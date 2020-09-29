@@ -29,7 +29,7 @@
 
 #define DEPTH 64
 
-#define DEBUG
+#define DDDEBUG
 
 #ifdef DEBUG
 #define dprintk(...) printk(KERN_DEBUG __VA_ARGS__)
@@ -106,6 +106,7 @@ struct client_context{
 
 	struct kref 		kref;
 	struct list_head 	req_list;
+	wait_queue_head_t	req_wq;
 	spinlock_t   lock;
 
 	int node_id;
