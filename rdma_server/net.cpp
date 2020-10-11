@@ -496,7 +496,7 @@ void* server_recv_poll_cq(void* cq_context){
 	struct ibv_wc wc;
 	int ne;
 	static int num = 1;
-	printf("[%s] polling ready...\n", __func__);
+	dprintf("[%s] polling ready...\n", __func__);
 	while(1){
 		ne = 0;
 		do{
@@ -572,7 +572,7 @@ void* event_handler(void*){
 	int insert_cnt = 0;
 	int search_cnt = 0;
 
-	printf("[%s] event_handler ready...\n", __func__);
+	dprintf("[%s] event_handler ready...\n", __func__);
 
 	while(1){
 		new_request = (struct request_struct*)dequeue(request_queue);
@@ -610,7 +610,8 @@ void* event_handler(void*){
 
 				D_RW(ctx->hashtable)->Insert(ctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(ctx->hashtable)->Get(*key);
-				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
+				dprintf("Inserted value for key %lu (%lx)\n", *key, *key);
+				dprintf("Inserted value check : %s\n", (char *)temp_addr);
 
 				key += METADATA_SIZE;
 			}
@@ -633,7 +634,6 @@ void* event_handler(void*){
 				//search_cnt++;
 				if(!values[i]){
 					dprintf("Value for key[%lx] not found\n", *key);
-//					printf("Value is not found!!\n");
 					abort = true;
 				}
 			}
@@ -744,7 +744,7 @@ static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* de
 		die("ibv_modify_qp to RTS failed\n");
 	}
 
-	printf("[%s] modify_qp to RTS succeeded\n", __func__);
+	dprintf("[%s] modify_qp to RTS succeeded\n", __func__);
 	return 0;
 }
 
@@ -764,7 +764,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 	ctx->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
 	ctx->hashtable = OID_NULL;
 
-	printf("create request queue...\n");
+	dprintf("create request queue...\n");
 	ctx->request_queue = create_queue();
 	ctx->temp_log = (uint64_t**)malloc(sizeof(uint64_t*)*MAX_NODE);
 	for(int i=0; i<MAX_NODE; i++){
@@ -785,7 +785,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 			exit(0);
 		}
 	}
-	printf("log initialized\n");
+	dprintf("log initialized\n");
 
 	if(access(index_path, 0) != 0){
 		ctx->index_pop = pmemobj_create(index_path, "index", INDEX_SIZE, 0666);
@@ -804,7 +804,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 		}
 		ctx->hashtable = POBJ_ROOT(ctx->index_pop, CCEH);
 	}
-	printf("hashtable initialized\n");
+	dprintf("hashtable initialized\n");
 
 	ctx->context = ibv_open_device(dev);
 	if(!ctx->context){
@@ -880,7 +880,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 			fprintf(stderr, "ibv_create_qp[%d] failed\n", i);
 			goto destroy_qp;
 		}
-		printf("[%s] queue pair[%d] created\n", __func__, i);
+		dprintf("[%s] queue pair[%d] created\n", __func__, i);
 	}
 
 	return ctx;
@@ -946,7 +946,7 @@ void* establish_conn(void*){
 			exit(1);
 		}
 		inet_ntop(AF_INET, &remote_sock.sin_addr, remote_ip, INET_ADDRSTRLEN);
-		printf("TCP Socket accepted a connection %d from %s\n", cur_node, remote_ip);
+		dprintf("TCP Socket accepted a connection %d from %s\n", cur_node, remote_ip);
 
 		//	ret = ibv_query_gid(ctx->context, ib_port, 2, &gid);
 		ret = ibv_query_gid(ctx->context, ib_port, gid_idx, &gid);
@@ -1006,7 +1006,7 @@ void* establish_conn(void*){
 
 		cur_node++;
 
-		printf("RDMA connection established.\n");
+		printf("[  OK  ] RDMA connection with %s established.\n", remote_ip);
 	}
 	if(fd)
 		close(fd);
@@ -1092,6 +1092,8 @@ int server_init_interface(){
 		die("ibv_query_port failed\n");
 
 	ibv_free_device_list(dev_list);
+
+	printf("[  OK  ] Server ready to accept connection\n");
 
 	pthread_create(&connection_thread, NULL, &establish_conn, NULL);
 	pthread_create(&thread_poll_cq, NULL, &server_recv_poll_cq, (void*)ctx->recv_cq);

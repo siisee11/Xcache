@@ -7,9 +7,9 @@
 #include <linux/mm_types.h>
 #include <linux/random.h>
 #include <linux/kthread.h>
-#include "rdma.h"
+#include "rdpma.h"
 
-#define THREAD_NUM 4
+#define THREAD_NUM 1
 #define TOTAL_CAPACITY (PAGE_SIZE * 64)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
@@ -31,7 +31,7 @@ int single_write_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret;
 	uint64_t key;
-	char test_string[PAGE_SIZE] = "a";
+	char test_string[PAGE_SIZE] = "hi, dicl";
 
 	key = 3000;
 	ret = generate_single_write_request(test_string, key);
@@ -63,7 +63,7 @@ int single_read_test(void* arg){
 	int ret;
 	int result = 0;
 	uint64_t key = 3000;
-	char test_string[PAGE_SIZE] = "a";
+	char test_string[PAGE_SIZE] = "hi, dicl";
 	void *result_page;
 
 	result_page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
@@ -124,8 +124,8 @@ int main(void){
 	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
-//		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
-		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
+//		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
 
@@ -146,8 +146,8 @@ int main(void){
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){
-//		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
-		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
+//		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
@@ -277,7 +277,7 @@ void show_test_info(void){
 	pr_info("| NUMBER OF THREAD: %d  \t\t\t\t|\n", THREAD_NUM);
 	pr_info("| TOTAL CAPACITY  : %ld \t\t\t|\n", TOTAL_CAPACITY);
 	pr_info("| ITERATIONS      : %ld \t\t\t\t|\n", ITERATIONS);
-	pr_info("+------------------------------------------------+\n\n");
+	pr_info("+------------------------------------------------+\n");
 
 	return;
 }

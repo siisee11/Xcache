@@ -315,7 +315,7 @@ static void pmnet_complete_nsw_with_page(struct pmnet_node *nn,
 	return;
 
 out:
-	pr_err("%s: idr_find cannot find nsw (%x)\n", __func__, id);
+	pr_err("%s: idr_find cannot find nsw (%llx)\n", __func__, id);
 	spin_unlock(&nn->nn_lock);
 	return;
 }
@@ -341,7 +341,7 @@ static void pmnet_complete_nsw(struct pmnet_node *nn,
 	return;
 
 out:
-	pr_err("%s: idr_find cannot find nsw (%x)\n", __func__, id);
+	pr_err("%s: idr_find cannot find nsw (%llx)\n", __func__, id);
 	spin_unlock(&nn->nn_lock);
 	return;
 }

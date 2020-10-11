@@ -1,4 +1,5 @@
-#include "rdma.h"
+#include "rdpma.h"
+#include "ib.h"
 #include <rdma/ib_cache.h>
 
 static const int RDMA_BUFFER_SIZE = 4096;
@@ -10,29 +11,14 @@ struct client_context* ctx = NULL;
 int ib_port = 1;
 enum ib_mtu mtu;
 
+struct kmem_cache* request_cache;
+
 enum pmnet_system_error {
 	PMNET_ERR_NONE = 0,
 	PMNET_ERR_NO_HNDLR,
 	PMNET_ERR_OVERFLOW,
 	PMNET_ERR_DIED,
 	PMNET_ERR_MAX
-};
-
-struct pmdfc_rdma_status_wait {
-	enum pmnet_system_error	ns_sys_status;
-	s32			ns_status;
-	int			ns_id;
-	void* 		ns_page;
-	wait_queue_head_t	ns_wq;
-	struct list_head	ns_node_item;
-};
-
-struct pmdfc_rdma_device {
-	struct ib_device	*dev;
-	struct ib_pd		*pd;
-	struct kref		ref;
-	struct list_head	entry;
-	unsigned int		num_inline_segments;
 };
 
 enum ib_mtu client_mtu_to_enum(int max_transfer_unit){
@@ -45,7 +31,6 @@ enum ib_mtu client_mtu_to_enum(int max_transfer_unit){
 		default:	return -1;
 	}
 }
-struct ib_device* ib_dev;
 struct ib_pd* ctx_pd;
 
 int pmdfc_rdma_post_recv(void);
@@ -71,100 +56,6 @@ uint64_t ib_reg_mr_addr(void* addr, uint64_t size){
 
 void ib_dereg_mr_addr(uint64_t addr, uint64_t size){
 	ib_dma_unmap_single(ctx->dev, addr, size, DMA_BIDIRECTIONAL);
-}
-
-static int client_poll_send_cq(struct ib_cq* cq){
-	return 0;
-}
-
-static int client_poll_recv_cq(struct ib_cq* cq){
-	struct ib_wc wc;
-	int ne;
-	allow_signal(SIGKILL);
-	while(1){
-		do{
-			ne = ib_poll_cq(cq, 1, &wc);
-			if(ne < 0){
-				printk(KERN_ALERT "[%s]: ib_poll_cq failed (%d)\n", __func__, ne);
-				return 1;
-			}
-#ifdef DEBUG
-			//schedule();
-			if(kthread_should_stop()){
-				printk("[%s]: stop and return \n", __func__);
-				return 0;
-			}
-#endif
-		}while(ne < 1);
-
-		if(wc.status != IB_WC_SUCCESS){
-			printk(KERN_ALERT "[%s]: ib_poll_cq returned failure status (%d)\n", __func__, wc.status);
-			return 1;
-		}
-		pmdfc_rdma_post_recv();
-
-		if((int)wc.opcode == IB_WC_RECV_RDMA_WITH_IMM){
-			int node_id, pid, type, tx_state;
-			uint32_t num;
-			bit_unmask(ntohl(wc.ex.imm_data), &node_id, &pid, &type, &tx_state, &num);
-//			dprintk("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
-			if(type == MSG_WRITE_REQUEST_REPLY){
-				struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-//				dprintk("[%s]: received MSG_WRITE_REQUEST_REPLY\n", __func__);
-				new_request->type = MSG_WRITE;
-				new_request->pid = pid;
-				new_request->num = num;
-
-				spin_lock(&ctx->lock);
-				list_add_tail(&new_request->entry, &ctx->req_list);
-				wake_up(&ctx->req_wq);
-				spin_unlock(&ctx->lock);
-			}
-			else if(type == MSG_WRITE_REPLY){
-//				dprintk("[%s]: received MSG_WRITE_REPLY\n", __func__);
-				unset_bit(pid);
-				/* TODO: need to distinguish committed or aborted? */
-			}
-			else if(type == MSG_READ_REQUEST_REPLY){
-//				dprintk("[%s]: received MSG_READ_REQUEST_REPLY\n", __func__);
-				if(tx_state == TX_READ_READY){
-					struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-					new_request->type = MSG_READ;
-					new_request->pid = pid;
-					new_request->num = num;
-
-					spin_lock(&ctx->lock);
-					list_add_tail(&new_request->entry, &ctx->req_list);
-					wake_up(&ctx->req_wq);
-					spin_unlock(&ctx->lock);
-				}
-				else{
-//					dprintk("[%s]: remote server aborted read request\n", __func__);
-					ctx->process_state[pid] = PROCESS_STATE_ABORT;
-					/*
-					   unset_bit(pid);*/
-				}
-			}
-			else{
-				printk(KERN_ALERT "[%s]: received weired type msg from remote server (%d)\n", __func__, type);
-			}
-		}
-		else{
-			printk(KERN_ALERT "[%s]: received weired opcode from remote server (%d)\n", __func__, (int)wc.opcode);
-		}
-	}
-}
-
-
-static void add_one(struct ib_device* dev){
-	/* TODO: Use mlx5_0 */
-	if (strcmp(dev->name, "mlx5_0") == 0) {
-		ib_dev = dev;
-//		pr_info("[%s]: device name=%s added\n", __func__, dev->name);
-		ctx_pd = ib_alloc_pd(dev, 0);
-		if(!ctx_pd)
-			printk(KERN_ALERT "[%s]: ib_alloc_pd failed\n", __func__);
-	}
 }
 
 uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
@@ -239,7 +130,7 @@ int generate_write_request(void** pages, uint64_t* keys, int num){
 	new_request->pid = pid;
 	new_request->num = num;
 	for(i = 0 ; i < num ; i++){
-		*(addr + i*METADATA_SIZE) = keys[i];
+		*(addr + i * METADATA_SIZE) = keys[i];
 		dprintk("[%s]: generate write request with keys[%d]=%llx\n", __func__, i, keys[i]);
 		request_pages[i] = kmalloc(PAGE_SIZE, GFP_KERNEL);
 		if (!request_pages[i]) {
@@ -270,21 +161,24 @@ int generate_single_read_request(void* page, uint64_t key){
 	int pid = find_and_set_nextbit();
 	volatile int* process_state = &ctx->process_state[pid];
 
+	BUG_ON(page == NULL);
+
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, pid);
 	new_request->type = MSG_READ_REQUEST;
 	new_request->pid = pid;
 	new_request->num = 1;
 
 	*(addr) = key;
+#if 0
 //	dprintk("[%s]: generate read request with key=%llx\n", __func__, key);
 	request_page = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!request_page) {
 		pr_err("[%s]: cannot kmalloc request_pages\n", __func__);
 		BUG_ON(request_page == NULL);
 	}
-	BUG_ON(page == NULL);
+#endif
 
-	ctx->temp_log[pid][0] = (uint64_t)request_page;
+	ctx->temp_log[pid][0] = (uint64_t)page;
 
 	spin_lock(&ctx->lock);
 	list_add_tail(&new_request->entry, &ctx->req_list);
@@ -296,13 +190,13 @@ int generate_single_read_request(void* page, uint64_t key){
 	}
 
 	if(*process_state == PROCESS_STATE_ABORT){
-		kfree(request_page);
+//		kfree(request_page);
 		page = NULL;
 		unset_bit(pid);
 		return 1;
 	}
 
-	memcpy(page, request_page, PAGE_SIZE);
+//	memcpy(page, request_page, PAGE_SIZE);
 
 	*process_state = PROCESS_STATE_DONE;
 
@@ -324,7 +218,7 @@ int generate_read_request(void** pages, uint64_t* keys, int num){
 	new_request->type = MSG_READ_REQUEST;
 	new_request->pid = pid;
 	new_request->num = num;
-	for(i=0; i<num; i++){
+	for(i = 0; i < num; i++){
 		*(addr + i*METADATA_SIZE) = keys[i];
 		request_pages[i] = kmalloc(PAGE_SIZE, GFP_KERNEL);
 		ctx->temp_log[pid][i] = (uint64_t)request_pages[i];
@@ -401,6 +295,7 @@ void handle_write(int pid, int num){
 		pages[i] = (void*)ctx->temp_log[pid][i];
 		addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
 	}
+	dprintk("[%s]: victim page %s\n", __func__, pages[0]);
 	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
 
 	post_write_request_batch(pid, MSG_WRITE, num, addr, *remote_mm, num);
@@ -418,7 +313,7 @@ void handle_read_request(int pid, int num){
 }
 
 void handle_read(int pid, int num){
-	uint64_t* remote_mm = (uint64_t*)(GET_LOCAL_META_REGION(ctx->local_mm, pid) + sizeof(uint64_t));
+	uint64_t* remote_mm = (uint64_t*)GET_REMOTE_ADDRESS_BASE(ctx->local_mm, pid);
 	uintptr_t addr[REQUEST_MAX_BATCH];
 	void* pages[REQUEST_MAX_BATCH];
 	uint64_t offset = pid * METADATA_SIZE * NUM_ENTRY;
@@ -427,11 +322,13 @@ void handle_read(int pid, int num){
 
 	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
 
-	for(i=0; i<num; i++){
+	for(i = 0; i < num; i++){
 		pages[i] = (void*)ctx->temp_log[pid][i];
 		addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
 	}
 	post_read_request_batch(addr, *remote_mm, num);
+
+	dprintk("[%s]: returned page %s\n", __func__, pages[0]);
 
 	post_meta_request_batch(pid, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
 
@@ -476,8 +373,9 @@ int event_handler(void){
 		list_del_init(&new_request->entry);
 		spin_unlock(&ctx->lock);
 
-		dprintk("[%s]: handle new request(type=%d, pid=%d, num=%lld)\n", 
-				__func__, new_request->type, new_request->pid, new_request->num);
+		dprintk("[%s]: handle new request(type=%s, pid=%d, num=%lld)\n", 
+				__func__, TYPE_STR(new_request->type),
+				new_request->pid, new_request->num);
 
 		switch(new_request->type) {
 			case MSG_WRITE_REQUEST: 
@@ -555,22 +453,22 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 		printk(KERN_ALERT "[%s]: ib_post_send failed\n", __func__);
 		return -1;
 	}
-	
-	do{
-		ne = ib_poll_cq(ctx->send_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return -1;
-		}
-	}while(ne < 1);
-
-	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return -1;
-	}
 
 	return 0;
 }
+
+/**
+ * post_read_request_batch - post read request to target
+ * @addr: DMA-able address.
+ * @offset: Base address of remote memory address. 
+ * @batch_size: 
+ *
+ * This function post read request in batched manner.
+ * Note that only last work request to be signaled.
+ *
+ * If generate_single_write_request succeeds, then return 0
+ * if not return negative value.
+ */
 
 int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
@@ -582,7 +480,7 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 	memset(sge, 0, sizeof(struct ib_sge)*batch_size);
 	memset(wr, 0, sizeof(struct ib_rdma_wr)*batch_size);
 
-	for(i=0; i<batch_size; i++){
+	for(i = 0; i < batch_size; i++){
 		sge[i].addr = addr[i];
 		sge[i].length = PAGE_SIZE;
 		sge[i].lkey = ctx->mr->lkey;
@@ -593,9 +491,10 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 		wr[i].wr.num_sge = 1;
 		wr[i].wr.next = (i == batch_size-1) ? NULL : (struct ib_send_wr*)&wr[i+1];
 		wr[i].wr.send_flags = (i == batch_size-1) ? IB_SEND_SIGNALED : 0;
-		wr[i].remote_addr = (uintptr_t)(offset + i*PAGE_SIZE);
+		wr[i].remote_addr = (uintptr_t)(offset + i * PAGE_SIZE);
 		wr[i].rkey = ctx->rkey;
 //		dprintk("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
+		pr_info("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
 	}
 
 	ret = ib_post_send(ctx->qp, &wr[0].wr, &bad_wr);
@@ -604,18 +503,6 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 		return 1;
 	}
 
-	do{
-		ne = ib_poll_cq(ctx->send_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
-		}
-	}while(ne < 1);
-
-	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
-	}
 	return 0;
 }
 
@@ -624,7 +511,7 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
  * @pid: Progress identifier.
  * @type: Message type (i.e. MSG_READ_REQUEST, MSG_WRITE_REQUEST, ...)
  * @num: Same with batch_size
- * @dma_addr: DMA-able address.
+ * @dma_addr: DMA-able local address.
  * @remote_mm: Remote memory address.
  * @batch_size: 
  *
@@ -657,7 +544,7 @@ int post_write_request_batch(int pid, int type, int num,
 		wr[i].wr.next = (i == batch_size-1) ? NULL : (struct ib_send_wr*)&wr[i+1];
 		wr[i].wr.send_flags = (i == batch_size-1) ? IB_SEND_SIGNALED : 0;
 		wr[i].wr.ex.imm_data = htonl(bit_mask(ctx->node_id, pid, type, TX_WRITE_BEGIN, num));
-		wr[i].remote_addr = (uintptr_t)(remote_mm + i*PAGE_SIZE);
+		wr[i].remote_addr = (uintptr_t)(remote_mm + i * PAGE_SIZE);
 		wr[i].rkey = ctx->rkey;
 	}
 	dprintk("[%s]: target addr: %llx, target rkey %x\n", __func__, (uint64_t)wr[0].remote_addr, ctx->rkey);
@@ -668,24 +555,12 @@ int post_write_request_batch(int pid, int type, int num,
 		return 1;
 	}
 
-	do{
-		ne = ib_poll_cq(ctx->send_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
-		}
-	}while(ne < 1);
-	dprintk("[%s]: ib_poll_cq succeeded\n", __func__);
-
-	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
-	}
 	return 0;
 }
 
 int pmdfc_rdma_post_recv(void){
 	struct ib_recv_wr wr;
+	struct rdpma_ib_connection *ic = ctx->ic;
 	const struct ib_recv_wr* bad_wr;
 	struct ib_sge sge;
 	int ret;
@@ -696,6 +571,7 @@ int pmdfc_rdma_post_recv(void){
 	sge.addr = (uintptr_t)NULL;
 	sge.length = 0;
 	sge.lkey = ctx->mr->lkey;
+//	sge.lkey = ic->i_pd->local_dma_lkey;
 
 	wr.wr_id = 0;
 	wr.sg_list = &sge;
@@ -989,7 +865,6 @@ int establish_conn(void){
 		return 1;
 	}
 
-	pmdfc_rdma_post_recv();
 
 	dprintk("[  OK  ] RDMA connection has been connected to server\n");
 
@@ -999,47 +874,16 @@ int establish_conn(void){
 
 }
 
-int my_create_qp(void){
-	struct ib_device_attr dev_attr;
-	struct ib_qp_init_attr qp_attr;
-	struct ib_udata uhw = {.outlen = 0, .inlen = 0};
-
-	memset(&dev_attr, 0, sizeof(struct ib_device_attr));
-	if(ctx->dev->ops.query_device(ctx->dev, &dev_attr, &uhw)){
-		printk(KERN_ALERT "[%s] ib_query_device failed\n", __func__);
-		return 1;
-	}
-//	printk("[%s] ib_query_device succeeded max_qp_wr=%d, max_send_sge=%d, max_recv_sge=%d\n", __func__, dev_attr.max_qp_wr, dev_attr.max_send_sge, dev_attr.max_recv_sge);
-
-	memset(&qp_attr, 0, sizeof(struct ib_qp_init_attr));
-	//    ctx->depth = min(dev_attr.max_qp_wr, 1 << 13);
-	ctx->depth = 64;
-	qp_attr.send_cq = ctx->send_cq;
-	qp_attr.recv_cq = ctx->recv_cq;
-	qp_attr.cap.max_inline_data = 0;
-	qp_attr.cap.max_send_wr = ctx->depth;
-	qp_attr.cap.max_recv_wr = ctx->depth;
-	qp_attr.cap.max_send_sge = min(dev_attr.max_send_sge, 1 << 2);
-	qp_attr.cap.max_recv_sge = min(dev_attr.max_recv_sge, 1 << 2);
-	/*    qp_attr.cap.max_send_wr = ctx->depth;
-		  qp_attr.cap.max_recv_wr = ctx->depth;
-		  qp_attr.cap.max_send_sge = 2;
-		  qp_attr.cap.max_recv_sge = 2;*/
-	qp_attr.qp_type = IB_QPT_RC;
-
-	ctx->qp = ib_create_qp(ctx->pd, &qp_attr);
-
-	if(!ctx->qp)
-		return -1;
-
-//	printk("[%s] ib qp created\n", __func__);
-	printk("[  OK  ] ib qp created\n");
-
-	return 0;
-}
-
+/**
+ * client_init_ctx - Initialize struct client_context.
+ *
+ * temp_log, process_state, req_list
+ * dev, rdpma_ib_connection, mr, qp, cq
+ *
+ * ctx is global variable.
+ */
 static struct client_context* client_init_ctx(void){
-	int ret, flags, i;
+	int ret = 0, i, flags;
 	struct ib_cq_init_attr attr;
 	struct ib_device_attr dev_attr;
 	struct ib_udata uhw = {.outlen = 0, .inlen = 0};
@@ -1051,7 +895,7 @@ static struct client_context* client_init_ctx(void){
 	ctx->temp_log = (uint64_t**)kmalloc(sizeof(uint64_t*)*MAX_PROCESS, GFP_KERNEL);
 	ctx->process_state = (volatile int*)kmalloc(sizeof(volatile int)*MAX_PROCESS, GFP_KERNEL);
 	//ctx->process_state = (atomic_t*)kmalloc(sizeof(atomic_t)*MAX_PROCESS, GFP_KERNEL);
-	for(i=0; i<MAX_PROCESS; i++){
+	for(i = 0; i < MAX_PROCESS; i++){
 		ctx->temp_log[i] = (uint64_t*)kmalloc(sizeof(uint64_t)*NUM_ENTRY, GFP_KERNEL);
 		if (!ctx->temp_log[i]) {
 			printk(KERN_ALERT "[%s] failed to initialize temp_log\n", __func__);
@@ -1074,100 +918,48 @@ static struct client_context* client_init_ctx(void){
 	ctx->send_flags = IB_SEND_SIGNALED;
 	ctx->depth = DEPTH;
 	ctx->channel = NULL;
-	ctx->dev= ib_dev;
+	ctx->dev= ibdev;    /* ibdev is assigned in ib.c */
 	if(!ctx->dev){
-		printk(KERN_ALERT "[%s] failed to initialize ib_dev\n", __func__);
+		printk(KERN_ALERT "[%s] failed to initialize ibdev\n", __func__);
 		return NULL;
 	}
 
-//	ctx->pd = ib_alloc_pd(ctx->dev, 0);
-	ctx->pd = ib_alloc_pd(ctx->dev, IB_PD_UNSAFE_GLOBAL_RKEY);
-	if (IS_ERR(ctx->pd)) {
-		printk(KERN_ALERT "[%s] ib_alloc_pd failed\n", __func__);
-		return NULL;
-	}
-//	dprintk("[%s] ib_alloc_pd succeeded\n", __func__);
+	/* alloc ctx->ic (ib_cm.c) */
+	rdpma_ib_conn_alloc(ctx, GFP_KERNEL);
 
-#if 0
-	//	ctx->mr = ctx->pd->device->ops.get_dma_mr(ctx->pd, flags);
-	flags = IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_WRITE | IB_ACCESS_REMOTE_READ;
-	ctx->mr = ctx->pd->device->ops.get_dma_mr(ctx->pd, flags);
-	if (IS_ERR(mr)) {
-		ib_dealloc_pd(pd);
-		return ERR_CAST(mr);
-	}
-	ctx->mr->device = ctx->pd->device;
-	ctx->mr->pd = ctx->pd;
-	ctx->mr->uobject = NULL;
-	ctx->mr->need_inval = false;
-	ctx->pd->__internal_mr = ctx->mr;
-	//    ctx->mr = ctx->pd->__internal_mr;
-	if(!ctx->mr){
-		printk(KERN_ALERT "[%s] ib_allocate_mr failed\n", __func__);
-		goto err_ib_alloc_pd;
-	}
-	//dprintk("[%s] ib_get_dma_mr succeeded\n", __func__);
-#endif
-	ctx->mr = ctx->pd->__internal_mr;
-
-	memset(&dev_attr, 0, sizeof(struct ib_device_attr));
-	if(ctx->dev->ops.query_device(ctx->dev, &dev_attr, &uhw)){
-		printk(KERN_ALERT "[%s] ib_query_device failed\n", __func__);
-		goto err_ib_alloc_pd;
-	}
-	//dprintk("max_cqe: %d\n", dev_attr.max_cqe);
-	memset(&attr, 0, sizeof(struct ib_cq_init_attr));
-	attr.cqe = min(dev_attr.max_cqe, min(dev_attr.max_qp_wr, 1 << 13));
-	//    attr.cqe = ctx->depth*4 + 1;
-	attr.comp_vector = 0;
-	ctx->recv_cq = ib_create_cq(ctx->dev, NULL, NULL, NULL, &attr);
-	if (IS_ERR(ctx->recv_cq)) {
-		printk(KERN_ALERT "[%s] ib_create_cq failed for recv_cq\n", __func__);
-		goto err_ib_alloc_pd;
-	}
-//	printk("[%s] ib_create_cq succeeded for recv_cq\n", __func__);
-
-	memset(&attr, 0, sizeof(struct ib_cq_init_attr));
-	attr.cqe = min(dev_attr.max_cqe, min(dev_attr.max_qp_wr, 1 << 13));
-	attr.comp_vector = 0;
-	ctx->send_cq = ib_create_cq(ctx->dev, NULL, NULL, NULL, &attr);
-	if (IS_ERR(ctx->send_cq)) {
-		printk(KERN_ALERT "[%s] ib_create_cq failed for send_cq\n", __func__);
-		goto err_ib_create_cq_recv;
-	}
-//	printk("[%s] ib_create_cq succeeded for send_cq\n", __func__);
-
-	/* XXX: no need to request notify while using pulling */
-#if 0
-	ret = ib_req_notify_cq(ctx->recv_cq, IB_CQ_NEXT_COMP);
-	if(ret){
-		printk(KERN_ALERT "[%s] ib_req_notify_cq failed %d\n", __func__, ret);
-		goto err_ib_create_cq_send;
-	}
-
-	ret = ib_req_notify_cq(ctx->send_cq, 0);
-	if(ret){
-		printk(KERN_ALERT "[%s] ib_req_notify_cq failed %d\n", __func__, ret);
-		goto err_ib_create_cq_send;
-	}
-#endif
-
-	ret = my_create_qp();
+	/* ic->i_pd, ctx->qp here (ib_cm.c) */
+	ret = rdpma_ib_setup_qp(ctx);
 	if(ret){
 		printk(KERN_ALERT "[%s] ib_create_qp failed\n", __func__);
-		goto err_create_qp;
+		return NULL;
 	}
+
+	flags = IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_WRITE | IB_ACCESS_REMOTE_READ;
+	ctx->mr = ctx->ic->i_pd->device->ops.get_dma_mr(ctx->ic->i_pd, flags);
+	if (IS_ERR(ctx->mr)) {
+		return NULL;
+	}
+	ctx->mr->device = ctx->ic->i_pd->device;
+	ctx->mr->pd = ctx->ic->i_pd;
+	ctx->mr->uobject = NULL;
+	ctx->mr->need_inval = false;
+	ctx->ic->i_pd->__internal_mr = ctx->mr;  /* FIXME : is this right? */
+	if(!ctx->mr){
+		printk(KERN_ALERT "[%s] ib_allocate_mr failed\n", __func__);
+		return NULL;
+	}
+	//dprintk("[%s] ib_get_dma_mr succeeded\n", __func__);
 
 	return ctx;
 
 err_create_qp:	
 	ib_destroy_qp(ctx->qp);
 err_ib_create_cq_send:	
-	ib_destroy_cq(ctx->send_cq);
+	ib_destroy_cq(ctx->ic->i_send_cq);
 err_ib_create_cq_recv:    
-	ib_destroy_cq(ctx->recv_cq);
+	ib_destroy_cq(ctx->ic->i_recv_cq);
 err_ib_alloc_pd:
-	ib_dealloc_pd(ctx->pd);
+	ib_dealloc_pd(ctx->ic->i_pd);
 
 	return NULL;
 }
@@ -1175,7 +967,8 @@ err_ib_alloc_pd:
 int client_init_interface(void){
 	int ret, x;
 
-	x = rdma_port_get_link_layer(ib_dev, ib_port);
+	BUG_ON(ibdev == NULL);
+	x = rdma_port_get_link_layer(ibdev, ib_port);
 	BUG_ON(x != IB_LINK_LAYER_INFINIBAND);
 
 	ctx = client_init_ctx();
@@ -1185,7 +978,7 @@ int client_init_interface(void){
 	}
 	pr_info("[  OK  ] client context successfully initailized");
 
-	ret = ib_query_port(ib_dev, ib_port, &ctx->port_attr);
+	ret = ib_query_port(ibdev, ib_port, &ctx->port_attr);
 	if(ret < 0){
 		printk(KERN_ALERT "Failed to query ib_port\n");
 		return -1;
@@ -1199,17 +992,19 @@ int client_init_interface(void){
 	}
 	pr_info("[  OK  ] connection successfully established");
 
+	pmdfc_rdma_post_recv();
+
 	atomic_set(&ctx->connected, 1);
 
 	request_cache = kmem_cache_create("request_cache", sizeof(struct request_struct), 64, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
-	thread_recv_poll_cq = kthread_create((void*)&client_poll_recv_cq, ctx->recv_cq, "cq_recv_poller");
+#if 0
+	thread_recv_poll_cq = kthread_create((void*)&client_poll_recv_cq, ctx->i_recv_cq, "cq_recv_poller");
 	if(IS_ERR(thread_recv_poll_cq)){
 		printk(KERN_ALERT "cq_poller thread creation failed\n");
 		return 1;
 	}
 	wake_up_process(thread_recv_poll_cq);
-#if 0
 	thread_send_poll_cq = kthread_create((void*)&client_poll_send_cq, ctx->send_cq, "cq_send_poller");
 	if(IS_ERR(thread_send_poll_cq)){
 		printk(KERN_ALERT "cq_poller thread creation failed\n");
@@ -1221,7 +1016,7 @@ int client_init_interface(void){
 	thread_handler = kthread_create((void*)&event_handler, NULL, "event_handler");
 	if(IS_ERR(thread_handler)){
 		printk(KERN_ALERT "event_handler thread creation failed\n");
-		return 1;
+		return -1;
 	}
 	wake_up_process(thread_handler);
 
@@ -1230,12 +1025,12 @@ int client_init_interface(void){
 cleanup_resources:
 	if(ctx->qp) 
 		ib_destroy_qp(ctx->qp);
-	if(ctx->send_cq) 
-		ib_destroy_cq(ctx->send_cq);
-	if(ctx->recv_cq) 
-		ib_destroy_cq(ctx->recv_cq);
-	if(ctx->pd) 
-		ib_dealloc_pd(ctx->pd);
+	if(ctx->ic->i_send_cq) 
+		ib_destroy_cq(ctx->ic->i_send_cq);
+	if(ctx->ic->i_recv_cq) 
+		ib_destroy_cq(ctx->ic->i_recv_cq);
+	if(ctx->ic->i_pd) 
+		ib_dealloc_pd(ctx->ic->i_pd);
 
 	return -1;
 }
@@ -1243,26 +1038,18 @@ cleanup_resources:
 void cleanup_resource(void){
 	if(ctx->qp)
 		ib_destroy_qp(ctx->qp);
-
-	if(ctx->send_cq)
-		ib_destroy_cq(ctx->send_cq);
-
-	if(ctx->recv_cq)
-		ib_destroy_cq(ctx->recv_cq);
-
-	if(ctx->pd)
-		ib_dealloc_pd(ctx->pd);
+	if(ctx->ic->i_send_cq) 
+		ib_destroy_cq(ctx->ic->i_send_cq);
+	if(ctx->ic->i_recv_cq) 
+		ib_destroy_cq(ctx->ic->i_recv_cq);
+	if(ctx->ic->i_pd)
+		ib_dealloc_pd(ctx->ic->i_pd);
 
 	atomic_set(&ctx->connected, 0);
 }
 
 static struct class client_class = {
 	.name = "PRDMA_Client_Class"
-};
-
-static struct ib_client pmdfc_rdma_client = {
-	.name = "PRDMA_Client",
-	.add = add_one
 };
 
 static int __init init_net_module(void){
@@ -1274,16 +1061,17 @@ static int __init init_net_module(void){
 		return -1;
 	}
 
-	ret = ib_register_client(&pmdfc_rdma_client);
+	ret = rdpma_ib_init();
 	if(ret){
-		pr_err("ib_register_client failed\n");
+		pr_err("rdpma_ib_init failed\n");
 		goto err_class_register;
 	}
+	pr_info("[  OK  ] rdpma_ib_device successfully registered\n");
 
 	ret = client_init_interface();
 	if(ret){
 		pr_err("client_init_interface failed\n");
-		goto err_ib_register_client;
+		goto err_rdpma_ib_init;
 	}
 
 	pr_info("[  OK  ] PMDFC rdma module successfully installed");
@@ -1291,8 +1079,8 @@ static int __init init_net_module(void){
 	/* follow 0/-E semantic */
 	return 0;
 
-err_ib_register_client:
-	ib_unregister_client(&pmdfc_rdma_client);
+err_rdpma_ib_init:
+	rdpma_ib_exit();
 err_class_register:
 	class_unregister(&client_class);
 
@@ -1319,7 +1107,7 @@ static void __exit exit_net_module(void){
 
 	atomic_set(&ctx->connected, 0);
 
-	ib_unregister_client(&pmdfc_rdma_client);
+	rdpma_ib_exit();
 	class_unregister(&client_class);
 	pr_info("[  OK  ] PMDFC rdma module successfully removed ");
 }
