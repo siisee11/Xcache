@@ -580,18 +580,11 @@ void* event_handler(void*){
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
 			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages (node=%x, pid=%x, key=%lx)\n", 
 					new_request->num, new_request->node_id, new_request->pid, *key);
-			//TOID(char) page;
-			//POBJ_ALLOC(ctx->pop, &page, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
 			void* page = (void*)malloc(new_request->num * PAGE_SIZE);
-			//memset(ptr, 0, PAGE_SIZE);
-			//uint64_t page_addr = (uint64_t)ctx->pop + page.oid.off;
-			//ctx->temp_log[new_request->node_id][new_request->pid] = page_addr;
 			ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)page;
-			//ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)&ptr;
 			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
 			uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
 			*addr = (uint64_t)page;
-			//*addr = (uint64_t)&ptr;
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REQUEST_REPLY, new_request->num, TX_WRITE_READY, sizeof(uint64_t), addr, offset);
 			dprintf("Processed  [MSG_WRITE_REQUEST] %d num pages (node=%x pid=%x)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
@@ -615,6 +608,7 @@ void* event_handler(void*){
 				D_RW(ctx->hashtable)->Insert(ctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(ctx->hashtable)->Get(*key);
 				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
+				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
 
 				key += METADATA_SIZE;
 			}
