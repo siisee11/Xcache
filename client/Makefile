@@ -28,12 +28,15 @@ load:
 	insmod ./pmdfc_client.ko
 #	script/bit_mask_set.sh
 pmnet:
-	insmod ./pmnet.ko ip="115.145.173.69" port=5432
+	insmod ./pmnet.ko ip="115.145.173.135" port=5432
 net:
-	insmod ./pmnet.ko ip="115.145.173.69" port=5432
+	insmod ./pmnet.ko ip="115.145.173.135" port=5432
+	insmod ./pmdfc_client.ko
+ipoib:
+	insmod ./pmnet.ko ip="10.0.0.53" port=5432
 	insmod ./pmdfc_client.ko
 rdma:
-	insmod ./pmrdma.ko ip="115.145.173.69" port=2123
+	insmod ./pmrdma.ko ip="115.145.173.135" port=2123
 	insmod ./pmdfc_client.ko
 unload:
 	rmmod ./pmdfc_client.ko

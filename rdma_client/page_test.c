@@ -29,14 +29,17 @@ struct task_struct** read_threads;
 
 int single_write_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
-	int tid = my_data->tid;
 	int ret;
 	uint64_t key;
+	char test_string[PAGE_SIZE] = "a";
 
-	key = keys[tid][0];
-	ret = generate_single_write_request(vpages[tid][0], key);
+	key = 3000;
+	ret = generate_single_write_request(test_string, key);
 
 	complete(my_data->comp);
+
+	printk("[ PASS ] %s succeeds \n", __func__);
+
 	return 0;
 }
 
@@ -49,7 +52,6 @@ int write_test(void* arg){
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
 		ret = generate_single_write_request(vpages[tid][i], key);
-		ssleep(1);
 	}
 
 	complete(my_data->comp);
@@ -59,18 +61,23 @@ int write_test(void* arg){
 int single_read_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret;
-	int tid = my_data->tid;
 	int result = 0;
-	uint64_t key;
+	uint64_t key = 3000;
+	char test_string[PAGE_SIZE] = "a";
+	void *result_page;
 
-	key = keys[tid][0];
-	ret = generate_single_read_request(return_page[tid], key);
+	result_page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
 
-	if(memcmp(return_page[tid], vpages[tid][0], PAGE_SIZE) != 0){
-		printk("failed Searching for key %llu\n", key);
+	ret = generate_single_read_request(result_page, key);
+
+	if(memcmp(result_page, test_string, PAGE_SIZE) != 0){
+		printk("failed Searching for key %llx\n", key);
 		result++;
 	}
-	printk("failedSearch: %d\n", result);
+
+	if (result == 0)
+		printk("[ PASS ] %s succeeds\n", __func__);
+
 	complete(my_data->comp);
 	return 0;
 }
@@ -80,7 +87,7 @@ int read_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int i, ret;
 	int tid = my_data->tid;
-	int result = 0;
+	int nfailed = 0;
 	uint64_t key;
 
 	for(i = 0; i < ITERATIONS; i++){
@@ -89,10 +96,15 @@ int read_test(void* arg){
 
 		if(memcmp(return_page[tid], vpages[tid][i], PAGE_SIZE) != 0){
 			printk("failed Searching for key %llu\n", key);
-			result++;
+			nfailed++;
 		}
 	}
-	printk("failedSearch: %d\n", result);
+
+	if (nfailed == 0)
+		printk("[ PASS ] %s succeeds\n", __func__);
+	else
+		printk("failedSearch: %d\n", nfailed);
+
 	complete(my_data->comp);
 	return 0;
 }
@@ -124,9 +136,7 @@ int main(void){
 	}
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
-	pr_info("************************************************");
-	pr_info("   complete write thread functions: time( %llu ) usec", elapsed);
-	pr_info("************************************************\n\n");
+	pr_info("[ PASS ] complete write thread functions: time( %llu ) usec", elapsed);
 	ssleep(5);
 
 	for(i=0; i<THREAD_NUM; i++){
@@ -134,14 +144,14 @@ int main(void){
 		args[i]->comp = &comp[i];
 	}
 
-#if 0
 	pr_info("************************************************");
 	pr_info("   running read thread functions               ");
 	pr_info("************************************************");
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){
-		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
+//		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
@@ -151,10 +161,7 @@ int main(void){
 
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
-	pr_info("************************************************");
-	pr_info("   complete read thread functions: time( %llu ) usec", elapsed);
-	pr_info("************************************************");
-#endif
+	pr_info("[ PASS ] complete read thread functions: time( %llu ) usec", elapsed);
 
 	for(i=0; i<THREAD_NUM; i++){
 		kfree(args[i]);
@@ -241,7 +248,7 @@ int init_pages(void){
 
 	atomic_set(&failedSearch, 0);
 
-	printk(KERN_INFO "[  OK  ] pmdfc rdma initialization pass");
+	printk(KERN_INFO "[ PASS ] pmdfc rdma initialization");
 	return 0;
 
 
@@ -274,7 +281,7 @@ void show_test_info(void){
 	pr_info("| NUMBER OF THREAD: %d  \t\t\t\t|\n", THREAD_NUM);
 	pr_info("| TOTAL CAPACITY  : %ld \t\t\t|\n", TOTAL_CAPACITY);
 	pr_info("| ITERATIONS      : %ld \t\t\t\t|\n", ITERATIONS);
-	pr_info("+------------------------------------------------+\n");
+	pr_info("+------------------------------------------------+\n\n");
 
 	return;
 }
@@ -291,7 +298,6 @@ static int __init init_test_module(void){
 		printk(KERN_ALERT "module initialization failed\n");
 		return -1;
 	}
-
 	ssleep(3);
 
 	ret = main();
@@ -344,5 +350,5 @@ static void __exit exit_test_module(void){
 module_init(init_test_module);
 module_exit(exit_test_module);
 
-MODULE_AUTHOR("Hokeun");
+MODULE_AUTHOR("Hokeun & Jaeyoun");
 MODULE_LICENSE("GPL");

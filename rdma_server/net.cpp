@@ -136,7 +136,8 @@ int post_recv(int node_id){
 	return 0;
 }
 
-int post_meta_request(int node_id, int pid, int type, uint32_t num, int tx_state, int len, uint64_t* addr, uint64_t offset){
+int post_meta_request(int node_id, int pid, int type, uint32_t num, 
+		int tx_state, int len, uint64_t* addr, uint64_t offset){
 	struct ibv_send_wr wr;
 	struct ibv_send_wr* bad_wr;
 	struct ibv_sge sge;
@@ -593,17 +594,12 @@ void* event_handler(void*){
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
 			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, pid=%x, key=%lx)\n", 
 					new_request->num, new_request->node_id, new_request->pid, *key);
-			for(int i=0; i<new_request->num; i++){
+			for(int i = 0; i < new_request->num; i++){
 				TOID(char) temp;
 				POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
 				uint64_t temp_addr = (uint64_t)ctx->log_pop + temp.oid.off;
 				memcpy((void*)temp_addr, (void *)((uint8_t*)ptr+i*PAGE_SIZE), PAGE_SIZE);
 				pmemobj_persist(ctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);
-
-				//char* temp = (char*)malloc(sizeof(char)*PAGE_SIZE);
-				//memcpy(temp, (ptr+i*PAGE_SIZE), PAGE_SIZE);
-				//dprintf("Copied: %d\n", insert_cnt);
-
 
 				D_RW(ctx->hashtable)->Insert(ctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(ctx->hashtable)->Get(*key);
@@ -626,31 +622,23 @@ void* event_handler(void*){
 			bool abort = false;
 			for(int i=0; i<new_request->num; i++){
 				uint64_t* key = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + i*METADATA_SIZE); 
-				dprintf("Target Key is %lu (%lx)\n", *key, *key);
+				dprintf("Target Key is %ld (%lx)\n", *key, *key);
 				values[i] = (void*)D_RW(ctx->hashtable)->Get(*key);
 				//search_cnt++;
 				if(!values[i]){
-//					dprintf("Value for key[%llu] not found\n", new_request->keys[i]);
-					printf("Value is not found!!\n");
+					dprintf("Value for key[%lx] not found\n", *key);
+//					printf("Value is not found!!\n");
 					abort = true;
 				}
-			}/*
-				if(search_cnt % 1000 == 0){
-				printf("Search_cnt: %d\n", search_cnt);
-				}*/
+			}
 
 			if(!abort){
 				memcpy(page, values[0], PAGE_SIZE * new_request->num);
-				//void* ptr = mmap(page, new_request->num*PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, 0, 0);
-				//ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)&ptr;
-				//ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)values[0];
 				ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)page;
 				uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
-				//*addr = (uint64_t)&ptr;
-				//*addr = (uint64_t)values[0];
 				*addr = (uint64_t)page;
 				dprintf("allocated page addr: %lx\n", *addr);
-				dprintf("[%s]: addr: %lx, page: %p\n", __func__, *addr, &page);
+				dprintf("[%s]: addr: %lx, page: %p\n", __func__, *addr, page);
 				dprintf("[%s]: msg double check: %s\n", __func__, (char*)page);
 				post_meta_request(new_request->node_id, new_request->pid, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_READY, sizeof(uint64_t), addr, offset);
 			}
@@ -1055,66 +1043,6 @@ int query_qp(struct ibv_qp* qp){
 	return 1;
 }
 
-int test_func3(){
-	char* msg[64];
-	int ret;
-	char ptr[64] = "this is apache1";
-
-	for(int i=0; i<64; i++){
-		msg[i] = (char*)(ctx->local_mm + i);
-	}
-
-	strcpy(*msg, ptr);
-
-	ret = query_qp(ctx->qp[0]);
-	ret = rdma_send(0, (void*)msg[0], 64);
-	printf("posted rdma_send at addr %lu\n", (uint64_t)msg[0]);
-	if(ret){
-		fprintf(stderr, "rdma_send failed, rechecking...\n");
-	}
-	ret = poll_cq(ctx->send_cq);
-	if(ret){
-		fprintf(stderr, "poll_cq failed\n");
-	}
-	printf("poll cq done\n");
-	//    printf("msg: %s\n", *msg);
-	ret = query_qp(ctx->qp[0]);
-	return 0;
-}
-
-int test_func2(){
-	char* msg[64];
-	int ret;
-	uint64_t addr = ctx->local_mm;
-
-	ret = query_qp(ctx->qp[0]);
-	ret = rdma_recv(0, (void*)addr, 64);
-	if(ret){
-		fprintf(stderr, "rdma_receive failed, rechecking...\n");
-	}
-	printf("posted rdma_recv at addr %lu\n", addr);
-
-	ret = poll_cq(ctx->recv_cq);
-	if(ret){
-		fprintf(stderr, "poll_recv_cq failed\n");
-	}
-	printf("msg: %s\n", (char*)addr);
-	ret = query_qp(ctx->qp[0]);
-	return 0;
-}
-
-int test_func(){
-	printf("local_mm(%lu) mr_addr(%p)\n", ctx->local_mm, ctx->mr->addr);
-	uint64_t* check = (uint64_t*)ctx->local_mm;
-	while(*check == 0){
-		usleep(1);
-	}
-	char msg[64];
-	strncpy((char*)ctx->local_mm, msg, 64);
-	printf("received msg: %s\n", msg);
-	return 0;
-}
-
 int server_init_interface(){
 	struct ibv_device** dev_list = NULL;
 	struct ibv_device* dev = NULL;
@@ -1139,7 +1067,7 @@ int server_init_interface(){
 	}
 
 	if(!dev)
-		die("ib_device is nof found\n");
+		die("ib_device is not found\n");
 
 	context = ibv_open_device(dev);
 	if(!context)
