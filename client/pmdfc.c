@@ -13,16 +13,16 @@
 #include <linux/debugfs.h>
 #include <asm/delay.h>
 
-
 #include "tmem.h"
 #include "tcp.h"
 #include "bloom_filter.h"
 #include "pmdfc.h"
+#include "rdma.h"
 
-#define PMDFC_NETWORK 1
-//#define PMDFC_DEBUG 1
+//#define PMDFC_NETWORK 1
+#define PMDFC_DEBUG 1
 #define PMDFC_GET 1
-//#define PMDFC_RDMA 1
+#define PMDFC_RDMA 1
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
 //#define PMDFC_PERCPU 1
@@ -179,11 +179,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
 
-
-#if defined(PMDFC_NETWORK)
 	/* get page virtual address */
 	pg_from = page_address(page);
 
+#if defined(PMDFC_NETWORK)
 	/* 
 	 * 1. Find empty slot.
 	 * If exist, then copy page content to it.
@@ -244,7 +243,10 @@ retry:
 #endif /* PMDFC_NETWORK */
 
 #if defined(PMDFC_RDMA)
-	ret = generate_write_request(&pg_from, (long)oid.oid[0], index, 1);
+	long longkey = ((long)oid.oid[0] << 32) | index;
+	pr_info("PUT key=%lx\n", longkey);
+	
+	ret = generate_single_write_request(pg_from, longkey);
 #endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
@@ -322,10 +324,12 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	goto not_exists;
 #endif /* PMDFC_NETWORK end */
 
-//	return -1;
 
 #if defined(PMDFC_RDMA)
-	ret = generate_read_request(&response, (long)oid.oid[0], index, 1);
+	long longkey = ((long)oid.oid[0] << 32) | index;
+	pr_info("PUT key=%lx\n", longkey);
+
+	ret = generate_single_read_request(response, longkey);
 
 	/* copy page content from message */
 	to_va = page_address(page);

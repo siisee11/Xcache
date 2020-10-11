@@ -1,5 +1,5 @@
-#ifndef NET_H
-#define NET_H
+#ifndef RDPMA_H
+#define RDPMA_H
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -30,6 +30,7 @@
 #define DEPTH 64
 
 #define DEBUG
+#define RDPMA_DEBUG
 
 #ifdef DEBUG
 #define dprintk(...) printk(KERN_DEBUG __VA_ARGS__)
@@ -37,15 +38,30 @@
 #define dprintk(...)
 #endif
 
+#ifdef RDPMA_DEBUG
+#define rdpmadebug(fmt, args...) pr_debug("%s(): " fmt, __func__ , ##args)
+#else
+/* sigh, pr_debug() causes unused variable warnings */
+static inline __printf(1, 2)
+void rdpmadebug(char *fmt, ...)
+{
+}
+#endif
+
+
+
+extern struct workqueue_struct *rdpma_wq;
+extern struct client_context* ctx;
+
 #define NUM_ENTRY	(4)
-#define METADATA_SIZE	(16)
+#define METADATA_SIZE	(16)  		/* [ key, remote address ] */ 
 #define MAX_PROCESS	(64)
 #define BITMAP_SIZE	(64)
 
 #define LOCAL_META_REGION_SIZE		(MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
 
 #define GET_LOCAL_META_REGION(addr, id)	 (addr + NUM_ENTRY * METADATA_SIZE * id)
-#define GET_REMOTE_META_REGION(addr, id) (addr + NUM_ENTRY * METADATA_SIZE * id)
+#define GET_REMOTE_ADDRESS_BASE(addr, id) (addr + NUM_ENTRY * METADATA_SIZE * id + 8)
 
 #define REQUEST_MAX_BATCH (4)
 
@@ -66,7 +82,8 @@ enum{
 	MSG_READ_REPLY
 };
 
-enum{				/* server TX messages */
+/* server TX messages */
+enum{				
 	TX_WRITE_BEGIN,
 	TX_WRITE_READY,
 	TX_WRITE_COMMITTED,		
@@ -85,12 +102,14 @@ enum{
 	PROCESS_STATE_DONE		/* returning read pages completed */
 };
 
-struct kmem_cache* request_cache;
+#define TYPE_STR(type)                           					\
+	(MSG_WRITE_REQUEST      == type? "MSG_WRITE_REQUEST"    :       \
+	 (MSG_WRITE 			== type? "MSG_WRITE"   :                \
+	  (MSG_READ_REQUEST 	== type? "MSG_READ_REQUEST"  :          \
+	   (MSG_READ 			== type? "MSG_READ" : "unknown"))))   
 
-char* test_mm;
-uintptr_t test_ptr;
-
-spinlock_t list_lock;
+/* from rdpma.c */
+extern struct kmem_cache* request_cache;
 
 struct client_context{
 	struct rdma_cm_id* cm_id;
@@ -104,8 +123,12 @@ struct client_context{
 	struct ib_mr* mr;
 	struct ib_port_attr port_attr;
 
+	/* ib_connection */
+	struct rdpma_ib_connection *ic;
+
 	struct kref 		kref;
 	struct list_head 	req_list;
+	wait_queue_head_t	req_wq;
 	spinlock_t   lock;
 
 	int node_id;
@@ -121,11 +144,8 @@ struct client_context{
 	//atomic_t* process_state;
 	volatile int* process_state;
 
-	//atomic64_t bitmap;
-//	DECLARE_BITMAP(bitmap, 64);
 	unsigned int bitmap_size;
 	unsigned long *bitmap;
-	//uint64_t bitmap;
 	uint64_t** temp_log;
 
 };
@@ -222,8 +242,6 @@ struct pmdfc_rdma_queue {
    struct list_head list;
    };*/
 
-struct request_struct request_list;
-
 struct node_info{
 	int node_id;
 	uint32_t lid;
@@ -233,6 +251,77 @@ struct node_info{
 	uint32_t rkey;
 	union ib_gid gid;
 };
+
+struct rdpma_message {
+	refcount_t		m_refcount;
+	struct list_head	m_sock_item;
+	struct list_head	m_conn_item;
+	u64			m_ack_seq;
+	struct in6_addr		m_daddr;
+	unsigned long		m_flags;
+
+	/* Never access m_rs without holding m_rs_lock.
+	 * Lock nesting is
+	 *  rm->m_rs_lock
+	 *   -> rs->rs_lock
+	 */
+	spinlock_t		m_rs_lock;
+	wait_queue_head_t	m_flush_wait;
+
+	unsigned int		m_used_sgs;
+	unsigned int		m_total_sgs;
+
+	void			*m_final_op;
+
+	struct {
+		struct rm_atomic_op {
+			int			op_type;
+			union {
+				struct {
+					uint64_t	compare;
+					uint64_t	swap;
+					uint64_t	compare_mask;
+					uint64_t	swap_mask;
+				} op_m_cswp;
+				struct {
+					uint64_t	add;
+					uint64_t	nocarry_mask;
+				} op_m_fadd;
+			};
+
+			u32			op_rkey;
+			u64			op_remote_addr;
+			unsigned int		op_notify:1;
+			unsigned int		op_recverr:1;
+			unsigned int		op_mapped:1;
+			unsigned int		op_silent:1;
+			unsigned int		op_active:1;
+			struct scatterlist	*op_sg;
+			struct rdpma_notifier	*op_notifier;
+
+			struct rdpma_mr		*op_rdma_mr;
+		} atomic;
+		struct rm_rdma_op {
+			u32			op_rkey;
+			u64			op_remote_addr;
+			unsigned int		op_write:1;
+			unsigned int		op_fence:1;
+			unsigned int		op_notify:1;
+			unsigned int		op_recverr:1;
+			unsigned int		op_mapped:1;
+			unsigned int		op_silent:1;
+			unsigned int		op_active:1;
+			unsigned int		op_bytes;
+			unsigned int		op_nents;
+			unsigned int		op_count;
+			struct scatterlist	*op_sg;
+			struct rdpma_notifier	*op_notifier;
+
+			struct rdpma_mr		*op_rdma_mr;
+		} rdma;
+	};
+};
+
 
 uint64_t ib_reg_mr_addr(void* addr, uint64_t length);
 struct mr_info* ib_reg_mr(void* addr, uint64_t length, enum ib_access_flags flags);
@@ -270,13 +359,12 @@ int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uint6
 int post_data_request(int node_id, int type, int size, uintptr_t addr, int imm_data, uint64_t offset);
 int post_recv(void);
 
+int pmdfc_rdma_post_recv(void);
+
 int query_qp(struct ib_qp* qp);
 
 int send_message(int node_id, int type, void* addr, int size, uint64_t inbox_addr);
 int recv_message(int node_id);
-int test_func(void);
-int test_func2(void);
-int poll_cq_test(struct ib_cq* cq, void* cq_ctx);
 
 static inline unsigned int inet_addr(char* addr){
 	int a, b, c, d;
@@ -289,5 +377,11 @@ static inline unsigned int inet_addr(char* addr){
 	inet[3] = d;
 	return *(unsigned int*)inet;
 }
+
+/* from ib.c */
+int rdpma_ib_init(void);
+void rdpma_ib_exit(void);
+
+
 
 #endif
