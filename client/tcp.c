@@ -908,7 +908,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 		goto out;
 	}
 
-	pr_info("%s: send nsw( key=%x, index=%x, ns_id=%x )\n", __func__, key, index, nsw.ns_id);
+//	pr_info("%s: send nsw( key=%x, index=%x, ns_id=%x )\n", __func__, key, index, nsw.ns_id);
 
 	/* wait on other node's handler */
 	pmnet_set_nst_status_time(&nst); /* st_status_time */
@@ -1134,7 +1134,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 	pmnet_set_func_start_time(sc);
 	switch(be16_to_cpu(hdr->msg_type)) {
 		case PMNET_MSG_SENDPAGE:
-			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n", 
+//			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n",  \
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			ret_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
@@ -1157,7 +1157,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			break;
 
 		case PMNET_MSG_NOTEXIST:
-			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (key=%x, index=%x, msg_num=%x)\n", 
+//			pr_info("SERVER-->CLIENT: PMNET_MSG_NOTEXIST (key=%x, index=%x, msg_num=%x)\n", \
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			pmnet_complete_nsw(nn, NULL,

@@ -181,6 +181,9 @@ void consumer(struct pmnet_sock_container *sc, int cpu) {
 		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[cpu]);
 		ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
 		free(msg_in);
+
+		if (putcnt % 10000)
+			print_stats();
 	}
 
 #if 0
@@ -467,8 +470,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 					pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 				}
 #endif
-				printf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-				printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
+//				printf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
+//				printf("%lx ]\n", (void *)D_RW(ctx->hashtable)->Get(key));
 			}
 			else{
 				/* page not exists */
@@ -483,7 +486,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				}
 #endif
 
-				printf("PAGE NOT EXIST (key=%x, index=%x, msg_num=%x)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
+//				printf("PAGE NOT EXIST (key=%x, index=%x, msg_num=%x)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
 			}
 			break;
 		}
