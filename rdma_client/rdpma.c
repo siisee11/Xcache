@@ -293,6 +293,7 @@ void handle_write(int pid, int num){
 
 	for(i = 0; i < num; i++){
 		pages[i] = (void*)ctx->temp_log[pid][i];
+		/* TODO: avoid register mr on critical path */
 		addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
 	}
 	dprintk("[%s]: victim page %s\n", __func__, pages[0]);

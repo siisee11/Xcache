@@ -53,7 +53,7 @@ void rdpmadebug(char *fmt, ...)
 extern struct workqueue_struct *rdpma_wq;
 extern struct client_context* ctx;
 
-#define NUM_ENTRY	(4)
+#define NUM_ENTRY		(4)
 #define METADATA_SIZE	(16)  		/* [ key, remote address ] */ 
 #define MAX_PROCESS	(64)
 #define BITMAP_SIZE	(64)
