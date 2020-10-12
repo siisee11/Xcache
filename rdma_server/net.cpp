@@ -58,59 +58,6 @@ struct ibv_mr* ibv_register_mr(void* addr, int size, int flags){
 		die("ibv_reg_mr failed\n");
 	return ret;
 }
-/*
-int rdma_read(int node_id, int type, struct ibv_mr* input, uint64_t addr){
-   struct ibv_send_wr wr;
-   struct ibv_send_wr* bad_wr;
-   struct ibv_sge sge[2];
-   int ret, ne;
-
-   memset(&wr, 0, sizeof(struct ibv_send_wr));
-   memset(sge, 0, sizeof(struct ibv_sge)*2);
-   struct ibv_header header;
-   struct ibv_mr* output;
-
-   wr.wr_id = type;
-   wr.opcode = IBV_WR_RDMA_READ;
-   wr.sg_list = sge;
-   wr.num_sge = 1;
-   wr.send_flags = IBV_SEND_SIGNALED;
-
-   init_header(ctx->node_id, addr, input->length, type, &header);
-   output = ibv_register_mr(&header, sizeof(struct ibv_header), IBV_ACCESS_LOCAL_WRITE);
-
-   sge[0].addr = (uint64_t)output->addr;
-   sge[0].length = output->length;
-   sge[0].lkey = output->lkey;
-
-   sge[1].addr = (uint64_t)input->addr;
-   sge[1].length = input->length;
-   sge[1].lkey = input->lkey;
-
-   ret = ibv_post_send(ctx->qp[node_id], &wr, &bad_wr);
-   if(ret){
-   fprintf(stderr, "[%s] ibv_post_send failed to %d client\n", __func__, node_id);
-   die("ibv_post_send failed");
-   }
-
-   struct ibv_wc wc[2];
-   do{
-   ne = ibv_poll_cq(ctx->send_cq, 1, wc);
-   if(ne < 0){
-   fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-   die("ibv_poll_cq failed");
-   }
-   }while(ne < 1);
-
-   for(int i=0; i<ne; i++){
-   if(wc[i].status != IBV_WC_SUCCESS){
-   fprintf(stderr, "[%s] sending request failed status %s (%d) for wr_id %d\n", __func__, ibv_wc_status_str(wc[i].status), wc[i].status, (int)wc[i].wr_id);
-   die("ib_poll_cq resulted unknown wc.status");
-   }
-   }
-   ibv_dereg_mr(output);
-   return 1;
-}*/
 
 int post_recv(int node_id){
 	struct ibv_recv_wr wr;
@@ -136,8 +83,25 @@ int post_recv(int node_id){
 	return 0;
 }
 
-int post_meta_request(int node_id, int pid, int type, uint32_t num, 
-		int tx_state, int len, uint64_t* addr, uint64_t offset){
+/**
+ * post_meta_request - post metadata request to target
+ * @nid: Client node identifier.
+ * @pid: Progress identifier.
+ * @type: Message type (i.e. MSG_READ_REQUEST, MSG_WRITE_REQUEST, ...)
+ * @num: IDK
+ * @tx_state: Transaction state (i.e. TX_READ_BEGIN, TX_READ_COMMITTED, ...) 
+ * @len: Size of content of addr
+ * @dma_addr: DMA-able address.
+ * @offset: offset from base to metadata region for pid
+ *
+ * This function post send in batch manner.
+ * Note that only last work request to be signaled.
+ *
+ * If generate_single_write_request succeeds, then return 0
+ * if not return negative value.
+ */
+int post_meta_request(int nid, int pid, int type, uint32_t num, 
+		int tx_state, int len, uint64_t* dma_addr, uint64_t offset){
 	struct ibv_send_wr wr;
 	struct ibv_send_wr* bad_wr;
 	struct ibv_sge sge;
@@ -145,7 +109,7 @@ int post_meta_request(int node_id, int pid, int type, uint32_t num,
 	memset(&wr, 0, sizeof(struct ibv_send_wr));
 	memset(&sge, 0, sizeof(struct ibv_sge));
 
-	sge.addr = (uintptr_t)addr;
+	sge.addr = (uintptr_t)dma_addr;
 	sge.length = len;
 	sge.lkey = ctx->mr->lkey;
 
@@ -153,14 +117,14 @@ int post_meta_request(int node_id, int pid, int type, uint32_t num,
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 	wr.send_flags = IBV_SEND_SIGNALED;
-	wr.imm_data = htonl(bit_mask(node_id, pid, type, tx_state, num));
-	wr.wr.rdma.remote_addr = (uintptr_t)(ctx->remote_mm[node_id] + offset);
-	wr.wr.rdma.rkey = ctx->rkey[node_id];
+	wr.imm_data = htonl(bit_mask(nid, pid, type, tx_state, num));
+	wr.wr.rdma.remote_addr = (uintptr_t)(ctx->remote_mm[nid] + offset);
+	wr.wr.rdma.rkey = ctx->rkey[nid];
 
 //	dprintf("[%s]: sending wr.imm_data: %u\t htonl(wr.imm_data): %u\n", __func__, wr.imm_data, htonl(wr.imm_data));
-	dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
-	if(ibv_post_send(ctx->qp[node_id], &wr, &bad_wr)){
-		fprintf(stderr, "[%s] ibv_post_send to node %d failed\n", __func__, node_id);
+	dprintf("[%s]: nid(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, pid, type, tx_state, num);
+	if(ibv_post_send(ctx->qp[nid], &wr, &bad_wr)){
+		fprintf(stderr, "[%s] ibv_post_send to node %d failed\n", __func__, nid);
 		return 1;
 	}
 
@@ -585,6 +549,7 @@ void* event_handler(void*){
 			ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)page;
 			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
 			uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
+			/* TODO: can we send non-DMA-able address ? */
 			*addr = (uint64_t)page;
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REQUEST_REPLY, new_request->num, TX_WRITE_READY, sizeof(uint64_t), addr, offset);
 			dprintf("Processed  [MSG_WRITE_REQUEST] %d num pages (node=%x pid=%x)\n", new_request->num, new_request->node_id, new_request->pid);
@@ -603,6 +568,7 @@ void* event_handler(void*){
 
 				D_RW(ctx->hashtable)->Insert(ctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(ctx->hashtable)->Get(*key);
+				dprintf("[%s]: page: %p\n", __func__, ptr);
 				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
 				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
 
@@ -813,8 +779,9 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 	flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_ON_DEMAND;
 	//    flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 	//    ctx->mr = ibv_reg_mr(ctx->pd, (void*)ctx->mm, sizeof(char)*4096 * 4, flags);
-	//    ctx->mr = ibv_reg_mr(ctx->pd, (void*)ctx->local_mm, LOCAL_TOTAL_REGION_SIZE, flags);
-	ctx->mr = ibv_reg_mr(ctx->pd, NULL, -1, flags);
+	/* FIXME: JY */
+	ctx->mr = ibv_reg_mr(ctx->pd, (void*)ctx->local_mm, LOCAL_META_REGION_SIZE, flags);
+//	ctx->mr = ibv_reg_mr(ctx->pd, NULL, -1, flags);
 	if(!ctx->mr){
 		fprintf(stderr, "ibv_reg_mr failed\n");
 		goto dealloc_pd;
@@ -993,8 +960,6 @@ void* establish_conn(void*){
 			close(sock);
 			exit(1);
 		}
-		uint64_t start = ctx->local_mm + (cur_node * LOCAL_META_REGION_SIZE);
-		uint64_t end = ctx->local_mm + ((cur_node+1) * LOCAL_META_REGION_SIZE);
 		post_recv(cur_node);
 
 		cur_node++;
@@ -1075,6 +1040,12 @@ int server_init_interface(){
 	ret = ibv_query_device(context, &dev_attr);
 	if(ret)
 		die("ibv_query_device failed\n");
+/*
+	dattr.comp_mask = IBV_EXP_DEVICE_ATTR_ODP | IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS;
+	ret = ibv_exp_query_device(context, &dattr);
+	if (dattr.exp_device_cap_flags & IBV_EXP_DEVICE_ODP)
+		printf("[  OK  ] ODP supported\n");
+*/
 
 	ctx = server_init_ctx(dev, size, rx_depth);
 	if(!ctx)
