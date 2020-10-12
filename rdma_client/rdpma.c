@@ -156,7 +156,7 @@ EXPORT_SYMBOL(generate_write_request);
 
 int generate_single_read_request(void* page, uint64_t key){
 	struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-	void* request_page;
+//	void* request_page;
 	uint64_t* addr;
 	int pid = find_and_set_nextbit();
 	volatile int* process_state = &ctx->process_state[pid];
@@ -296,7 +296,7 @@ void handle_write(int pid, int num){
 		/* TODO: avoid register mr on critical path */
 		addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
 	}
-	dprintk("[%s]: victim page %s\n", __func__, pages[0]);
+	dprintk("[%s]: victim page %s\n", __func__, (char *)pages[0]);
 	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
 
 	post_write_request_batch(pid, MSG_WRITE, num, addr, *remote_mm, num);
@@ -329,13 +329,12 @@ void handle_read(int pid, int num){
 	}
 	post_read_request_batch(addr, *remote_mm, num);
 
-	dprintk("[%s]: returned page %s\n", __func__, pages[0]);
+	dprintk("[%s]: returned page %s\n", __func__, (char *)pages[0]);
 
 	post_meta_request_batch(pid, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
 
 	*process_state = PROCESS_STATE_WAIT;
 	while(*process_state != PROCESS_STATE_DONE){
-		//process_state = &ctx->process_state[pid];
 		cpu_relax();
 	}
 
@@ -359,12 +358,6 @@ int event_handler(void){
 		spin_lock(&ctx->lock);
 
 		if (list_empty(&ctx->req_list)){
-#if 0 
-			if(kthread_should_stop()){
-				printk("[%s]: stopping event_handler\n", __func__);
-				return 0;
-			}
-#endif
 			spin_unlock(&ctx->lock);
 			continue;
 		}
@@ -425,8 +418,7 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
 	struct ib_sge sge[REQUEST_MAX_BATCH];
-	struct ib_wc wc;
-	int ret, ne, i;
+	int ret, i;
 
 	memset(sge, 0, sizeof(struct ib_sge) * REQUEST_MAX_BATCH);
 	memset(wr, 0, sizeof(struct ib_rdma_wr) * REQUEST_MAX_BATCH);
@@ -475,8 +467,7 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
 	struct ib_sge sge[REQUEST_MAX_BATCH];
-	struct ib_wc wc;
-	int ret, ne, i;
+	int ret, i;
 
 	memset(sge, 0, sizeof(struct ib_sge)*batch_size);
 	memset(wr, 0, sizeof(struct ib_rdma_wr)*batch_size);
@@ -527,8 +518,7 @@ int post_write_request_batch(int pid, int type, int num,
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
 	struct ib_sge sge[REQUEST_MAX_BATCH];
-	struct ib_wc wc;
-	int ret, ne, i;
+	int ret, i;
 
 	memset(sge, 0, sizeof(struct ib_sge) * batch_size);
 	memset(wr, 0, sizeof(struct ib_rdma_wr) * batch_size);
@@ -561,7 +551,6 @@ int post_write_request_batch(int pid, int type, int num,
 
 int pmdfc_rdma_post_recv(void){
 	struct ib_recv_wr wr;
-	struct rdpma_ib_connection *ic = ctx->ic;
 	const struct ib_recv_wr* bad_wr;
 	struct ib_sge sge;
 	int ret;
@@ -572,7 +561,6 @@ int pmdfc_rdma_post_recv(void){
 	sge.addr = (uintptr_t)NULL;
 	sge.length = 0;
 	sge.lkey = ctx->mr->lkey;
-//	sge.lkey = ic->i_pd->local_dma_lkey;
 
 	wr.wr_id = 0;
 	wr.sg_list = &sge;
@@ -885,9 +873,6 @@ int establish_conn(void){
  */
 static struct client_context* client_init_ctx(void){
 	int ret = 0, i, flags;
-	struct ib_cq_init_attr attr;
-	struct ib_device_attr dev_attr;
-	struct ib_udata uhw = {.outlen = 0, .inlen = 0};
 
 	unsigned long bitmap_size = BITS_TO_LONGS(BITMAP_SIZE) * sizeof(unsigned long);
 	unsigned long *bitmap = kzalloc(bitmap_size, GFP_KERNEL);
@@ -1068,6 +1053,7 @@ static int __init init_net_module(void){
 		goto err_class_register;
 	}
 	pr_info("[  OK  ] rdpma_ib_device successfully registered\n");
+	ssleep(1);
 
 	ret = client_init_interface();
 	if(ret){

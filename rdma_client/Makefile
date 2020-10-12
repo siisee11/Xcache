@@ -1,6 +1,6 @@
 obj-m := rdpma_mod.o rdpma_testing.o
-#obj-m := rdpma_ib.o 
-rdpma_ib-objs := ib.o
+obj-m := rdpma_ib.o 
+rdpma_ib-objs := ib.o ib_rdma.o
 rdpma_mod-objs := ib.o ib_cm.o ib_recv.o ib_send.o rdpma.o 
 rdpma_testing-objs := page_test.o
 
@@ -10,7 +10,7 @@ CC      := ${CROSS_COMPILE}gcc
 AS      := ${CROSS_COMPILE}as
 
 EXTRA_CFLAGS  += -g 
-EXTRA_SYMBERS := /usr/src/ofa_kernel/default/Module.symvers
+EXTRA_SYMBERS := /usr/src/ofa_kernel-5.1/default/Module.symvers
 
 default: modules
 modules:

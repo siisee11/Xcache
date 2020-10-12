@@ -138,7 +138,8 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	struct rdpma_ib_device *rdpma_ibdev;
 	bool has_fr, has_fmr;
 
-//	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
+	/* TODO: What is those strange names?? */
+	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
 
 	/* Only handle IB (no iWARP) devices */
 	if (device->node_type != RDMA_NODE_IB_CA)
@@ -218,6 +219,12 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	INIT_LIST_HEAD(&rdpma_ibdev->ipaddr_list);
 	INIT_LIST_HEAD(&rdpma_ibdev->conn_list);
 
+	if(list_empty(&rdpma_ib_devices)) {
+		ibdev = device;
+		pr_info("is empty\n");
+	}
+
+
 	down_write(&rdpma_ib_devices_lock);
 	list_add_tail_rcu(&rdpma_ibdev->list, &rdpma_ib_devices);
 	up_write(&rdpma_ib_devices_lock);
@@ -227,10 +234,6 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	refcount_inc(&rdpma_ibdev->refcount);
 
 //	rdpma_ib_nodev_connect();
-
-	if (strcmp(device->name, "mlx5_0") == 0) {
-		ibdev = device;
-	}
 
 put_dev:
 	rdpma_ib_dev_put(rdpma_ibdev);
@@ -303,7 +306,7 @@ struct ib_client rdpma_ib_client = {
 	.remove = rdpma_ib_remove_one
 };
 
-void rdpma_ib_exit(void)
+static void __exit rdpma_ib_exit(void)
 {
 //	rdpma_ib_set_unloading();
 	synchronize_rcu();
@@ -317,9 +320,10 @@ void rdpma_ib_exit(void)
 #endif
 }
 
-int rdpma_ib_init(void)
+static int __init rdpma_ib_init(void)
 {
 	int ret;
+	struct rdpma_ib_device *rdpma_ibdev;
 	
 	pr_info("RDPMA IB module init....\n");
 
@@ -338,6 +342,15 @@ int rdpma_ib_init(void)
 	ret = ib_register_client(&rdpma_ib_client);
 	if (ret)
 		goto out;
+
+	rdpma_ibdev = rdpma_ib_get_first_device();
+	if (!rdpma_ibdev) {
+		pr_err("No rdpma_ibdev!\n");
+		goto out;
+	}
+	ibdev = rdpma_ibdev->dev;
+	if (!ibdev)
+		pr_err("No ibdev!\n");
 
 #if 0
 	ret = rdpma_ib_sysctl_init();
@@ -362,5 +375,8 @@ out_mr_exit:
 out:
 	return ret;
 }
+void rdpma_ib_listen_stop(void);
 
+module_init(rdpma_ib_init);
+module_exit(rdpma_ib_exit);
 MODULE_LICENSE("GPL");

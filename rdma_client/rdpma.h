@@ -379,8 +379,8 @@ static inline unsigned int inet_addr(char* addr){
 }
 
 /* from ib.c */
-int rdpma_ib_init(void);
-void rdpma_ib_exit(void);
+//int rdpma_ib_init(void);
+//void rdpma_ib_exit(void);
 
 
 
