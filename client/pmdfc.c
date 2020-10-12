@@ -19,10 +19,10 @@
 #include "pmdfc.h"
 #include "rdma.h"
 
-//#define PMDFC_NETWORK 1
-#define PMDFC_DEBUG 1
+#define PMDFC_NETWORK 1
+//#define PMDFC_DEBUG 1
 #define PMDFC_GET 1
-#define PMDFC_RDMA 1
+//#define PMDFC_RDMA 1
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
 //#define PMDFC_PERCPU 1
@@ -55,9 +55,7 @@ static atomic_t filled = {.counter = 0};
 static int done = 0;
 
 /* Global page storage */
-#if defined(PMDFC_PREALLOC)
 struct pmdfc_storage_cluster *ps_cluster = NULL;
-#endif
 
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is

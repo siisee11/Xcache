@@ -138,7 +138,7 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	struct rdpma_ib_device *rdpma_ibdev;
 	bool has_fr, has_fmr;
 
-	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
+//	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
 
 	/* Only handle IB (no iWARP) devices */
 	if (device->node_type != RDMA_NODE_IB_CA)
