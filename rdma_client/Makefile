@@ -20,7 +20,7 @@ clean:
 ib:
 	insmod ./rdpma_ib.ko
 load:
-	insmod ./rdpma_mod.ko ip="10.0.0.51" port=2123
+	insmod ./rdpma_mod.ko ip="10.0.0.53" port=2123
 run:
 	insmod ./rdpma_testing.ko
 unload:
