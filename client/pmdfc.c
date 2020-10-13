@@ -17,7 +17,6 @@
 #include "tcp.h"
 #include "bloom_filter.h"
 #include "pmdfc.h"
-#include "rdma.h"
 
 #define PMDFC_NETWORK 1
 //#define PMDFC_DEBUG 1

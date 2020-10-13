@@ -21,5 +21,6 @@ cat /sys/kernel/debug/pmdfc/hit_gets;
 echo "dropped_puts: ";
 cat /sys/kernel/debug/pmdfc/drop_puts;
 
+cat /sys/kernel/debug/pmnet/*;
 '
 

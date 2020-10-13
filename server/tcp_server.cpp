@@ -682,11 +682,11 @@ void init_network_server()
 	// socket create and verification 
 	sockfd = socket(AF_INET, SOCK_STREAM, 0); 
 	if (sockfd == -1) { 
-		printf("socket creation failed...\n"); 
+		printf("[ FAIL ] socket creation failed...\n"); 
 		exit(0); 
 	} 
 	else
-		printf("Socket successfully created..\n"); 
+		printf("[  OK  ] Socket successfully created..\n"); 
 	bzero(&servaddr, sizeof(servaddr)); 
 
 	// assign IP, PORT 
@@ -696,11 +696,11 @@ void init_network_server()
 
 	// Binding newly created socket to given IP and verification 
 	if ((bind(sockfd, (SA*)&servaddr, sizeof(servaddr))) != 0) { 
-		printf("socket bind failed...\n"); 
+		printf("[ FAIL ] socket bind failed...\n"); 
 		exit(0); 
 	} 
 	else
-		printf("Socket successfully binded..\n"); 
+		printf("[  OK  ]Socket successfully binded..\n"); 
 
 	// Now server is ready to listen and verification 
 	if ((listen(sockfd, 5)) != 0) { 
@@ -708,7 +708,7 @@ void init_network_server()
 		exit(0); 
 	} 
 	else
-		printf("Server listening..\n"); 
+		printf("[  OK  ] Server listening..\n"); 
 
 	/*
 	 * Loop and accept client.
@@ -719,11 +719,11 @@ void init_network_server()
 		// Accept the data packet from client and verification 
 		connfd = accept(sockfd, (SA*)&cli, &len); 
 		if (connfd < 0) { 
-			printf("server acccept failed...\n"); 
+			printf("[ FAIL ] server acccept failed...\n"); 
 			exit(0); 
 		} 
 		else
-			printf("server acccept the client...\n"); 
+			printf("[  OK  ] server acccept the client...\n"); 
 
 		sc = sc_alloc();
 		sc->sockfd = connfd;
@@ -770,7 +770,6 @@ static struct server_context* server_init_ctx(char *path){
 	ctx->node_id = 0;
 	ctx->hashtable = OID_NULL;
 
-	printf("wait for log initialization\n");
 	if(access(log_path, 0) != 0){
 		ctx->log_pop = pmemobj_create(log_path, "log", LOG_SIZE, 0666);
 		if(!ctx->log_pop){
@@ -785,9 +784,8 @@ static struct server_context* server_init_ctx(char *path){
 			exit(0);
 		}
 	}
-	printf("log initialized\n");
+	printf("[  OK  ] log initialized\n");
 
-	printf("wait for hashtable initialization\n");
 	if(access(path, 0) != 0){
 		ctx->index_pop = pmemobj_create(path, "index", INDEX_SIZE, 0666);
 		if(!ctx->index_pop){
@@ -805,7 +803,7 @@ static struct server_context* server_init_ctx(char *path){
 		}
 		ctx->hashtable = POBJ_ROOT(ctx->index_pop, CCEH);
 	}
-	printf("hashtable initialized\n");
+	printf("[  OK  ] hashtable initialized\n");
 
 	return ctx;
 }

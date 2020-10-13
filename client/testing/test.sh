@@ -18,4 +18,4 @@ test1() {
 }
 
 
-avg_time 5 test1
+avg_time $1 test1

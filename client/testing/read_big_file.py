@@ -2,7 +2,7 @@
 
 #file_name = "hihi.txt"
 #file_name = "2Gdummyfile"
-file_name = "4Gdummyfile"
+file_name = "/test/4Gdummyfile"
 
 fr = open(file_name, 'r')
 fw = open(file_name + ".copy", 'w')
