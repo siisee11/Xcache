@@ -111,14 +111,14 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	while(1) {
 retry:
 		/* TODO: BUT it may need lock or something? */
-		bit = find_next_bit(storage->bitmap, 1024, bit);
-		if ( bit >= 1024 ) {
+		bit = find_next_bit(storage->bitmap, PMDFC_STORAGE_SIZE, bit);
+		if ( bit >= PMDFC_STORAGE_SIZE ) {
 			/* No page, wait for next round */
 			goto out;
 		}
 
 		/* XXX: after find bit and sleep and wake up after occupied_bit free would cause error */
-		if ( bit < 1024 ) {
+		if ( bit < PMDFC_STORAGE_SIZE ) {
 			key = storage->key_storage[bit];
 			index = storage->index_storage[bit];
 			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
@@ -218,8 +218,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	storage = ps_cluster->cl_storages[i];
 	/* TODO: It may need lock */
 retry:
-	bit = find_first_zero_bit(storage->bitmap, 1024);
-	if ( bit < 1024 ) {
+	bit = find_first_zero_bit(storage->bitmap, PMDFC_STORAGE_SIZE);
+	if ( bit < PMDFC_STORAGE_SIZE) {
 		if (!test_and_set_bit(bit, storage->bitmap)) {
 //			pr_info("PMDFC_PREALLOC: put page to storage[%u]\n", bit);
 			memcpy(storage->page_storage[bit], pg_from, PAGE_SIZE);	
@@ -473,23 +473,23 @@ static int init_ps_cluster(void){
 		storage = kzalloc(sizeof(struct pmdfc_storage), GFP_KERNEL);
 
 		/* Maximum continuous memory from kmalloc is 4M 
-		 * So I set bit_size as 1024 */
+		 * So I set bit_size as PMDFC_STORAGE_SIZE */
 //		int numa = i < 2 ? 0 : 1;
-		unsigned long bitmap_size = BITS_TO_LONGS(1024) * sizeof(unsigned long);
-		long *key_storage = kzalloc(1024 * sizeof(long), GFP_KERNEL);
-		unsigned int *index_storage = kzalloc(1024 * sizeof(unsigned int), GFP_KERNEL);
+		unsigned long bitmap_size = BITS_TO_LONGS(PMDFC_STORAGE_SIZE) * sizeof(unsigned long);
+		long *key_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(long), GFP_KERNEL);
+		unsigned int *index_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(unsigned int), GFP_KERNEL);
 		unsigned long *bitmap = kzalloc(bitmap_size, GFP_KERNEL);
-		void **page_storage = kzalloc(1024 * sizeof(void*), GFP_KERNEL);
+		void **page_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(void*), GFP_KERNEL);
 		if (!page_storage){
 			pr_err("pmdfc: cannot allocate page_storage\n");
 			return -ENOMEM;
 		}
-		for ( j = 0 ; j < 1024; j++) {
+		for ( j = 0 ; j < PMDFC_STORAGE_SIZE; j++) {
 			page_storage[j] = kzalloc(PAGE_SIZE, GFP_KERNEL);
 		}
 
 //		mutex_init(&pmdfc_storages[i].lock);
-		storage->bitmap_size = 1024;
+		storage->bitmap_size = PMDFC_STORAGE_SIZE;
 		storage->flags = 0;
 		set_bit(PS_empty, &storage->flags);
 		storage->page_storage = page_storage;

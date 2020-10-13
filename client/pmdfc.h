@@ -2,6 +2,7 @@
 #define _PMDFC_H_
 
 #define PMDFC_MAX_STORAGE 4
+#define PMDFC_STORAGE_SIZE  4096
 
 enum pmdfc_storage_flags {
 	PS_locked,
