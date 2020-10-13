@@ -10,7 +10,8 @@ CC      := ${CROSS_COMPILE}gcc
 AS      := ${CROSS_COMPILE}as
 
 EXTRA_CFLAGS  += -g 
-EXTRA_SYMBERS := /usr/src/ofa_kernel-5.1/default/Module.symvers
+#EXTRA_SYMBERS := /usr/src/ofa_kernel-5.1/default/Module.symvers
+#EXTRA_SYMBERS := /usr/src/ofa_kernel/default/Module.symvers
 
 default: modules
 modules:
@@ -24,4 +25,5 @@ load:
 run:
 	insmod ./rdpma_testing.ko
 unload:
+	rmmod rdpma_ib
 	rmmod rdpma_mod
