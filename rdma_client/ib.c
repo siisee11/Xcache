@@ -133,6 +133,11 @@ void rdpma_ib_dev_put(struct rdpma_ib_device *rdpma_ibdev)
 		queue_work(rdpma_wq, &rdpma_ibdev->free_work);
 }
 
+static void rdpma_add_one(struct ib_device *device)
+{
+	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
+}
+
 static void rdpma_ib_add_one(struct ib_device *device)
 {
 	struct rdpma_ib_device *rdpma_ibdev;
@@ -142,8 +147,10 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
 
 	/* Only handle IB (no iWARP) devices */
-	if (device->node_type != RDMA_NODE_IB_CA)
+	if (device->node_type != RDMA_NODE_IB_CA) {
+		pr_info("escape here\n");
 		return;
+	}
 
 	rdpma_ibdev = kzalloc_node(sizeof(struct rdpma_ib_device), GFP_KERNEL,
 				 ibdev_to_node(device));
@@ -302,16 +309,24 @@ static void rdpma_ib_remove_one(struct ib_device *device, void *client_data)
 
 struct ib_client rdpma_ib_client = {
 	.name   = "rdpma_ib",
-	.add    = rdpma_ib_add_one,
+//	.add    = rdpma_ib_add_one,
+	.add    = rdpma_add_one,
 	.remove = rdpma_ib_remove_one
 };
+
+static void rdpma_ib_unregister_client(void)
+{
+	ib_unregister_client(&rdpma_ib_client);
+	/* wait for rdpma_ib_dev_free() to complete */
+	flush_workqueue(rdpma_wq);
+}
 
 static void __exit rdpma_ib_exit(void)
 {
 //	rdpma_ib_set_unloading();
 	synchronize_rcu();
-#if 0
 	rdpma_ib_unregister_client();
+#if 0
 	rdpma_ib_destroy_nodev_conns();
 	rdpma_ib_sysctl_exit();
 	rdpma_ib_recv_exit();
