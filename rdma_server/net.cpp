@@ -313,9 +313,6 @@ int rdma_send(int node_id, void* addr, int size){
 	return 0;
 }
 
-
-
-
 int rdma_recv(int node_id, void* addr, int size){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
@@ -339,106 +336,6 @@ int rdma_recv(int node_id, void* addr, int size){
 	}
 	return 0;
 }
-
-
-/*
-   int recv_message(int node_id, int type){
-   struct ibv_recv_wr wr;
-   struct ibv_recv_wr* bad_wr;
-   struct ibv_sge sge[2];
-
-   char* temp_addr;
-   char* temp_header;
-   struct ibv_mr* temp_mr;
-   struct ibv_mr* temp_header_mr;
-   struct post_recv_struct* post_recv;
-
-   int ret;
-
-   temp_addr = (char*)malloc(sizeof(char)*RDMA_BUFFER_SIZE*2);
-   temp_mr = ibv_register_mr(temp_addr, RDMA_BUFFER_SIZE*2, IBV_ACCESS_LOCAL_WRITE);
-   temp_header = (char*)malloc(sizeof(struct ibv_header));
-   temp_header_mr = ibv_register_mr(temp_header, sizeof(struct ibv_header), IBV_ACCESS_LOCAL_WRITE);
-
-   post_recv = (struct post_recv_struct*)malloc(sizeof(struct post_recv_struct));
-   post_recv->header = (uintptr_t)temp_header;
-   post_recv->msg = (uintptr_t)temp_addr;
-   post_recv->header_mr = temp_header_mr;
-   post_recv->msg_mr = temp_mr;
-
-   memset(&wr, 0, sizeof(struct ibv_recv_wr));
-   memset(sge, 0, sizeof(struct ibv_sge)*2);
-   sge[0].addr = (uintptr_t)temp_header_mr->addr;
-   sge[0].length = temp_header_mr->length;
-   sge[0].lkey = temp_header_mr->lkey;
-
-   sge[1].addr = (uintptr_t)temp_mr->addr;
-   sge[1].length = temp_mr->length;
-   sge[1].lkey = temp_mr->lkey;
-
-   wr.wr_id = (uint64_t)post_recv;
-   wr.next = NULL;
-   wr.sg_list = sge;
-   wr.num_sge = 2;
-
-   ret = ibv_post_recv(ctx->qp[node_id], &wr, &bad_wr);
-   if(ret){
-   fprintf(stderr, "[%s] ibv_post_recv failed to %d client\n", __func__, node_id);
-   die("ibv_post_send failed");
-   }
-   return 0;
-   }
-
-   int send_message(int node_id, int type, struct ibv_mr* input, uint64_t addr){
-   struct ibv_send_wr wr;
-   struct ibv_send_wr* bad_wr;
-   struct ibv_sge sge[2];
-   struct ibv_mr* output;
-
-   int ret, ne;
-
-   memset(&wr, 0, sizeof(struct ibv_send_wr));
-   memset(sge, 0, sizeof(struct ibv_sge)*2);
-
-   wr.wr_id = (node_id << 8) | type;
-   wr.opcode = IBV_WR_SEND;
-   wr.sg_list = sge;
-   wr.num_sge = 2;
-   wr.send_flags = IBV_SEND_SIGNALED;
-
-   sge[0].addr = (uint64_t)output->addr;
-   sge[0].length = output->length;
-   sge[0].lkey = output->lkey;
-
-   sge[1].addr = (uint64_t)input->addr;
-   sge[1].length = input->length;
-sge[1].lkey = input->lkey;
-
-ret = ibv_post_send(ctx->qp[node_id], &wr, &bad_wr);
-if(ret){
-	fprintf(stderr, "[%s] ibv_post_send failed to %d client\n", __func__, node_id);
-	die("ibv_post_send failed");
-}
-
-struct ibv_wc wc[2];
-do{
-	ne = ibv_poll_cq(ctx->send_cq, 1, wc);
-	if(ne < 0){
-		fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-		die("ibv_poll_cq failed");
-	}
-}while(ne < 1);
-
-for(int i=0; i<ne; i++){
-	if(wc[i].status != IBV_WC_SUCCESS){
-		fprintf(stderr, "[%s] sending request failed status %s (%d) for wr_id %d\n", __func__, ibv_wc_status_str(wc[i].status), wc[i].status, (int)wc[i].wr_id);
-		die("ib_poll_cq resulted unknown wc.status");
-	}
-}
-ibv_dereg_mr(output);
-return 0;
-}*/
-
 
 uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
 	uint32_t target = (((uint32_t)node_id << 24) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
@@ -924,7 +821,8 @@ void* establish_conn(void*){
 		local_node.mm = ctx->local_mm + (cur_node * LOCAL_META_REGION_SIZE);
 		local_node.rkey = ctx->mr->rkey;
 		local_node.gid = gid;
-		dprintf("[TCP] sent local data: node_id(%d), lid(%d), qpn(%d), psn(%d), mm(%lx), rkey(%x)\n", local_node.node_id, local_node.lid, local_node.qpn, local_node.psn, local_node.mm, local_node.rkey);
+		dprintf("[TCP] sent local data: node_id(%d), lid(%d), qpn(%d), psn(%d), mm(%lx), rkey(%x)\n", 
+				local_node.node_id, local_node.lid, local_node.qpn, local_node.psn, local_node.mm, local_node.rkey);
 		//	ret = tcp_send(fd, &local_node, sizeof(struct node_info));
 		ret = write(fd, (char*)&local_node, sizeof(struct node_info));
 		if(ret != sizeof(struct node_info)){

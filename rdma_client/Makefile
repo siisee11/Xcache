@@ -1,6 +1,5 @@
-obj-m := rdpma_mod.o rdpma_testing.o
-obj-m := rdpma_ib.o 
-rdpma_ib-objs := ib.o ib_rdma.o
+obj-m := rdpma_mod.o rdpma_testing.o rdpma_ib.o 
+rdpma_ib-objs := ib-single-module.o ib_rdma.o
 rdpma_mod-objs := ib.o ib_cm.o ib_recv.o ib_send.o rdpma.o 
 rdpma_testing-objs := page_test.o
 

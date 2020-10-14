@@ -90,9 +90,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 static void print_stats() {
 	printf("\n--------------------REPORT---------------------\n");
-
-	printf("SAMPLE RATE [1/%d]\n\n", SAMPLE_RATE);
-
+	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
 	printf("Approximate total(Multipled by sample rate)\n PUT %lu (us), GET : %lu (us) \n",
 			pmput_elapsed/1000*SAMPLE_RATE,
 			(pmget_exist_elapsed + pmget_notexist_elapsed)/1000*SAMPLE_RATE);
@@ -128,12 +126,10 @@ static void print_stats() {
 	printf("PUT : %lu (us), GET_TOTAL : %lu (us)\n",
 			pmput_elapsed/1000/sample_put_cnt,
 			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/sample_get_cnt);
-
 	printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
 			pmput_queue_elapsed/1000/sample_put_q_cnt,
 			pmget_queue_elapsed/1000/sample_get_q_cnt);
-
-	printf("\n--------------------FIN------------------------\n");
+	printf("--------------------FIN------------------------\n");
 }
 
 
@@ -157,6 +153,21 @@ out:
 	return ret;
 }
 
+/**
+ * indicator - Show stats periodically
+ */
+void indicator() {
+	while (!done) {
+		sleep(10);
+		print_stats();
+	}
+}
+
+/**
+ * producer - Read from socket and add to queue 
+ *
+ * @sc: socket container struct that contains socket informantions
+ */
 void producer(struct pmnet_sock_container *sc) {
 	std::thread::id this_id = std::this_thread::get_id(); 
 	printf("[ new PRODUCER %lx Running... ]\n", this_id);
@@ -176,22 +187,12 @@ void consumer(struct pmnet_sock_container *sc, int cpu) {
 	printf("[ new CONSUMER %lx Running on CPU %d... ]\n", this_id, sched_getcpu());
 
 	/* consume request from queue */
+	/* TODO: Batching */
 	while (!done) {
-//		while (new_queue.pop(msg_in)){
 		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[cpu]);
 		ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
 		free(msg_in);
-
-		if (putcnt % 10000)
-			print_stats();
 	}
-
-#if 0
-//	while (new_queue.pop(msg_in)) {
-	while (dequeue(lfq, msg_in)){
-		ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
-	}
-#endif
 
 	close( sc->sockfd );
 	printf("[ CONSUMER %lx Exit ]\n", this_id);
@@ -398,8 +399,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			 * Insert received page into hash 
 			 * 1. Alloc POBJ and get its address
 			 */
+			/* TODO: batch insertion */
 			TOID(char) temp;
-			POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
+			POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
 			uint64_t temp_addr = (uint64_t)ctx->log_pop + temp.oid.off;
 			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
 			pmemobj_persist(ctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);	
@@ -522,7 +524,7 @@ static int pmnet_check_handshake(struct pmnet_sock_container *sc, struct pmnet_m
 	}
 
 	sc->sc_handshake_ok = 1;
-	printf("Handshake ok!\n");
+	printf("[  OK  ] Handshake!\n");
 
 	pmnet_sendpage(sc, pmnet_hand, sizeof(*pmnet_hand));
 
@@ -535,8 +537,13 @@ static int pmnet_check_handshake(struct pmnet_sock_container *sc, struct pmnet_m
 }
 
 
-/* 
- * Read from socket
+/** 
+ * pmnet_advance_rx - Read from socket and enqueue it
+ *
+ * @sc: Socket informantions
+ * @msg_in: Msg from client, be passed to consumer
+ * @pushed: Whether msg_in is pushed to queue or not
+ *
  */
 static int pmnet_advance_rx(struct pmnet_sock_container *sc, 
 		struct pmnet_msg_in *msg_in, bool& pushed)
@@ -624,7 +631,6 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 			clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
 		}
 #endif 
-//		if (new_queue.push(msg_in)) {
 		int targetQ = msg_in->hdr->key % nr_cpus;
 		enqueue(lfqs[targetQ], msg_in);
 		pushed = true;
@@ -635,6 +641,14 @@ out:
 	return ret;
 }
 
+/**
+ * pmnet_rx_until_empty - Read from socket until get error
+ *
+ * @sc: socket informantions
+ *
+ * create pmnet_msg_in structure and pass it to pmnet_advance_rx
+ * loop until connection break
+ */
 static void pmnet_rx_until_empty(struct pmnet_sock_container *sc)
 {
 	int ret = 1;
@@ -656,8 +670,8 @@ static void pmnet_rx_until_empty(struct pmnet_sock_container *sc)
 }
 
 
-/*
- * Initialize network server
+/**
+ * init_network_server - Initialize network server
  */
 void init_network_server()
 {
@@ -729,6 +743,7 @@ void init_network_server()
 		sc->sockfd = connfd;
 
 		std::thread p = std::thread( producer, sc );
+		std::thread i = std::thread( indicator );
 
 		// A mutex ensures orderly access to std::cout from multiple threads.
 		std::mutex iomutex;
@@ -738,6 +753,7 @@ void init_network_server()
 
 			// Create a cpu_set_t object representing a set of CPUs. Clear it and mark
 			// only CPU i as set.
+			// threads[i] would be assigned to CPU i
 			cpu_set_t cpuset;
 			CPU_ZERO(&cpuset);
 			CPU_SET(i, &cpuset);
@@ -753,6 +769,7 @@ void init_network_server()
 		}
 
 		p.join();
+		i.join();
 	} 
 
 

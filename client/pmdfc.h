@@ -1,14 +1,14 @@
 #ifndef _PMDFC_H_
 #define _PMDFC_H_
 
-#define PMDFC_MAX_STORAGE 4
-#define PMDFC_STORAGE_SIZE  4096
+#define PMDFC_MAX_STORAGE 8 			/* Number of storages */
+#define PMDFC_STORAGE_SIZE  4096 		/* Number of page per each storage */
 
 enum pmdfc_storage_flags {
 	PS_locked,
-	PS_full,
-	PS_empty,
-	PS_put,
+	PS_full, 	/* Need to be process */
+	PS_empty, 	/* Initial State */
+	PS_put, 	/* Only one PS can have this flag */
 	PS_send,
 };
 

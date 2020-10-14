@@ -803,7 +803,6 @@ static int pmnet_send_tcp_msg(struct socket *sock, struct kvec *vec,
 		goto out;
 	}
 
-	/* TODO: 얘가 잘못 */
 	ret = kernel_sendmsg(sock, &msg, vec, veclen, total);
 	if (likely(ret == total))
 		return 0;
@@ -816,6 +815,18 @@ out:
 	return ret;
 }
 
+/**
+ * pmnet_send_recv_message_vec - Send message and wait for recv
+ *
+ * @msg_type:
+ * @key:
+ * @index:
+ * @page:
+ * @caller_vec:
+ * @caller_veclen:
+ * @target_node:
+ * @status: return status value
+ */
 int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *page,
 		struct kvec *caller_vec, size_t caller_veclen, u8 target_node, int *status)
 {
@@ -923,15 +934,15 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	if (status && !ret)
 		*status = nsw.ns_status;
 
+	mlog(0, "woken, returning system status %d, user status %d\n",
+			ret, nsw.ns_status);
+
 	/* PAGE_EXIST */
 	if (*status != -1) {
 		to_va = page_address(page);
 		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
 		kfree(nsw.ns_page);
 	}
-
-	mlog(0, "woken, returning system status %d, user status %d\n",
-			ret, nsw.ns_status);
 
 out:
 	pmnet_debug_del_nst(&nst); /* must be before dropping sc and node */

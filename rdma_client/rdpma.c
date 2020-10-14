@@ -1035,7 +1035,7 @@ void cleanup_resource(void){
 }
 
 static struct class client_class = {
-	.name = "PRDMA_Client_Class"
+	.name = "rdpma_client_class"
 };
 
 static int __init init_net_module(void){
@@ -1053,7 +1053,6 @@ static int __init init_net_module(void){
 		goto err_class_register;
 	}
 	pr_info("[  OK  ] rdpma_ib_device successfully registered\n");
-	ssleep(1);
 
 	ret = client_init_interface();
 	if(ret){

@@ -142,6 +142,7 @@ int main(void){
 		args[i]->comp = &comp[i];
 	}
 
+	/*
 	pr_info("Start running read thread functions...\n");
 	start = ktime_get();
 
@@ -163,6 +164,7 @@ int main(void){
 		kfree(args[i]);
 	}
 	kfree(args);
+	*/
 
 	return 0;
 }

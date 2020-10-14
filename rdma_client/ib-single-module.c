@@ -42,7 +42,6 @@
 #include <net/addrconf.h>
 
 #include "rdpma.h"
-#include "ib.h"
 #include "ib_mr.h"
 
 struct workqueue_struct *rdpma_wq;
@@ -133,6 +132,11 @@ void rdpma_ib_dev_put(struct rdpma_ib_device *rdpma_ibdev)
 		queue_work(rdpma_wq, &rdpma_ibdev->free_work);
 }
 
+static void rdpma_add_one(struct ib_device *device)
+{
+	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
+}
+
 static void rdpma_ib_add_one(struct ib_device *device)
 {
 	struct rdpma_ib_device *rdpma_ibdev;
@@ -143,6 +147,7 @@ static void rdpma_ib_add_one(struct ib_device *device)
 
 	/* Only handle IB (no iWARP) devices */
 	if (device->node_type != RDMA_NODE_IB_CA) {
+		pr_info("escape here\n");
 		return;
 	}
 
@@ -220,6 +225,12 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	INIT_LIST_HEAD(&rdpma_ibdev->ipaddr_list);
 	INIT_LIST_HEAD(&rdpma_ibdev->conn_list);
 
+	if(list_empty(&rdpma_ib_devices)) {
+		ibdev = device;
+		pr_info("is empty\n");
+	}
+
+
 	down_write(&rdpma_ib_devices_lock);
 	list_add_tail_rcu(&rdpma_ibdev->list, &rdpma_ib_devices);
 	up_write(&rdpma_ib_devices_lock);
@@ -229,10 +240,6 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	refcount_inc(&rdpma_ibdev->refcount);
 
 //	rdpma_ib_nodev_connect();
-
-	if (strcmp(device->name, "mlx5_0") == 0) {
-		ibdev = device;
-	}
 
 put_dev:
 	rdpma_ib_dev_put(rdpma_ibdev);
@@ -307,8 +314,9 @@ static struct class client_class = {
 
 struct ib_client rdpma_ib_client = {
 	.name   = "rdpma_ib_client",
-	.add    = rdpma_ib_add_one,
-	.remove = rdpma_ib_remove_one
+//	.add    = rdpma_ib_add_one,
+	.add    = rdpma_add_one,
+//	.remove = rdpma_ib_remove_one
 };
 
 static void rdpma_ib_unregister_client(void)
@@ -318,7 +326,7 @@ static void rdpma_ib_unregister_client(void)
 	flush_workqueue(rdpma_wq);
 }
 
-void rdpma_ib_exit(void)
+static void __exit rdpma_ib_exit_test(void)
 {
 //	rdpma_ib_set_unloading();
 	synchronize_rcu();
@@ -332,7 +340,7 @@ void rdpma_ib_exit(void)
 #endif
 }
 
-int rdpma_ib_init(void)
+static int __init rdpma_ib_init_test(void)
 {
 	int ret;
 	struct rdpma_ib_device *rdpma_ibdev;
@@ -350,6 +358,14 @@ int rdpma_ib_init(void)
 	if (ret)
 		goto out;
 #endif
+
+	/*
+	ret = class_register(&client_class);
+	if(ret){
+		pr_err("class_register failed\n");
+		return -1;
+	}
+	*/
 
 	ret = ib_register_client(&rdpma_ib_client);
 	if(ret){
@@ -379,5 +395,8 @@ out_mr_exit:
 out:
 	return ret;
 }
+void rdpma_ib_listen_stop(void);
 
+module_init(rdpma_ib_init_test);
+module_exit(rdpma_ib_exit_test);
 MODULE_LICENSE("GPL");

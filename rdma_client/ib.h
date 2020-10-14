@@ -371,6 +371,9 @@ void rdpma_ib_dev_put(struct rdpma_ib_device *rdpma_ibdev);
 extern struct ib_client rdpma_ib_client;
 extern unsigned int rdpma_ib_retry_count;
 
+int rdpma_ib_init(void);
+void rdpma_ib_exit(void);
+
 /* ib_cm.c */
 int rdpma_ib_setup_qp(struct client_context *ctx);
 int rdpma_ib_conn_alloc(struct client_context *ctx, gfp_t gfp);

@@ -455,6 +455,11 @@ static int bloom_filter_init(void)
 	return 0;
 }
 
+/**
+ * init_ps_cluster - Initialize storage cluster
+ *
+ * ps_cluster will store page content, key and index
+ */
 static int init_ps_cluster(void){
 	struct pmdfc_storage_cluster *cluster = NULL;
 	struct pmdfc_storage *storage = NULL;
@@ -471,8 +476,7 @@ static int init_ps_cluster(void){
 	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
 		storage = kzalloc(sizeof(struct pmdfc_storage), GFP_KERNEL);
 
-		/* Maximum continuous memory from kmalloc is 4M 
-		 * So I set bit_size as PMDFC_STORAGE_SIZE */
+		/* TODO: NUMA awareness */
 //		int numa = i < 2 ? 0 : 1;
 		unsigned long bitmap_size = BITS_TO_LONGS(PMDFC_STORAGE_SIZE) * sizeof(unsigned long);
 		long *key_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(long), GFP_KERNEL);
