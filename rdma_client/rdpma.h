@@ -352,9 +352,8 @@ uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num);
 void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, uint32_t* num);
 
 int post_meta_request_batch(int pid, int type, int size, int tx_state, int len, void* addr, uint64_t offset, int batch_size);
-//int post_read_request_batch(int pid, int type, uint32_t size, uintptr_t* addr, uint64_t offset, int batch_size);
-//int post_read_request(int pid, int type, uint32_t size, uintptr_t addr, uint64_t offset);
 int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size);
+//int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uintptr_t, int batch_size);
 int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uint64_t offset, int batch_size);
 int post_data_request(int node_id, int type, int size, uintptr_t addr, int imm_data, uint64_t offset);
 int post_recv(void);

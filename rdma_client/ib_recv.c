@@ -77,7 +77,7 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 		pr_info("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 		if(type == MSG_WRITE_REQUEST_REPLY){
 			struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-//				dprintk("[%s]: received MSG_WRITE_REQUEST_REPLY\n", __func__);
+			dprintk("[%s]: received MSG_WRITE_REQUEST_REPLY\n", __func__);
 			new_request->type = MSG_WRITE;
 			new_request->pid = pid;
 			new_request->num = num;
@@ -88,7 +88,7 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 			spin_unlock(&ctx->lock);
 		}
 		else if(type == MSG_WRITE_REPLY){
-//				dprintk("[%s]: received MSG_WRITE_REPLY\n", __func__);
+			dprintk("[%s]: received MSG_WRITE_REPLY\n", __func__);
 			unset_bit(pid);
 			/* TODO: need to distinguish committed or aborted? */
 		}
@@ -106,7 +106,7 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 				spin_unlock(&ctx->lock);
 			}
 			else{
-//					dprintk("[%s]: remote server aborted read request\n", __func__);
+				dprintk("[%s]: remote server aborted read request\n", __func__);
 				ctx->process_state[pid] = PROCESS_STATE_ABORT;
 				/*
 				   unset_bit(pid);*/

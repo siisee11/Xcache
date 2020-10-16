@@ -357,7 +357,7 @@ void* server_recv_poll_cq(void* cq_context){
 	struct ibv_wc wc;
 	int ne;
 	static int num = 1;
-	dprintf("[%s] polling ready...\n", __func__);
+
 	while(1){
 		ne = 0;
 		do{
@@ -378,7 +378,6 @@ void* server_recv_poll_cq(void* cq_context){
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
 			int node_id, pid, type, tx_state;
 			uint32_t num;
-			//bit_unmask(htonl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
 			bit_unmask(ntohl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
 			dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 			post_recv(node_id);
@@ -433,8 +432,6 @@ void* event_handler(void*){
 	int insert_cnt = 0;
 	int search_cnt = 0;
 
-	dprintf("[%s] event_handler ready...\n", __func__);
-
 	while(1){
 		new_request = (struct request_struct*)dequeue(request_queue);
 
@@ -442,30 +439,34 @@ void* event_handler(void*){
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
 			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages (node=%x, pid=%x, key=%lx)\n", 
 					new_request->num, new_request->node_id, new_request->pid, *key);
-			void* page = (void*)malloc(new_request->num * PAGE_SIZE);
-			ctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)page;
+//			void* page = (void*)malloc(new_request->num * PAGE_SIZE);
+			uint64_t page = (uint64_t)malloc(new_request->num * PAGE_SIZE);
+			ctx->temp_log[new_request->node_id][new_request->pid] = page;
+			dprintf("[%s]: Send newly allocated page: %lx\n", __func__, page);
+			dprintf("[%s]: msg double check (before write): %s\n", __func__, (char*)page);
 			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
 			uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
-			/* TODO: can we send non-DMA-able address ? */
-			*addr = (uint64_t)page;
+			*addr = page;
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REQUEST_REPLY, new_request->num, TX_WRITE_READY, sizeof(uint64_t), addr, offset);
 			dprintf("Processed  [MSG_WRITE_REQUEST] %d num pages (node=%x pid=%x)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else if(new_request->type == MSG_WRITE){
-			void* ptr = (void*)ctx->temp_log[new_request->node_id][new_request->pid];
+//			void* ptr = (void*)ctx->temp_log[new_request->node_id][new_request->pid];
+			uint64_t ptr = ctx->temp_log[new_request->node_id][new_request->pid];
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
+//			uint64_t* page = (uint64_t*)GET_CLIENT_DATA_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
 			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, pid=%x, key=%lx)\n", 
 					new_request->num, new_request->node_id, new_request->pid, *key);
 			for(int i = 0; i < new_request->num; i++){
 				TOID(char) temp;
 				POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
 				uint64_t temp_addr = (uint64_t)ctx->log_pop + temp.oid.off;
-				memcpy((void*)temp_addr, (void *)((uint8_t*)ptr+i*PAGE_SIZE), PAGE_SIZE);
+				memcpy((void*)temp_addr, (void *)(ptr + i * PAGE_SIZE), PAGE_SIZE);
 				pmemobj_persist(ctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);
 
 				D_RW(ctx->hashtable)->Insert(ctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(ctx->hashtable)->Get(*key);
-				dprintf("[%s]: page: %p\n", __func__, ptr);
+				dprintf("[%s]: page: %lx\n", __func__, (uint64_t)ptr);
 				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
 				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
 
@@ -474,7 +475,8 @@ void* event_handler(void*){
 			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
 			/* if successfully inserted */
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REPLY, new_request->num, TX_WRITE_COMMITTED, 0, NULL, offset);
-			free(ptr);
+			free((void *)ptr);
+//			free(ptr);
 			dprintf("Processed  [MSG_WRITE] %d num pages (node=%d pid=%d)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else if(new_request->type == MSG_READ_REQUEST){
@@ -487,7 +489,6 @@ void* event_handler(void*){
 				uint64_t* key = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + i*METADATA_SIZE); 
 				dprintf("Target Key is %ld (%lx)\n", *key, *key);
 				values[i] = (void*)D_RW(ctx->hashtable)->Get(*key);
-				//search_cnt++;
 				if(!values[i]){
 					dprintf("Value for key[%lx] not found\n", *key);
 					abort = true;
@@ -520,27 +521,20 @@ void* event_handler(void*){
 
 static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* dest){
 	struct ibv_qp_attr attr;
+	int flags;
 
 	memset(&attr, 0, sizeof(attr));
+
 	attr.qp_state = IBV_QPS_INIT;
 	attr.pkey_index = 0;
 	attr.port_num = ib_port;
-	//    attr.qp_access_flags = 0;
-	/*    attr.qp_access_flags =
-		  IBV_ACCESS_REMOTE_READ |
-		  IBV_ACCESS_REMOTE_WRITE|
-		  IBV_ACCESS_REMOTE_ATOMIC;*/
-
 	attr.qp_access_flags =
 		IBV_ACCESS_LOCAL_WRITE |
 		IBV_ACCESS_REMOTE_READ |
 		IBV_ACCESS_REMOTE_WRITE|
 		IBV_ACCESS_REMOTE_ATOMIC;
-	if(ibv_modify_qp(qp, &attr,
-				IBV_QP_STATE |
-				IBV_QP_PKEY_INDEX |
-				IBV_QP_PORT |
-				IBV_QP_ACCESS_FLAGS)){
+	flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+	if(ibv_modify_qp(qp, &attr, flags)){
 		die("ibv_modify_qp to INIT failed\n");
 		return 1;
 	}
@@ -549,22 +543,19 @@ static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* de
 	attr.qp_state = IBV_QPS_RTR;
 	attr.path_mtu = IBV_MTU_4096;
 	attr.dest_qp_num = dest->qpn;
-	//    attr.rq_psn = 0;
 	attr.rq_psn = dest->psn;
 	attr.max_dest_rd_atomic = 16;
-	//    attr.max_dest_rd_atomic = 10;
 	attr.min_rnr_timer = 12;
 	attr.ah_attr.is_global = 0;
 	attr.ah_attr.dlid = dest->lid;
 	attr.ah_attr.sl = 0;
-	//    attr.ah_attr.sl = sl;
 	attr.ah_attr.src_path_bits = 1;
-	//    attr.ah_attr.src_path_bits = 0;
+//	attr.ah_attr.src_path_bits = 0;
 	attr.ah_attr.port_num = ib_port;
-	attr.ah_attr.is_global = 0;
 
+	/* TODO: IDK */
 	if(dest->gid.global.interface_id){
-		//	attr.ah_attr.is_global = 1;
+//		attr.ah_attr.is_global = 1;
 		attr.ah_attr.grh.hop_limit = 1;
 		attr.ah_attr.grh.dgid = dest->gid;
 		attr.ah_attr.grh.sgid_index = -1;
@@ -600,7 +591,7 @@ static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* de
 		die("ibv_modify_qp to RTS failed\n");
 	}
 
-	dprintf("[%s] modify_qp to RTS succeeded\n", __func__);
+	dprintf("[  OK  ] modify_qp to RTS succeeded\n");
 	return 0;
 }
 
@@ -673,32 +664,19 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 	if(!ctx->pd)
 		die("ibv_alloc_pd failed\n");
 
+	/* 
+	 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
+	 * addr should be 0 and length should be SIZE_MAX.
+	 */
 	flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_ON_DEMAND;
-	//    flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
-	//    ctx->mr = ibv_reg_mr(ctx->pd, (void*)ctx->mm, sizeof(char)*4096 * 4, flags);
-	/* FIXME: JY */
-	ctx->mr = ibv_reg_mr(ctx->pd, (void*)ctx->local_mm, LOCAL_META_REGION_SIZE, flags);
-//	ctx->mr = ibv_reg_mr(ctx->pd, NULL, -1, flags);
+	ctx->mr = ibv_reg_mr(ctx->pd, NULL, (uint64_t)-1, flags);
 	if(!ctx->mr){
 		fprintf(stderr, "ibv_reg_mr failed\n");
 		goto dealloc_pd;
 	}
 
-	//ptr = mmap(NULL, LOCAL_META_REGION_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0);
-	//ptr = mmap((void*)ctx->local_mm, LOCAL_META_REGION_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, 0, 0);
-
-	/*
-	   if((int)ptr == MAP_FAILED){
-	   fprintf(stderr, "mmap failed\n");
-	   exit(0);
-	   }*/
-	//    ctx->local_mm = &ptr;
 	memset((void*)ctx->local_mm, 0, LOCAL_META_REGION_SIZE);
 
-	//    ctx->local_ptr = mmap(NULL, LOCAL_TOTAL_SIZE,//here 
-
-	//    ctx->recv_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, NULL, 0);
-	//    ctx->recv_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, ctx->channel, 0);
 	QP_DEPTH = rx_depth+1;
 	ctx->recv_cq = ibv_create_cq(ctx->context, QP_DEPTH, NULL, NULL, 0);
 	if(!ctx->recv_cq){
@@ -706,8 +684,6 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 		goto dereg_mr;
 	}
 
-	//    ctx->send_cq = ibv_create_cq(ctx->context, rx_depth+1, NULL, NULL, 0);
-//	ctx->send_cq = ibv_create_cq(ctx->context, QP_DEPTH, NULL, ctx->channel, 0);
 	ctx->send_cq = ibv_create_cq(ctx->context, QP_DEPTH, NULL, NULL, 0);
 	if(!ctx->send_cq){
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
@@ -737,7 +713,6 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 			fprintf(stderr, "ibv_create_qp[%d] failed\n", i);
 			goto destroy_qp;
 		}
-		dprintf("[%s] queue pair[%d] created\n", __func__, i);
 	}
 
 	return ctx;
@@ -818,12 +793,11 @@ void* establish_conn(void*){
 		local_node.lid = ctx->port_attr.lid;
 		local_node.qpn = ctx->qp[cur_node]->qp_num;
 		local_node.psn = lrand48() & 0xffffff;
-		local_node.mm = ctx->local_mm + (cur_node * LOCAL_META_REGION_SIZE);
+		local_node.mm = ctx->local_mm + (cur_node * PER_NODE_META_REGION_SIZE);
 		local_node.rkey = ctx->mr->rkey;
 		local_node.gid = gid;
-		dprintf("[TCP] sent local data: node_id(%d), lid(%d), qpn(%d), psn(%d), mm(%lx), rkey(%x)\n", 
+		dprintf("[ INFO ] LOCAL 	node_id(%d) lid(%d) qpn(%d) psn(%d) mm(%12lx) rkey(%x)\n", 
 				local_node.node_id, local_node.lid, local_node.qpn, local_node.psn, local_node.mm, local_node.rkey);
-		//	ret = tcp_send(fd, &local_node, sizeof(struct node_info));
 		ret = write(fd, (char*)&local_node, sizeof(struct node_info));
 		if(ret != sizeof(struct node_info)){
 			fprintf(stderr, "[TCP] write failed\n");
@@ -840,7 +814,7 @@ void* establish_conn(void*){
 			close(sock);
 			exit(1);
 		}
-		dprintf("[TCP] received node_id(%d), lid(%d), qpn(%d), psn(%d), mm(%lx), rkey(%x)\n", remote_node.node_id, remote_node.lid, remote_node.qpn, remote_node.psn, remote_node.mm, remote_node.rkey);
+		dprintf("[ INFO ] REMOTE	node_id(%d) lid(%d) qpn(%d) psn(%d) mm(%12lx) rkey(%x)\n", remote_node.node_id, remote_node.lid, remote_node.qpn, remote_node.psn, remote_node.mm, remote_node.rkey);
 
 		ctx->remote_mm[remote_node.node_id] = remote_node.mm;
 		ctx->rkey[remote_node.node_id] = remote_node.rkey;
@@ -920,12 +894,21 @@ int server_init_interface(){
 	if(!dev_list)
 		die("ibv_get_device_list failed\n");
 
+	printf("%d\n", dev_num);
+
 	for(int i=0; i<dev_num; i++){
-		if(!dev_name) dev_name = strdup(ibv_get_device_name(dev_list[i]));
-		if(!strcmp(ibv_get_device_name(dev_list[i]), dev_name)){
+		dev_name = strdup(ibv_get_device_name(dev_list[i]));
+		printf("%s\n", dev_name);
+		if (!strcmp(dev_name, "mlx5_0")){
 			dev = dev_list[i];
 			break;
 		}
+		/*
+		if(!dev_name) dev_name = strdup(ibv_get_device_name(dev_list[i]));
+		if(!strcmp(ibv_get_device_name(dev_list[i]), dev_name)){
+			dev = dev_list[i];
+		}
+		*/
 	}
 
 	if(!dev)

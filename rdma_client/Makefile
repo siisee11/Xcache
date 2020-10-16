@@ -24,5 +24,4 @@ load:
 run:
 	insmod ./rdpma_testing.ko
 unload:
-	rmmod rdpma_ib
 	rmmod rdpma_mod

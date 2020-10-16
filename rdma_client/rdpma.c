@@ -288,6 +288,7 @@ void handle_write(int pid, int num){
 	uintptr_t addr[REQUEST_MAX_BATCH];
 	void* pages[REQUEST_MAX_BATCH];
 	int i;
+//	uintptr_t target_addr = (uintptr_t)(ctx->remote_mm + 16);
 
 	/* write page content to remote_mm */
 
@@ -298,8 +299,10 @@ void handle_write(int pid, int num){
 	}
 	dprintk("[%s]: victim page %s\n", __func__, (char *)pages[0]);
 	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
+//	dprintk("[%s]: target addr= %llx\n", __func__, (uint64_t)target_addr);
 
 	post_write_request_batch(pid, MSG_WRITE, num, addr, *remote_mm, num);
+//	post_write_request_batch(pid, MSG_WRITE, num, addr, target_addr, num);
 
 	for(i = 0; i < num; i++){
 		ib_dereg_mr_addr(addr[i], PAGE_SIZE);
@@ -418,7 +421,8 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
 	struct ib_sge sge[REQUEST_MAX_BATCH];
-	int ret, i;
+	struct ib_wc wc;
+	int ret, ne, i;
 
 	memset(sge, 0, sizeof(struct ib_sge) * REQUEST_MAX_BATCH);
 	memset(wr, 0, sizeof(struct ib_rdma_wr) * REQUEST_MAX_BATCH);
@@ -447,6 +451,19 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 		return -1;
 	}
 
+	do{
+		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -467,7 +484,8 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
 	struct ib_sge sge[REQUEST_MAX_BATCH];
-	int ret, i;
+	struct ib_wc wc;
+	int ret, ne, i;
 
 	memset(sge, 0, sizeof(struct ib_sge)*batch_size);
 	memset(wr, 0, sizeof(struct ib_rdma_wr)*batch_size);
@@ -495,6 +513,19 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 		return 1;
 	}
 
+	do{
+		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -518,7 +549,8 @@ int post_write_request_batch(int pid, int type, int num,
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
 	struct ib_sge sge[REQUEST_MAX_BATCH];
-	int ret, i;
+	struct ib_wc wc;
+	int ret, ne, i;
 
 	memset(sge, 0, sizeof(struct ib_sge) * batch_size);
 	memset(wr, 0, sizeof(struct ib_rdma_wr) * batch_size);
@@ -536,6 +568,7 @@ int post_write_request_batch(int pid, int type, int num,
 		wr[i].wr.send_flags = (i == batch_size-1) ? IB_SEND_SIGNALED : 0;
 		wr[i].wr.ex.imm_data = htonl(bit_mask(ctx->node_id, pid, type, TX_WRITE_BEGIN, num));
 		wr[i].remote_addr = (uintptr_t)(remote_mm + i * PAGE_SIZE);
+//		wr[i].remote_addr = remote_mm;
 		wr[i].rkey = ctx->rkey;
 	}
 	dprintk("[%s]: target addr: %llx, target rkey %x\n", __func__, (uint64_t)wr[0].remote_addr, ctx->rkey);
@@ -543,6 +576,19 @@ int post_write_request_batch(int pid, int type, int num,
 	ret = ib_post_send(ctx->qp, &wr[0].wr, &bad_wr);
 	if(ret){
 		printk(KERN_ALERT "[%s]: ib_post_send failed\n", __func__);
+		return 1;
+	}
+
+	do{
+		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		return 1;
 	}
 

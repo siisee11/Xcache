@@ -218,12 +218,12 @@ int rdpma_ib_setup_qp(struct client_context *ctx)
 	ic->i_pd = rdpma_ibdev->pd;
 
 	ic->i_scq_vector = ibdev_get_unused_vector(rdpma_ibdev);
-//	cq_attr.cqe = ic->i_send_ring.w_nr + fr_queue_space + 1;
 	cq_attr.cqe = fr_queue_space + 1;
 	cq_attr.comp_vector = ic->i_scq_vector;
-	ic->i_send_cq = ib_create_cq(dev, rdpma_ib_cq_comp_handler_send,
-				     rdpma_ib_cq_event_handler, ctx,
-				     &cq_attr);
+    ic->i_send_cq = ib_create_cq(dev, NULL, NULL, NULL, &cq_attr);
+//	ic->i_send_cq = ib_create_cq(dev, rdpma_ib_cq_comp_handler_send,
+//				     rdpma_ib_cq_event_handler, ctx,
+//				     &cq_attr);
 	if (IS_ERR(ic->i_send_cq)) {
 		ret = PTR_ERR(ic->i_send_cq);
 		ic->i_send_cq = NULL;
@@ -247,11 +247,13 @@ int rdpma_ib_setup_qp(struct client_context *ctx)
 		goto send_cq_out;
 	}
 
+	/*
 	ret = ib_req_notify_cq(ic->i_send_cq, IB_CQ_NEXT_COMP);
 	if (ret) {
 		rdpmadebug("ib_req_notify_cq send failed: %d\n", ret);
 		goto recv_cq_out;
 	}
+	*/
 
 //	ret = ib_req_notify_cq(ic->i_recv_cq, IB_CQ_SOLICITED);
 	ret = ib_req_notify_cq(ic->i_recv_cq, IB_CQ_NEXT_COMP);

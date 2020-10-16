@@ -33,7 +33,7 @@ int single_write_test(void* arg){
 	uint64_t key;
 	char test_string[PAGE_SIZE] = "hi, dicl";
 
-	key = 3000;
+	key = 4000;
 	ret = generate_single_write_request(test_string, key);
 
 	complete(my_data->comp);
@@ -62,7 +62,7 @@ int single_read_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret;
 	int result = 0;
-	uint64_t key = 3000;
+	uint64_t key = 4000;
 	char test_string[PAGE_SIZE] = "hi, dicl";
 	void *result_page;
 
@@ -142,7 +142,6 @@ int main(void){
 		args[i]->comp = &comp[i];
 	}
 
-	/*
 	pr_info("Start running read thread functions...\n");
 	start = ktime_get();
 
@@ -164,7 +163,6 @@ int main(void){
 		kfree(args[i]);
 	}
 	kfree(args);
-	*/
 
 	return 0;
 }
