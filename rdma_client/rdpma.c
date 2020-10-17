@@ -33,7 +33,7 @@ enum ib_mtu client_mtu_to_enum(int max_transfer_unit){
 }
 struct ib_pd* ctx_pd;
 
-int pmdfc_rdma_post_recv(void);
+int rdpma_post_recv(void);
 
 /**
  * ib_reg_mr_addr - map DMA mapping to addr and validate it.
@@ -288,10 +288,8 @@ void handle_write(int pid, int num){
 	uintptr_t addr[REQUEST_MAX_BATCH];
 	void* pages[REQUEST_MAX_BATCH];
 	int i;
-//	uintptr_t target_addr = (uintptr_t)(ctx->remote_mm + 16);
 
 	/* write page content to remote_mm */
-
 	for(i = 0; i < num; i++){
 		pages[i] = (void*)ctx->temp_log[pid][i];
 		/* TODO: avoid register mr on critical path */
@@ -299,10 +297,8 @@ void handle_write(int pid, int num){
 	}
 	dprintk("[%s]: victim page %s\n", __func__, (char *)pages[0]);
 	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
-//	dprintk("[%s]: target addr= %llx\n", __func__, (uint64_t)target_addr);
 
 	post_write_request_batch(pid, MSG_WRITE, num, addr, *remote_mm, num);
-//	post_write_request_batch(pid, MSG_WRITE, num, addr, target_addr, num);
 
 	for(i = 0; i < num; i++){
 		ib_dereg_mr_addr(addr[i], PAGE_SIZE);
@@ -595,7 +591,7 @@ int post_write_request_batch(int pid, int type, int num,
 	return 0;
 }
 
-int pmdfc_rdma_post_recv(void){
+int rdpma_post_recv(void){
 	struct ib_recv_wr wr;
 	const struct ib_recv_wr* bad_wr;
 	struct ib_sge sge;
@@ -1024,7 +1020,7 @@ int client_init_interface(void){
 	}
 	pr_info("[  OK  ] connection successfully established");
 
-	pmdfc_rdma_post_recv();
+	rdpma_post_recv();
 
 	atomic_set(&ctx->connected, 1);
 

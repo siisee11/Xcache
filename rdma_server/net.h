@@ -38,8 +38,8 @@ void die(const char* str){
 #define SERVER_NODE_ID 				(MAX_NODE)
 #define NUM_ENTRY					(4)
 //#define REGION_PER_NODE				(4)
-//#define METADATA_SIZE				(16)
-#define METADATA_SIZE				(4112)
+#define METADATA_SIZE				(16)
+//#define METADATA_SIZE				(4112)
 #define PAGE_SIZE 				(4096)
 #define MAX_PROCESS				(64)
 
@@ -47,7 +47,7 @@ void die(const char* str){
 #define PER_NODE_META_REGION_SIZE		(MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
 #define PER_PROCESS_META_REGION_SIZE	(NUM_ENTRY * METADATA_SIZE)
 #define GET_CLIENT_META_REGION(addr, nid, pid)	(addr + nid * PER_NODE_META_REGION_SIZE + PER_PROCESS_META_REGION_SIZE * pid)
-#define GET_CLIENT_DATA_REGION(addr, nid, pid) 	(addr + PER_NODE_META_REGION_SIZE * nid + PER_PROCESS_META_REGION_SIZE * pid + 16)
+//#define GET_CLIENT_DATA_REGION(addr, nid, pid) 	(addr + PER_NODE_META_REGION_SIZE * nid + PER_PROCESS_META_REGION_SIZE * pid + 16)
 
 int QP_DEPTH;
 

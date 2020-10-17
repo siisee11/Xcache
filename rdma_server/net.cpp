@@ -6,6 +6,7 @@
 
 extern int ib_port;
 extern int tcp_port;
+#undef DEBUG
 #ifdef DEBUG
 extern int errno;
 #endif
@@ -35,8 +36,6 @@ enum ibv_mtu server_mtu_to_enum(int max_transfer_unit){
 int poll_cq(struct ibv_cq* cq){
 	struct ibv_wc wc;
 	int ne, i;
-
-	printf("polling...............\n");
 
 	do{
 		ne = ibv_poll_cq(cq, 1, &wc);
@@ -121,7 +120,6 @@ int post_meta_request(int nid, int pid, int type, uint32_t num,
 	wr.wr.rdma.remote_addr = (uintptr_t)(ctx->remote_mm[nid] + offset);
 	wr.wr.rdma.rkey = ctx->rkey[nid];
 
-//	dprintf("[%s]: sending wr.imm_data: %u\t htonl(wr.imm_data): %u\n", __func__, wr.imm_data, htonl(wr.imm_data));
 	dprintf("[%s]: nid(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, pid, type, tx_state, num);
 	if(ibv_post_send(ctx->qp[nid], &wr, &bad_wr)){
 		fprintf(stderr, "[%s] ibv_post_send to node %d failed\n", __func__, nid);
@@ -235,108 +233,6 @@ int rdma_write(int node_id, int type, uint64_t addr, int len){
 	return 0;
 }
 
-/*
-   int rdma_write(int node_id, int type, struct ibv_mr* input, uint64_t addr){
-   struct ibv_send_wr wr;
-   struct ibv_send_wr* bad_wr;
-   struct ibv_sge sge[2];
-   int ret, ne;
-
-   memset(&wr, 0, sizeof(struct ibv_send_wr));
-   memset(sge, 0, sizeof(struct ibv_sge)*2);
-   struct ibv_header header;
-   struct ibv_mr* output;
-
-   wr.wr_id = type;
-   wr.opcode = IBV_WR_RDMA_WRITE;
-   wr.sg_list = sge;
-   wr.num_sge = 1;
-   wr.send_flags = IBV_SEND_SIGNALED;
-
-   init_header(ctx->node_id, addr, input->length, type, &header);
-   output = ibv_register_mr(&header, sizeof(struct ibv_header), IBV_ACCESS_LOCAL_WRITE);
-
-   sge[0].addr = (uint64_t)output->addr;
-   sge[0].length = output->length;
-   sge[0].lkey = output->lkey;
-
-   sge[1].addr = (uint64_t)input->addr;
-   sge[1].length = input->length;
-   sge[1].lkey = input->lkey;
-
-   ret = ibv_post_send(ctx->qp[node_id], &wr, &bad_wr);
-   if(ret){
-   fprintf(stderr, "[%s] ibv_post_send failed to %d client\n", __func__, node_id);
-   die("ibv_post_send failed");
-   }
-
-   struct ibv_wc wc[2];
-   do{
-   ne = ibv_poll_cq(ctx->send_cq, 1, wc);
-   if(ne < 0){
-   fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-   die("ibv_poll_cq failed");
-   }
-   }while(ne < 1);
-
-   for(int i=0; i<ne; i++){
-   if(wc[i].status != IBV_WC_SUCCESS){
-   fprintf(stderr, "[%s] sending request failed status %s (%d) for wr_id %d\n", __func__, ibv_wc_status_str(wc[i].status), wc[i].status, (int)wc[i].wr_id);
-   die("ib_poll_cq resulted unknown wc.status");
-   }
-   }
-   ibv_dereg_mr(output);
-   return 1;
-   }*/
-
-int rdma_send(int node_id, void* addr, int size){
-	struct ibv_send_wr wr;
-	struct ibv_send_wr* bad_wr;
-	struct ibv_sge sge;
-	int ret;
-
-	memset(&wr, 0, sizeof(struct ibv_send_wr));
-	memset(&sge, 0, sizeof(struct ibv_sge));
-
-	sge.addr = (uintptr_t)addr;
-	sge.length = size;
-	sge.lkey = ctx->mr->lkey;
-
-	wr.wr_id = 0;
-	wr.sg_list = &sge;
-	wr.num_sge = 1;
-
-	if(ibv_post_send(ctx->qp[node_id], &wr, &bad_wr)){
-		fprintf(stderr, "[%s] ibv_post_send failed\n", __func__);
-		return 1;
-	}
-	return 0;
-}
-
-int rdma_recv(int node_id, void* addr, int size){
-	struct ibv_recv_wr wr;
-	struct ibv_recv_wr* bad_wr;
-	struct ibv_sge sge;
-	int ret;
-
-	memset(&wr, 0, sizeof(struct ibv_recv_wr));
-	memset(&sge, 0, sizeof(struct ibv_sge));
-
-	sge.addr = (uintptr_t)addr;
-	sge.length = size;
-	sge.lkey = ctx->mr->lkey;
-
-	wr.wr_id = 0;
-	wr.sg_list = &sge;
-	wr.num_sge = 1;
-
-	if(ibv_post_recv(ctx->qp[node_id], &wr, &bad_wr)){
-		fprintf(stderr, "[%s] ibv_post_recv failed\n", __func__);
-		return 1;
-	}
-	return 0;
-}
-
 uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
 	uint32_t target = (((uint32_t)node_id << 24) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
 	//  uint64_t target = ((uint64_t)node_id << 56) | ((uint64_t)pid << 48 ) | ((uint64_t)type << 32) | ((uint64_t)size & 0xffffffff);
@@ -439,11 +335,9 @@ void* event_handler(void*){
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
 			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages (node=%x, pid=%x, key=%lx)\n", 
 					new_request->num, new_request->node_id, new_request->pid, *key);
-//			void* page = (void*)malloc(new_request->num * PAGE_SIZE);
 			uint64_t page = (uint64_t)malloc(new_request->num * PAGE_SIZE);
 			ctx->temp_log[new_request->node_id][new_request->pid] = page;
 			dprintf("[%s]: Send newly allocated page: %lx\n", __func__, page);
-			dprintf("[%s]: msg double check (before write): %s\n", __func__, (char*)page);
 			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
 			uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
 			*addr = page;
@@ -451,10 +345,8 @@ void* event_handler(void*){
 			dprintf("Processed  [MSG_WRITE_REQUEST] %d num pages (node=%x pid=%x)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else if(new_request->type == MSG_WRITE){
-//			void* ptr = (void*)ctx->temp_log[new_request->node_id][new_request->pid];
 			uint64_t ptr = ctx->temp_log[new_request->node_id][new_request->pid];
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
-//			uint64_t* page = (uint64_t*)GET_CLIENT_DATA_REGION(ctx->local_mm, new_request->node_id, new_request->pid);
 			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, pid=%x, key=%lx)\n", 
 					new_request->num, new_request->node_id, new_request->pid, *key);
 			for(int i = 0; i < new_request->num; i++){
@@ -476,7 +368,6 @@ void* event_handler(void*){
 			/* if successfully inserted */
 			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REPLY, new_request->num, TX_WRITE_COMMITTED, 0, NULL, offset);
 			free((void *)ptr);
-//			free(ptr);
 			dprintf("Processed  [MSG_WRITE] %d num pages (node=%d pid=%d)\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else if(new_request->type == MSG_READ_REQUEST){
@@ -632,7 +523,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 			exit(0);
 		}
 	}
-	dprintf("log initialized\n");
+	dprintf("[  OK  ] log initialized\n");
 
 	if(access(index_path, 0) != 0){
 		ctx->index_pop = pmemobj_create(index_path, "index", INDEX_SIZE, 0666);
@@ -651,7 +542,7 @@ static struct server_context* server_init_ctx(struct ibv_device* dev, int size, 
 		}
 		ctx->hashtable = POBJ_ROOT(ctx->index_pop, CCEH);
 	}
-	dprintf("hashtable initialized\n");
+	dprintf("[  OK  ] hashtable initialized\n");
 
 	ctx->context = ibv_open_device(dev);
 	if(!ctx->context){
@@ -778,7 +669,7 @@ void* establish_conn(void*){
 			exit(1);
 		}
 		inet_ntop(AF_INET, &remote_sock.sin_addr, remote_ip, INET_ADDRSTRLEN);
-		dprintf("TCP Socket accepted a connection %d from %s\n", cur_node, remote_ip);
+//		dprintf("TCP Socket accepted a connection %d from %s\n", cur_node, remote_ip);
 
 		//	ret = ibv_query_gid(ctx->context, ib_port, 2, &gid);
 		ret = ibv_query_gid(ctx->context, ib_port, gid_idx, &gid);
@@ -894,11 +785,8 @@ int server_init_interface(){
 	if(!dev_list)
 		die("ibv_get_device_list failed\n");
 
-	printf("%d\n", dev_num);
-
 	for(int i=0; i<dev_num; i++){
 		dev_name = strdup(ibv_get_device_name(dev_list[i]));
-		printf("%s\n", dev_name);
 		if (!strcmp(dev_name, "mlx5_0")){
 			dev = dev_list[i];
 			break;

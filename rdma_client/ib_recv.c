@@ -68,7 +68,7 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 				  wc->status, ib_wc_status_msg(wc->status));
 	}
 
-	pmdfc_rdma_post_recv();
+	rdpma_post_recv();
 
 	if((int)wc->opcode == IB_WC_RECV_RDMA_WITH_IMM){
 		int node_id, pid, type, tx_state;

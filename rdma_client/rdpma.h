@@ -358,7 +358,7 @@ int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uint6
 int post_data_request(int node_id, int type, int size, uintptr_t addr, int imm_data, uint64_t offset);
 int post_recv(void);
 
-int pmdfc_rdma_post_recv(void);
+int rdpma_post_recv(void);
 
 int query_qp(struct ib_qp* qp);
 
