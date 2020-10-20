@@ -33,7 +33,7 @@ enum ib_mtu client_mtu_to_enum(int max_transfer_unit){
 }
 struct ib_pd* ctx_pd;
 
-int pmdfc_rdma_post_recv(void);
+int rdpma_post_recv(void);
 
 /**
  * ib_reg_mr_addr - map DMA mapping to addr and validate it.
@@ -88,6 +88,7 @@ int generate_single_write_request(void* page, uint64_t key){
 	void* request_page;
 	uint64_t* addr;
 	int pid = find_and_set_nextbit();
+	unsigned long flags;
 
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, pid);
 	new_request->type = MSG_WRITE_REQUEST;
@@ -98,7 +99,7 @@ int generate_single_write_request(void* page, uint64_t key){
 	*(addr) = key;
 
 	/* request_page pointer saved in temp_log */
-	request_page = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	request_page = kmalloc(PAGE_SIZE, GFP_ATOMIC);
 	if (!request_page) {
 		pr_err("[%s]: cannot kmalloc request_pages\n", __func__);
 		BUG_ON(request_page == NULL);
@@ -107,13 +108,12 @@ int generate_single_write_request(void* page, uint64_t key){
 	memcpy(request_page, page, PAGE_SIZE);
 	ctx->temp_log[pid][0] = (uint64_t)request_page;
 
-	spin_lock(&ctx->lock);
+	spin_lock_irqsave(&ctx->lock, flags);
 	list_add_tail(&new_request->entry, &ctx->req_list);
 	wake_up(&ctx->req_wq);
-	spin_unlock(&ctx->lock);
+	spin_unlock_irqrestore(&ctx->lock, flags);
 
 //	dprintk("[%s]: added write request (key=%llx, pid=%x, num=%x)\n", __func__, *addr, pid, 1);
-
 	return 0;
 }
 EXPORT_SYMBOL(generate_single_write_request);
@@ -156,7 +156,7 @@ EXPORT_SYMBOL(generate_write_request);
 
 int generate_single_read_request(void* page, uint64_t key){
 	struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-	void* request_page;
+//	void* request_page;
 	uint64_t* addr;
 	int pid = find_and_set_nextbit();
 	volatile int* process_state = &ctx->process_state[pid];
@@ -290,13 +290,12 @@ void handle_write(int pid, int num){
 	int i;
 
 	/* write page content to remote_mm */
-
 	for(i = 0; i < num; i++){
 		pages[i] = (void*)ctx->temp_log[pid][i];
 		/* TODO: avoid register mr on critical path */
 		addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
 	}
-	dprintk("[%s]: victim page %s\n", __func__, pages[0]);
+	dprintk("[%s]: victim page %s\n", __func__, (char *)pages[0]);
 	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
 
 	post_write_request_batch(pid, MSG_WRITE, num, addr, *remote_mm, num);
@@ -329,13 +328,12 @@ void handle_read(int pid, int num){
 	}
 	post_read_request_batch(addr, *remote_mm, num);
 
-	dprintk("[%s]: returned page %s\n", __func__, pages[0]);
+	dprintk("[%s]: returned page %s\n", __func__, (char *)pages[0]);
 
 	post_meta_request_batch(pid, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
 
 	*process_state = PROCESS_STATE_WAIT;
 	while(*process_state != PROCESS_STATE_DONE){
-		//process_state = &ctx->process_state[pid];
 		cpu_relax();
 	}
 
@@ -359,12 +357,6 @@ int event_handler(void){
 		spin_lock(&ctx->lock);
 
 		if (list_empty(&ctx->req_list)){
-#if 0 
-			if(kthread_should_stop()){
-				printk("[%s]: stopping event_handler\n", __func__);
-				return 0;
-			}
-#endif
 			spin_unlock(&ctx->lock);
 			continue;
 		}
@@ -455,6 +447,19 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 		return -1;
 	}
 
+	do{
+		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -504,6 +509,19 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 		return 1;
 	}
 
+	do{
+		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -546,6 +564,7 @@ int post_write_request_batch(int pid, int type, int num,
 		wr[i].wr.send_flags = (i == batch_size-1) ? IB_SEND_SIGNALED : 0;
 		wr[i].wr.ex.imm_data = htonl(bit_mask(ctx->node_id, pid, type, TX_WRITE_BEGIN, num));
 		wr[i].remote_addr = (uintptr_t)(remote_mm + i * PAGE_SIZE);
+//		wr[i].remote_addr = remote_mm;
 		wr[i].rkey = ctx->rkey;
 	}
 	dprintk("[%s]: target addr: %llx, target rkey %x\n", __func__, (uint64_t)wr[0].remote_addr, ctx->rkey);
@@ -556,12 +575,24 @@ int post_write_request_batch(int pid, int type, int num,
 		return 1;
 	}
 
+	do{
+		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
 	return 0;
 }
 
-int pmdfc_rdma_post_recv(void){
+int rdpma_post_recv(void){
 	struct ib_recv_wr wr;
-	struct rdpma_ib_connection *ic = ctx->ic;
 	const struct ib_recv_wr* bad_wr;
 	struct ib_sge sge;
 	int ret;
@@ -572,7 +603,6 @@ int pmdfc_rdma_post_recv(void){
 	sge.addr = (uintptr_t)NULL;
 	sge.length = 0;
 	sge.lkey = ctx->mr->lkey;
-//	sge.lkey = ic->i_pd->local_dma_lkey;
 
 	wr.wr_id = 0;
 	wr.sg_list = &sge;
@@ -885,9 +915,6 @@ int establish_conn(void){
  */
 static struct client_context* client_init_ctx(void){
 	int ret = 0, i, flags;
-	struct ib_cq_init_attr attr;
-	struct ib_device_attr dev_attr;
-	struct ib_udata uhw = {.outlen = 0, .inlen = 0};
 
 	unsigned long bitmap_size = BITS_TO_LONGS(BITMAP_SIZE) * sizeof(unsigned long);
 	unsigned long *bitmap = kzalloc(bitmap_size, GFP_KERNEL);
@@ -993,7 +1020,7 @@ int client_init_interface(void){
 	}
 	pr_info("[  OK  ] connection successfully established");
 
-	pmdfc_rdma_post_recv();
+	rdpma_post_recv();
 
 	atomic_set(&ctx->connected, 1);
 
@@ -1050,7 +1077,7 @@ void cleanup_resource(void){
 }
 
 static struct class client_class = {
-	.name = "PRDMA_Client_Class"
+	.name = "rdpma_client_class"
 };
 
 static int __init init_net_module(void){

@@ -1,11 +1,3 @@
-/*
- * tcp.h
- *
- * In kernel networking
- *
- * Copyright (c) 2019, Jaeyoun Nam, SKKU.
- */
-
 #ifndef PMNET_TCP_H
 #define PMNET_TPC_H
 

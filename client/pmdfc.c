@@ -17,15 +17,23 @@
 #include "tcp.h"
 #include "bloom_filter.h"
 #include "pmdfc.h"
+#include "rdpma/rdpma.h"
 
+#define PMDFC_GET 1
+#define PMDFC_RDMA 1
 #define PMDFC_NETWORK 1
 //#define PMDFC_DEBUG 1
-#define PMDFC_GET 1
-//#define PMDFC_RDMA 1
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_WORKQUEUE 1
-//#define PMDFC_PERCPU 1
 #define PMDFC_PREALLOC 1
+#define PMDFC_PS_CLUSTER 1
+
+#if defined(PMDFC_RDMA)
+#undef PMDFC_PS_CLUSTER
+#undef PMDFC_PREALLOC
+#undef PMDFC_NETWORK
+#undef PMDFC_WORKQUEUE
+#endif
 
 #if !defined(PMDFC_NETWORK)
 #undef PMDFC_WORKQUEUE
@@ -37,6 +45,8 @@
 #ifdef CONFIG_DEBUG_FS
 struct dentry *pmdfc_dentry; 
 #endif
+
+static int rdma;
 
 /* bloom filter */
 /* TODO: is it thread safe? */
@@ -547,7 +557,6 @@ static int __init pmdfc_init(void)
 	}
 	BUG_ON(ps_cluster == NULL);
 
-#if defined(PMDFC_WORKQUEUE)
 	/* TODO: why we use singlethread here?? */
 //	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
 //	pmdfc_wq = alloc_ordered_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM);
@@ -557,7 +566,6 @@ static int __init pmdfc_init(void)
 		return -ENOMEM;
 	}
 //	queue_work(pmdfc_wq, &pmdfc_remotify_work);
-#endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
@@ -568,16 +576,16 @@ static int __init pmdfc_init(void)
 	ret = pmdfc_cleancache_register_ops();
 
 	if (!ret) {
-		printk(KERN_INFO ">> pmdfc: cleancache_register_ops success\n");
+		printk(KERN_INFO "[  OK  ] cleancache_register_ops success\n");
 	} else {
-		printk(KERN_INFO ">> pmdfc: cleancache_register_ops fail\n");
+		printk(KERN_INFO "[ FAIL ] cleancache_register_ops fail\n");
 	}
 
 	if (cleancache_enabled) {
-		printk(KERN_INFO ">> pmdfc: cleancache_enabled\n");
+		printk(KERN_INFO "[  OK  ] cleancache_enabled\n");
 	}
 	else {
-		printk(KERN_INFO ">> pmdfc: cleancache_disabled\n");
+		printk(KERN_INFO "[ FAIL ] cleancache_disabled\n");
 	}
 
 	return 0;
@@ -594,24 +602,22 @@ static void pmdfc_exit(void)
 	pmdfc_debugfs_exit();
 #endif
 
-
-#if defined(PMDFC_WORKQUEUE)
 	done = 1;
 	atomic_and(1, &filled);
 	wake_up_interruptible(&pmdfc_worker_wq);
 	/* cancle in_process works and destory workqueue */
 	cancel_work_sync(&pmdfc_remotify_work);
 	destroy_workqueue(pmdfc_wq);
-#endif
 
 #if defined(PMDFC_BLOOM_FILTER)
 	bloom_filter_unref(bf);
 #endif
 }
 
+module_param(rdma, int, 0);
+
 module_init(pmdfc_init);
 module_exit(pmdfc_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("NAM JAEYOUN");
-

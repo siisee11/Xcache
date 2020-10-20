@@ -4,9 +4,9 @@
 #include <cassert>
 #include <unordered_map>
 #include <vector>
-#include "src/CCEH.h"
-#include "src/hash.h"
-#include "src/util.h"
+#include "CCEH.h"
+#include "hash.h"
+#include "util.h"
 
 using namespace std;
 

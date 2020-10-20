@@ -182,7 +182,6 @@ void rdpma_ib_send_cqe_handler(struct rdpma_ib_connection *ic, struct ib_wc *wc)
 	u32 i = 0;
 	int nr_sig = 0;
 
-
 	pr_info("[%s] wc wr_id 0x%llx status %u (%s) byte_len %u imm_data %u\n",
 			__func__,
 		 (unsigned long long)wc->wr_id, wc->status,

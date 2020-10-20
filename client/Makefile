@@ -39,8 +39,8 @@ ipoib:
 	insmod ./pmnet.ko ip="10.0.0.53" port=5432
 	insmod ./pmdfc_client.ko
 rdma:
-	insmod ./rdpma_mod.ko ip="10.0.0.51" port=2123
-	insmod ./pmdfc_client.ko
+	insmod ./rdpma_mod.ko ip="10.0.0.53" port=2123
+	insmod ./pmdfc_client.ko rdma=1
 unload:
 	rmmod ./pmdfc_client.ko
 	rmmod ./pmnet.ko

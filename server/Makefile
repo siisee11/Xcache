@@ -2,24 +2,37 @@
 .DEFAULT_GOAL := all
 
 CC=g++
-LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -lboost_thread -lboost_system
+#LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -lboost_thread -lboost_system
+LDFLAGS=
+LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -libverbs
 CFLAGS=-O3 -std=c++11 -w 
 INCLUDES=-I./ 
 
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./lib/pmdk:/home/siisee11/download/boost_1_73_0/stage/lib
+SOURCES=server.cpp tcp.cpp rdma.cpp CCEH.cpp
+OBJECTS=server.o 
+EXECUTABLE=server
+
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./lib/pmdk
 export LD_LIBRARY_PATH
 
-all: main
+#all: $(SOURCES) $(EXECUTABLE)
+all: $(EXECUTABLE)
+#$(EXECUTABLE): $(OBJECTS) 
+#	    $(CC) $(LDFLAGS) $(OBJECTS) -o $@ $(LIBS)
 
-main: 
-#	$(CXX) $(CFLAGS) -c -o src/CCEH.o src/CCEH.cpp -DINPLACE -lpmemobj -lpmem
-	$(CC) $(CFLAGS) -g -c src/CCEH.cpp -o src/CCEH.o $(LIBS) $(INCLUDES) -DINPLACE
-#	g++ -g -std=c++11 -o server boost_tcp_server.cpp src/CCEH.cpp $(LIBS) $(INCLUDES)
-	g++ -g -std=c++11 -o server tcp_server.cpp src/CCEH.cpp $(LIBS) $(INCLUDES)
+$(EXECUTABLE):
+	$(CC) $(CFLAGS) server.cpp tcp.cpp queue.cpp rdma.cpp CCEH.cpp -o server $(LIBS) -DINPLACE
 
-run:
+#CCEH.o:
+#	$(CC) $(CFLAGS) -o CCEH.o CCEH.cpp -DINPLACE $(LIBS)
+
+tcp:
 	sudo rm -rf ./jy/*
-	sudo ./server ./jy/FILE
+	sudo ./server -t 5432 -p jy/FILE
+
+rdma:
+	sudo rm -rf ./jy/*
+	sudo ./server --rdma -t 2123 ./jy/FILE
 
 gdb:
 	sudo rm -rf ./jy/*
@@ -29,4 +42,4 @@ free:
 	sudo rm -rf ./jy/*
 
 clean: 
-	rm -rf src/*.o server
+	rm -rf src/*.o *.o server

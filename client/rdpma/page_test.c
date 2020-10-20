@@ -10,7 +10,7 @@
 #include "rdpma.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 64)
+#define TOTAL_CAPACITY (PAGE_SIZE * 8)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 void*** vpages;
@@ -33,7 +33,7 @@ int single_write_test(void* arg){
 	uint64_t key;
 	char test_string[PAGE_SIZE] = "hi, dicl";
 
-	key = 3000;
+	key = 4000;
 	ret = generate_single_write_request(test_string, key);
 
 	complete(my_data->comp);
@@ -62,7 +62,7 @@ int single_read_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret;
 	int result = 0;
-	uint64_t key = 3000;
+	uint64_t key = 4000;
 	char test_string[PAGE_SIZE] = "hi, dicl";
 	void *result_page;
 
@@ -124,8 +124,8 @@ int main(void){
 	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
-		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
-//		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
+//		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
 
@@ -135,7 +135,8 @@ int main(void){
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
 	pr_info("[ PASS ] complete write thread functions: time( %llu ) usec", elapsed);
-	ssleep(5);
+	
+	ssleep(3);
 
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
@@ -146,8 +147,8 @@ int main(void){
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){
-		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
-//		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
+//		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
@@ -171,6 +172,7 @@ int init_pages(void){
 	int i, j;
 	uint64_t key = 0;
 	u64 rand;
+	char str[8];
 
 	write_threads = (struct task_struct**)kmalloc(sizeof(struct task_struct*)*THREAD_NUM, GFP_KERNEL);
 	if(!write_threads){
@@ -215,8 +217,10 @@ int init_pages(void){
 				printk(KERN_ALERT "vpages[%d][%d] allocation failed\n", i, j);
 				goto ALLOC_ERR;
 			}
-			get_random_bytes(&rand, sizeof(u64));
-			memcpy(vpages[i][j], &rand, sizeof(u64));
+			sprintf(str, "%d", j + 1);
+//			get_random_bytes(&rand, sizeof(u64));
+//			memcpy(vpages[i][j], &rand, sizeof(u64));
+			strcpy(vpages[i][j], str);
 		}
 	}
 

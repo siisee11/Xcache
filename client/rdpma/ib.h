@@ -371,13 +371,14 @@ void rdpma_ib_dev_put(struct rdpma_ib_device *rdpma_ibdev);
 extern struct ib_client rdpma_ib_client;
 extern unsigned int rdpma_ib_retry_count;
 
+int rdpma_ib_init(void);
+void rdpma_ib_exit(void);
+
 /* ib_cm.c */
 int rdpma_ib_setup_qp(struct client_context *ctx);
 int rdpma_ib_conn_alloc(struct client_context *ctx, gfp_t gfp);
 void rdpma_ib_conn_free(void *arg);
 void rdpma_ib_state_change(struct sock *sk);
-int rdpma_ib_listen_init(void);
-void rdpma_ib_listen_stop(void);
 
 /* ib_send.c */
 void rdpma_ib_send_cqe_handler(struct rdpma_ib_connection *ic, struct ib_wc *wc);
@@ -386,5 +387,6 @@ void rdpma_ib_send_cqe_handler(struct rdpma_ib_connection *ic, struct ib_wc *wc)
 void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 			     struct ib_wc *wc, struct rdpma_ib_ack_state *state);
 
-
+/* ib_rdma.c */
+struct rdpma_ib_device *rdpma_ib_get_first_device(void);
 #endif

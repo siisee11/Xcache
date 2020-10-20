@@ -10,7 +10,7 @@
 #include "rdpma.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 8)
+#define TOTAL_CAPACITY (PAGE_SIZE * 128)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 void*** vpages;

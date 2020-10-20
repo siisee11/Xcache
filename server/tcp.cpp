@@ -24,7 +24,7 @@
 #include <cstring>
 #include <atomic>
 
-#include "src/CCEH.h"
+#include "CCEH.h"
 
 #include "tcp.h"
 #include "tcp_internal.h"
@@ -840,21 +840,15 @@ void sigsegv_callback_handler(int signum) {
 	exit(signum);
 }
 
-int main(int argc, char* argv[]) 
+int init_tcp_server(char* path) 
 { 	
-	signal(SIGINT, sigint_callback_handler);
-	signal(SIGSEGV, sigsegv_callback_handler);
-
-	server_init_ctx(argv[1]);
-
-	/* New CCEH hash table : Deprecated */
+	server_init_ctx(path);
 
 	using namespace std;
 
 	/* create multi Q */
 	nr_cpus = std::thread::hardware_concurrency();
-//	nr_cpus = 8;
-	printf("%d threads ready!\n", nr_cpus);
+	printf("[  INFO  ] %d threads ready!\n", nr_cpus);
 
 	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
 	for (int i = 0; i < nr_cpus; i++) {

@@ -138,11 +138,13 @@ static void rdpma_ib_add_one(struct ib_device *device)
 	struct rdpma_ib_device *rdpma_ibdev;
 	bool has_fr, has_fmr;
 
-//	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
+	/* TODO: What is those strange names?? */
+	pr_info("rdpma_ib_add_one called for device %s\n", device->name);
 
 	/* Only handle IB (no iWARP) devices */
-	if (device->node_type != RDMA_NODE_IB_CA)
+	if (device->node_type != RDMA_NODE_IB_CA) {
 		return;
+	}
 
 	rdpma_ibdev = kzalloc_node(sizeof(struct rdpma_ib_device), GFP_KERNEL,
 				 ibdev_to_node(device));
@@ -297,18 +299,31 @@ static void rdpma_ib_remove_one(struct ib_device *device, void *client_data)
 	rdpma_ib_dev_put(rdpma_ibdev);
 }
 
+/*
+static struct class client_class = {
+	.name = "rdpma_client_class"
+};
+*/
+
 struct ib_client rdpma_ib_client = {
-	.name   = "rdpma_ib",
+	.name   = "rdpma_ib_client",
 	.add    = rdpma_ib_add_one,
 	.remove = rdpma_ib_remove_one
 };
+
+static void rdpma_ib_unregister_client(void)
+{
+	ib_unregister_client(&rdpma_ib_client);
+	/* wait for rdpma_ib_dev_free() to complete */
+	flush_workqueue(rdpma_wq);
+}
 
 void rdpma_ib_exit(void)
 {
 //	rdpma_ib_set_unloading();
 	synchronize_rcu();
-#if 0
 	rdpma_ib_unregister_client();
+#if 0
 	rdpma_ib_destroy_nodev_conns();
 	rdpma_ib_sysctl_exit();
 	rdpma_ib_recv_exit();
@@ -320,6 +335,7 @@ void rdpma_ib_exit(void)
 int rdpma_ib_init(void)
 {
 	int ret;
+	struct rdpma_ib_device *rdpma_ibdev;
 	
 	pr_info("RDPMA IB module init....\n");
 
@@ -336,9 +352,10 @@ int rdpma_ib_init(void)
 #endif
 
 	ret = ib_register_client(&rdpma_ib_client);
-	if (ret)
-		goto out;
-
+	if(ret){
+		pr_err("ib_register failed\n");
+		return -1;
+	}
 #if 0
 	ret = rdpma_ib_sysctl_init();
 	if (ret)
