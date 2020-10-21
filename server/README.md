@@ -19,6 +19,9 @@ C++ Boost library and include neeeded.
 
 ```./server ./jy/FILE``` to run server.
 
+## Todos
+
+statistic
 
 ## Timeline
 

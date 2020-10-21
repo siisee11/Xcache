@@ -62,11 +62,11 @@ struct pmnet_msg_in {
 static struct pmnet_handshake *pmnet_hand;
 static struct pmnet_msg *pmnet_keep_req, *pmnet_keep_resp;
 
-unsigned int nr_cpus;
+extern unsigned int nr_cpus;
 /* lock free queues */
-queue_t **lfqs = NULL;
+extern queue_t **lfqs;
 
-std::atomic<bool> done(false);
+extern std::atomic<bool> done;
 
 /* counting valuse */
 int putcnt = 0;
@@ -633,6 +633,7 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 #endif 
 		int targetQ = msg_in->hdr->key % nr_cpus;
 		enqueue(lfqs[targetQ], msg_in);
+		printf("entry in Q=%d\n", count_queue(lfqs[targetQ]));
 		pushed = true;
 		ret = 1;
 	}
@@ -843,27 +844,21 @@ void sigsegv_callback_handler(int signum) {
 int init_tcp_server(char* path) 
 { 	
 	server_init_ctx(path);
+#if 0
+	int *value = (int *)malloc(sizeof(int));
+	*value = 6;
+	int *ret;
+	enqueue(lfqs[0], value);
+	printf("entry in Q=%d\n", count_queue(lfqs[0]));
+	ret = (int *)dequeue(lfqs[0]);
+	printf("ret val=%d\n", *ret);
 
-	using namespace std;
-
-	/* create multi Q */
-	nr_cpus = std::thread::hardware_concurrency();
-	printf("[  INFO  ] %d threads ready!\n", nr_cpus);
-
-	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
-	for (int i = 0; i < nr_cpus; i++) {
-		lfqs[i] = create_queue();
-	}
-
+#endif
 	/* 
 	 * Listen and accept socket 
 	 * Looping inside this fuction
 	 */
 	init_network_server();
-
-	for (int i = 0; i < nr_cpus ; i++) {
-		destroy_queue(lfqs[i]);
-	}
 
 	return 0;
 } 

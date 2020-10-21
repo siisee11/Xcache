@@ -11,7 +11,9 @@
 #include <signal.h>
 #include <stddef.h>
 #include <libpmemobj.h>
+
 #include "CCEH.h"
+#include "queue.h"
 
 #define LOG_SIZE (42949672960) // 40GB
 #define INDEX_SIZE (10737418240) // 10GB
@@ -25,6 +27,10 @@
 
 extern int tcp_port;
 extern int ib_port;
+
+/* lock free queues */
+extern queue_t **lfqs;
+extern unsigned int nr_cpus;
 
 struct server_context{
     int node_id;
@@ -40,8 +46,7 @@ struct server_context{
 
 
 /* rdma.c */
-void init_rdma_server(void);
-int rdma_establish_conn(void);
+void init_rdma_server(char *);
 
 /* tcp.cpp */
 int init_tcp_server(char *);

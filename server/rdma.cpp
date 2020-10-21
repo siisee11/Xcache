@@ -1,5 +1,28 @@
+#include <stdio.h> 
+#include <netdb.h> 
+#include <netinet/in.h> 
+#include <stdlib.h> 
+#include <string.h> 
+#include <sys/socket.h> 
+#include <sys/types.h> 
+#include <fcntl.h> 
 #include <signal.h>
+#include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
+#include <iostream>
+#include <thread>
+#include <deque>
+#include <mutex>
+#include <chrono>
+#include <condition_variable>
+#include <vector>
+#include <cstdio>
+#include <ctime>
+#include <unistd.h>
+#include <cstdlib>
+#include <cstring>
+#include <atomic>
 
 #include "server.h"
 #include "rdma.h"
@@ -14,8 +37,15 @@ struct rdma_server_context* rctx = NULL;
 pthread_t connection_thread;
 pthread_t thread_poll_cq;
 pthread_t event_handler_thread;
+pthread_t event_handler_thread2;
+
+pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t queue_cv = PTHREAD_COND_INITIALIZER;
 
 static int running;
+extern std::atomic<bool> done;
+
+extern unsigned int nr_cpus;
 
 static void signal_handler(int signal){
 	printf("SIGNAL occur\n");
@@ -234,7 +264,7 @@ int rdma_write(int node_id, int type, uint64_t addr, int len){
 }
 
 uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 24) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
+	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
 	//  uint64_t target = ((uint64_t)node_id << 56) | ((uint64_t)pid << 48 ) | ((uint64_t)type << 32) | ((uint64_t)size & 0xffffffff);
 	return target;
 }
@@ -244,15 +274,15 @@ void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, 
 	*num = (uint32_t)(target & 0x000000ff);
 	*state = (int)((target >> 8) & 0x0000000f);
 	*type = (int)((target >> 12) & 0x0000000f);
-	*pid = (int)((target >> 16) & 0x000000ff);
-	*node_id = (int)((target >> 24) & 0x000000ff);
+	*pid = (int)((target >> 16) & 0x00000fff);
+	*node_id = (int)((target >> 28) & 0x0000000f);
 }
 
-void* server_recv_poll_cq(void* cq_context){
-	struct ibv_cq* cq = (struct ibv_cq*)cq_context;
+void server_recv_poll_cq(struct ibv_cq *cq){
 	struct ibv_wc wc;
 	int ne;
 	static int num = 1;
+	int targetQ;
 
 	while(1){
 		ne = 0;
@@ -269,22 +299,24 @@ void* server_recv_poll_cq(void* cq_context){
 			die("Failed status");
 		}
 
-		struct queue_t* request_queue = rctx->request_queue;
 		int ret;
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
 			int node_id, pid, type, tx_state;
 			uint32_t num;
 			bit_unmask(ntohl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
-			dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
+			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, node_id, pid);
+			targetQ = *key % nr_cpus;
+//			dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
 			post_recv(node_id);
 			if(type == MSG_WRITE_REQUEST){
-				dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
+//				dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
 				new_request->pid = pid;
 				new_request->num = num;
-				enqueue(request_queue, (void*)new_request);
+				enqueue(lfqs[targetQ], (void*)new_request);
+				dprintf("[%s]: MSG_WRITE_REQUEST(%lx) enqueued\n", __func__, *key);
 			}
 			else if(type == MSG_WRITE){
 				dprintf("[%s]: received MSG_WRITE\n", __func__);
@@ -293,7 +325,7 @@ void* server_recv_poll_cq(void* cq_context){
 				new_request->node_id = node_id;
 				new_request->pid = pid;
 				new_request->num = num;
-				enqueue(request_queue, (void*)new_request);
+				enqueue(lfqs[targetQ], (void*)new_request);
 			}
 			else if(type == MSG_READ_REQUEST){
 				dprintf("[%s]: received MSG_READ_REQUEST\n", __func__);
@@ -302,7 +334,7 @@ void* server_recv_poll_cq(void* cq_context){
 				new_request->node_id = node_id;
 				new_request->pid = pid;
 				new_request->num = num;
-				enqueue(request_queue, (void*)new_request);
+				enqueue(lfqs[targetQ], (void*)new_request);
 			}
 			else if(type == MSG_READ_REPLY){
 				dprintf("[%s]: received MSG_READ_REPLY\n", __func__);
@@ -321,15 +353,16 @@ void* server_recv_poll_cq(void* cq_context){
 }
 
 
-void* event_handler(void*){
+void event_handler(int cpu){
 	struct request_struct* new_request;
-	struct queue_t* request_queue = rctx->request_queue;
 	//TOID(CCEH) hashtable = rctx->hashtable;
 	int insert_cnt = 0;
 	int search_cnt = 0;
+	
+	printf("[  OK  ] event_handler is running on CPU %d \n", sched_getcpu());
 
-	while(1){
-		new_request = (struct request_struct*)dequeue(request_queue);
+	while(!done){
+		new_request = (struct request_struct*)dequeue(lfqs[cpu]);
 
 		if(new_request->type == MSG_WRITE_REQUEST){
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->pid);
@@ -400,13 +433,15 @@ void* event_handler(void*){
 				post_meta_request(new_request->node_id, new_request->pid, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_ABORTED, 0, NULL, offset);
 				dprintf("Aborted [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
 			}
-			dprintf("Processing [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
+			dprintf("Processed [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else{
 			fprintf(stderr, "Received weired request type %d from node %d\n", new_request->type, new_request->node_id);
 		}
+
+		free(new_request);
 	}
-	return NULL;
+	return;
 }
 
 
@@ -487,11 +522,10 @@ static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* de
 }
 
 /* make PM file and global context */
-static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int size, int rx_depth){
+static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int size, int rx_depth, char *path){
 	int flags;
 	void* ptr;
-	char index_path[32] = "/mnt/pmem0/jy/pmem";
-	char log_path[32] = "/mnt/pmem0/jy/log";
+	char log_path[32] = "./jy/log";
 	const size_t hashtable_initialSize = 1024*16*4; 
 
 	rctx = (struct rdma_server_context*)malloc(sizeof(struct rdma_server_context));
@@ -525,8 +559,8 @@ static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int s
 	}
 	dprintf("[  OK  ] log initialized\n");
 
-	if(access(index_path, 0) != 0){
-		rctx->index_pop = pmemobj_create(index_path, "index", INDEX_SIZE, 0666);
+	if(access(path, 0) != 0){
+		rctx->index_pop = pmemobj_create(path, "index", INDEX_SIZE, 0666);
 		if(!rctx->index_pop){
 			perror("pmemobj_create");
 			exit(0);
@@ -535,7 +569,7 @@ static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int s
 		D_RW(rctx->hashtable)->initCCEH(rctx->index_pop, hashtable_initialSize);
 	}
 	else{
-		rctx->index_pop = pmemobj_open(index_path, "index");
+		rctx->index_pop = pmemobj_open(path, "index");
 		if(!rctx->index_pop){
 			perror("pmemobj_open");
 			exit(0);
@@ -627,7 +661,10 @@ dealloc_pd:
 	return NULL;
 }
 
-void* rdma_establish_conn(void*){
+/**
+ * init_rdma_network - Accept client until done
+ */
+void init_rdma_network(){
 	int cur_node = 0;
 	int sock, fd, ret;
 	struct sockaddr_in local_sock;
@@ -651,7 +688,7 @@ void* rdma_establish_conn(void*){
 	if((listen(sock, 10)) < 0)
 		die("Socket listen failed\n");
 
-	while(running){
+	while(!done){
 		socklen_t sin_size = sizeof(struct sockaddr);
 		struct sockaddr_in remote_sock;
 		char remote_ip[INET_ADDRSTRLEN];
@@ -710,12 +747,6 @@ void* rdma_establish_conn(void*){
 		rctx->remote_mm[remote_node.node_id] = remote_node.mm;
 		rctx->rkey[remote_node.node_id] = remote_node.rkey;
 
-		//	rctx->rkey[cur_node-1] = remote_node.rkey;
-		/*TODO: remote mr
-		  1. getting mr info upon each request?
-		  2. setting a static mr
-		  */
-		//	rctx->remote_mm[cur_node-1] = remote_node.mm;
 		ret = modify_qp(rctx->qp[remote_node.node_id], local_node.psn, 0, &remote_node);
 		if(ret){
 			fprintf(stderr, "ib_modify_qp failed for %d client\n", remote_node.node_id);
@@ -728,6 +759,33 @@ void* rdma_establish_conn(void*){
 		cur_node++;
 
 		printf("[  OK  ] RDMA connection with %s established.\n", remote_ip);
+
+		std::thread p = std::thread( server_recv_poll_cq, rctx->recv_cq );
+
+		std::mutex iomutex;
+		std::vector<std::thread> threads(nr_cpus);
+		for (unsigned i = 0; i < nr_cpus; ++i) {
+			threads[i] = std::thread(event_handler, i);
+
+			// Create a cpu_set_t object representing a set of CPUs. Clear it and mark
+			// only CPU i as set.
+			// threads[i] would be assigned to CPU i
+			cpu_set_t cpuset;
+			CPU_ZERO(&cpuset);
+			CPU_SET(i, &cpuset);
+			int rc = pthread_setaffinity_np(threads[i].native_handle(),
+					sizeof(cpu_set_t), &cpuset);
+			if (rc != 0) {
+				std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
+			}
+		}
+
+		for (auto& t : threads) {
+			t.join();
+		}
+
+		p.join();
+
 	}
 	if(fd)
 		close(fd);
@@ -770,7 +828,7 @@ int query_qp(struct ibv_qp* qp){
 	return 1;
 }
 
-int server_init_interface(){
+int server_init_interface(char *path){
 	struct ibv_device** dev_list = NULL;
 	struct ibv_device* dev = NULL;
 	char* dev_name = NULL;
@@ -816,7 +874,7 @@ int server_init_interface(){
 		printf("[  OK  ] ODP supported\n");
 */
 
-	rctx = server_init_ctx(dev, size, rx_depth);
+	rctx = server_init_ctx(dev, size, rx_depth, path);
 	if(!rctx)
 		die("server_init_rctx failed\n");
 
@@ -828,18 +886,20 @@ int server_init_interface(){
 
 	printf("[  OK  ] Server ready to accept connection\n");
 
-	pthread_create(&connection_thread, NULL, &rdma_establish_conn, NULL);
-	pthread_create(&thread_poll_cq, NULL, &server_recv_poll_cq, (void*)rctx->recv_cq);
-	pthread_create(&event_handler_thread, NULL, &event_handler, NULL);
-
 	return 0;
 }
 
-void init_rdma_server(){
+void init_rdma_server(char *path){
 	int status;
-	int ret = server_init_interface();
-	
-	pthread_join(connection_thread, (void **)&status);
-	pthread_join(thread_poll_cq, (void **)&status);
-	pthread_join(event_handler_thread, (void **)&status);
+	int ret;
+
+	ret = server_init_interface(path);
+	if (ret)
+		die("[ FAIL ] server_init_interface failed\n");
+
+	/* accept client and loop */
+	init_rdma_network();
+
+	printf("[ PASS ] Server successfully shutdown.\n");
+
 }

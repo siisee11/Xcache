@@ -1,5 +1,7 @@
 #include <getopt.h>
 #include <fcntl.h>
+#include <thread>
+#include <atomic>
 
 #include "server.h"
 
@@ -17,6 +19,25 @@ int ib_port = 1;
 static int rdma_flag= 0;
 static int verbose_flag;
 char *path;
+
+/* lock free queues */
+queue_t **lfqs = NULL;
+unsigned int nr_cpus;
+
+std::atomic<bool> done(false);
+
+int destroy_lock_free_queue(){
+	for (int i = 0; i < nr_cpus ; i++) {
+		destroy_queue(lfqs[i]);
+	}
+}
+
+int init_lock_free_queue(){
+	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
+	for (int i = 0; i < nr_cpus; i++) {
+		lfqs[i] = create_queue();
+	}
+}
 
 int main(int argc, char* argv[]){
 	char hostname[64];
@@ -66,20 +87,26 @@ int main(int argc, char* argv[]){
 		}
 	}
 
+	nr_cpus = std::thread::hardware_concurrency();
+
 	gethostname(hostname, 64);
 	printf("Hostname:\t %s\n", hostname);
 	printf("IB port:\t %d\n", ib_port);
 	printf("TCP port:\t %d\n",tcp_port);
 	printf("Transport:\t %s\n", rdma_flag ? "RDMA" : "TCP/IP");
+	printf("threads:\t %d CPUs\n", nr_cpus);
 
+	init_lock_free_queue();
 
 	if ( rdma_flag )
-		init_rdma_server();
+		init_rdma_server(path);
 	else {
 		signal(SIGINT, sigint_callback_handler);
 		signal(SIGSEGV, sigsegv_callback_handler);
 		init_tcp_server(path);
 	}
+
+	destroy_lock_free_queue();
 
 	return 0;
 }

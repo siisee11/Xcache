@@ -11,6 +11,8 @@ struct client_context* ctx = NULL;
 int ib_port = 1;
 enum ib_mtu mtu;
 
+static int enable;
+
 struct kmem_cache* request_cache;
 
 enum pmnet_system_error {
@@ -59,7 +61,7 @@ void ib_dereg_mr_addr(uint64_t addr, uint64_t size){
 }
 
 uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 24) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
+	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
 	return target;
 }
 
@@ -67,9 +69,44 @@ void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, 
 	*num = (uint32_t)(target & 0x000000ff);
 	*state = (int)((target >> 8) & 0x0000000f);
 	*type = (int)((target >> 12) & 0x0000000f);
-	*pid = (int)((target >> 16) & 0x000000ff);
-	*node_id = (int)((target >> 24) & 0x000000ff);
+	*pid = (int)((target >> 16) & 0x00000fff);
+	*node_id = (int)((target >> 28) & 0x0000000f);
 }
+
+/**
+ * rdpma_write_message- post write request and write message.
+ * @msg_type: Type of message.
+ * @key: Unique key.
+ * @index: index from mapping.
+ * @data: data address.
+ * @len: data length.
+ * @target_node: target node number (server is 0).
+ * @status: status return from communication.
+ *
+ * If generate_single_write_request succeeds, then return 0.
+ */
+int rdpma_write_message(u32 msg_type, u32 key, u32 index, u32 bit, void *data, 
+			u32 len, u8 target_node, int *status){
+	uint64_t* addr;
+	int ret;
+	long longkey = key << 32 | index;
+	void* dma_addr;
+	long offset;
+	int num = 1; 	/* batching size */
+
+	dma_addr = (void*)GET_LOCAL_META_REGION(ctx->local_dma_addr, bit);
+	offset = bit * METADATA_SIZE * NUM_ENTRY;
+	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, bit);
+
+	*(addr) = longkey;
+	ctx->temp_log[bit][0] = data;
+
+	/* TODO batching or buffering */
+	ret = post_meta_request_batch(bit, msg_type, num, TX_WRITE_BEGIN, sizeof(uint64_t), dma_addr, offset, num);
+
+	return ret;
+}
+EXPORT_SYMBOL(rdpma_write_message);
 
 /**
  * generate_single_write_request - Add new write request to request list.
@@ -254,16 +291,18 @@ int generate_read_request(void** pages, uint64_t* keys, int num){
 }
 EXPORT_SYMBOL(generate_read_request);
 
+/**
+ * find_and_set_nextbit - Find first zero bit and set PROCESS_STATE_ACTIVE.
+ * 
+ * return first zero bit.
+ */
 int find_and_set_nextbit(void){
 	int bit = 1;
-	while(1){
-		bit = find_first_zero_bit(ctx->bitmap, MAX_PROCESS);
-		if(test_and_set_bit(bit, ctx->bitmap) == 0){
-			ctx->process_state[bit] = PROCESS_STATE_ACTIVE;
-			//atomic_set(&ctx->process_state[bit], PROCESS_STATE_ACTIVE);
-			return bit;
-		}
-		cpu_relax();
+	bit = find_first_zero_bit(ctx->bitmap, MAX_PROCESS);
+	if(test_and_set_bit(bit, ctx->bitmap) == 0){
+		ctx->process_state[bit] = PROCESS_STATE_ACTIVE;
+		//atomic_set(&ctx->process_state[bit], PROCESS_STATE_ACTIVE);
+		return bit;
 	}
 	printk(KERN_ALERT "[%s]: bitmap find err\n", __func__);
 	return -1;
@@ -451,13 +490,13 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 		ne = ib_poll_cq(ctx->ic->i_send_cq, 1, &wc);
 		if(ne < 0){
 			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
+			return -1;
 		}
 	}while(ne < 1);
 
 	if(wc.status != IB_WC_SUCCESS){
 		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
+		return -1;
 	}
 
 	return 0;
@@ -1083,34 +1122,37 @@ static struct class client_class = {
 static int __init init_net_module(void){
 	int ret = 0;
 
-	ret = class_register(&client_class);
-	if(ret){
-		pr_err("class_register failed\n");
-		return -1;
-	}
+	if (enable)
+	{
+		ret = class_register(&client_class);
+		if(ret){
+			pr_err("class_register failed\n");
+			return -1;
+		}
 
-	ret = rdpma_ib_init();
-	if(ret){
-		pr_err("rdpma_ib_init failed\n");
-		goto err_class_register;
-	}
-	pr_info("[  OK  ] rdpma_ib_device successfully registered\n");
+		ret = rdpma_ib_init();
+		if(ret){
+			pr_err("rdpma_ib_init failed\n");
+			goto err_class_register;
+		}
+		pr_info("[  OK  ] rdpma_ib_device successfully registered\n");
 
-	ret = client_init_interface();
-	if(ret){
-		pr_err("client_init_interface failed\n");
-		goto err_rdpma_ib_init;
-	}
+		ret = client_init_interface();
+		if(ret){
+			pr_err("client_init_interface failed\n");
+			goto err_rdpma_ib_init;
+		}
 
-	pr_info("[  OK  ] PMDFC rdma module successfully installed");
+		pr_info("[  OK  ] PMDFC rdma module successfully installed");
 
-	/* follow 0/-E semantic */
-	return 0;
+		/* follow 0/-E semantic */
+		return 0;
 
 err_rdpma_ib_init:
-	rdpma_ib_exit();
+		rdpma_ib_exit();
 err_class_register:
-	class_unregister(&client_class);
+		class_unregister(&client_class);
+	}
 
 	return ret;
 }
@@ -1139,6 +1181,8 @@ static void __exit exit_net_module(void){
 	class_unregister(&client_class);
 	pr_info("[  OK  ] PMDFC rdma module successfully removed ");
 }
+
+module_param(enable, int, 0);
 
 module_init(init_net_module);
 module_exit(exit_net_module);

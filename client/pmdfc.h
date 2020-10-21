@@ -28,4 +28,6 @@ struct pmdfc_storage_cluster{
 //	unsigned long	cl_nodes_bitmap[BITS_TO_LONGS(PMDFC_MAX_STORAGE)];
 };
 
+extern struct pmdfc_storage_cluster *ps_cluster;
+
 #endif

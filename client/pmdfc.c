@@ -19,25 +19,9 @@
 #include "pmdfc.h"
 #include "rdpma/rdpma.h"
 
-#define PMDFC_GET 1
-#define PMDFC_RDMA 1
-#define PMDFC_NETWORK 1
+//#define PMDFC_GET 1
 //#define PMDFC_DEBUG 1
 #define PMDFC_BLOOM_FILTER 1 
-#define PMDFC_WORKQUEUE 1
-#define PMDFC_PREALLOC 1
-#define PMDFC_PS_CLUSTER 1
-
-#if defined(PMDFC_RDMA)
-#undef PMDFC_PS_CLUSTER
-#undef PMDFC_PREALLOC
-#undef PMDFC_NETWORK
-#undef PMDFC_WORKQUEUE
-#endif
-
-#if !defined(PMDFC_NETWORK)
-#undef PMDFC_WORKQUEUE
-#endif
 
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
@@ -78,8 +62,6 @@ static u64 pmdfc_miss_gets;
 static u64 pmdfc_hit_gets;
 static u64 pmdfc_drop_puts;
 
-
-#if defined(PMDFC_WORKQUEUE)
 /* worker function for workqueue */
 static void pmdfc_remotify_fn(struct work_struct *work)
 {
@@ -90,9 +72,9 @@ static void pmdfc_remotify_fn(struct work_struct *work)
 	int i;
 
 	int status, ret = 0;
-	int cpu = -1;
+//	int cpu = -1;
 
-	cpu = smp_processor_id();
+//	cpu = smp_processor_id();
 //	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
 
 	/* It must sleepable */
@@ -130,9 +112,18 @@ retry:
 		if ( bit < PMDFC_STORAGE_SIZE ) {
 			key = storage->key_storage[bit];
 			index = storage->index_storage[bit];
-			ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
-				storage->page_storage[bit], PAGE_SIZE, 0, &status);
-			clear_bit(bit, storage->bitmap);
+			if (!rdma) {
+				/* TCP networking */
+				ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
+					storage->page_storage[bit], PAGE_SIZE, 0, &status);
+				clear_bit(bit, storage->bitmap);
+			} else {
+				/* RDMA networking */
+				ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, bit,
+						storage->page_storage[bit], PAGE_SIZE, 0, &status);
+				if (!ret)
+					clear_bit(bit, storage->bitmap);
+			}
 		} else {
 			goto out;
 		}
@@ -143,8 +134,6 @@ out:
 not_found:
 	return;
 }
-
-#endif /* defined(PMDFC_WORKQUEUE) */
 
 
 /*  Clean cache operations implementation */
@@ -189,7 +178,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	/* get page virtual address */
 	pg_from = page_address(page);
 
-#if defined(PMDFC_NETWORK)
 	/* 
 	 * 1. Find empty slot.
 	 * If exist, then copy page content to it.
@@ -247,14 +235,6 @@ retry:
 		goto out;
 	}
 
-#endif /* PMDFC_NETWORK */
-
-#if defined(PMDFC_RDMA)
-	long longkey = ((long)oid.oid[0] << 32) | index;
-	pr_info("PUT key=%lx\n", longkey);
-	
-	ret = generate_single_write_request(pg_from, longkey);
-#endif 
 
 #if defined(PMDFC_BLOOM_FILTER)
 	ret = bloom_filter_add(bf, data, 24);
@@ -316,33 +296,31 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 #endif
 
-#if defined(PMDFC_NETWORK)
-	pmnet_send_recv_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, 
-			page, PAGE_SIZE, 0, &status);
+	if (!rdma) {
+		/* TCP networking */
+		pmnet_send_recv_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, 
+				page, PAGE_SIZE, 0, &status);
 
-	if (status != 0) {
-		/* get page failed */
-		pmdfc_miss_gets++;
-		goto not_exists;
-	} else {
-		pmdfc_hit_gets++;
+		if (status != 0) {
+			/* get page failed */
+			pmdfc_miss_gets++;
+			goto not_exists;
+		} else {
+			pmdfc_hit_gets++;
+		}
+	} 
+	else {
+		/* RDMA networking */
+		long longkey = ((long)oid.oid[0] << 32) | index;
+		pr_info("GET key=%lx\n", longkey);
+
+		/* TODO get status from belwo function */
+		ret = generate_single_read_request(response, longkey);
+
+		/* copy page content from message */
+		to_va = page_address(page);
+		memcpy(to_va, response, PAGE_SIZE);
 	}
-#else
-	goto not_exists;
-#endif /* PMDFC_NETWORK end */
-
-
-#if defined(PMDFC_RDMA)
-	long longkey = ((long)oid.oid[0] << 32) | index;
-	pr_info("PUT key=%lx\n", longkey);
-
-	ret = generate_single_read_request(response, longkey);
-
-	/* copy page content from message */
-	to_va = page_address(page);
-	memcpy(to_va, response, PAGE_SIZE);
-#endif /* PMDFC_RDMA end */
-
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: GET PAGE success\n");
@@ -380,10 +358,8 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 		goto out;
 	}
 
-#if defined(PMDFC_NETWORK)
 	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, 0, 0,
 		   0, &status);
-#endif 
 out:
 	return;
 #endif
@@ -475,7 +451,7 @@ static int init_ps_cluster(void){
 	struct pmdfc_storage *storage = NULL;
 	int i, j;
 
-	pr_info("pmdfc: init_ps_cluster\n");
+//	pr_info("pmdfc: init_ps_cluster\n");
 
 	cluster = kzalloc(sizeof(struct pmdfc_storage_cluster), GFP_KERNEL);
 	if (cluster == NULL) {
@@ -512,7 +488,7 @@ static int init_ps_cluster(void){
 		bitmap_zero(storage->bitmap, storage->bitmap_size);
 		
 		cluster->cl_storages[i] = storage;
-		pr_info("pmdfc: cluster->cl_storages[%d]=%p\n", i, cluster->cl_storages[i]);
+//		pr_info("pmdfc: cluster->cl_storages[%d]=%p\n", i, cluster->cl_storages[i]);
 	}
 
 	ps_cluster = cluster;
@@ -545,6 +521,9 @@ static int __init pmdfc_init(void)
 	pmdfc_debugfs_init();
 #endif
 
+	pr_info("Hostname: \tapache1\n");
+	pr_info("Transport: \t%s\n", rdma ? "rdma" : "tcp");
+
 	/*
 	 * PREALLOC - make free spaces while load module 
 	 * Two buffers for a one CPU node
@@ -556,6 +535,7 @@ static int __init pmdfc_init(void)
 		return ret;
 	}
 	BUG_ON(ps_cluster == NULL);
+	pr_info("[  OK  ] ps_cluster initialized\n");
 
 	/* TODO: why we use singlethread here?? */
 //	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");

@@ -41,7 +41,7 @@ void die(const char* str){
 #define METADATA_SIZE				(16)
 //#define METADATA_SIZE				(4112)
 #define PAGE_SIZE 				(4096)
-#define MAX_PROCESS				(64)
+#define MAX_PROCESS				(4096)
 
 #define LOCAL_META_REGION_SIZE			(MAX_NODE * MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
 #define PER_NODE_META_REGION_SIZE		(MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)

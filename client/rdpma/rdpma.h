@@ -55,7 +55,7 @@ extern struct client_context* ctx;
 
 #define NUM_ENTRY		(4)
 #define METADATA_SIZE	(16)  		/* [ key, remote address ] */ 
-#define MAX_PROCESS	(64)
+#define MAX_PROCESS	(4096) 			/* same as PMDFC_STORAGE_SIZE */
 #define BITMAP_SIZE	(64)
 
 #define LOCAL_META_REGION_SIZE		(MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
@@ -335,33 +335,29 @@ int create_cq(struct ib_cq* cq, struct ib_device* dev, int rx_depth);
 int modify_qp(int my_psn, int sl, struct node_info* server);
 void cleanup_resource(void);
 
+/* rdpma.c */
+int rdpma_write_message(u32 msg_type, u32 key, u32 index, u32 bit, void *page, 
+			u32 len, u8 target_node, int *status);
 int generate_write_request(void** pages, uint64_t* keys, int num);
 int generate_single_write_request(void*, uint64_t);
 //int generate_write_request(struct page** pages, int size);
 //int generate_read_request(uint64_t* keys, int size);
 int generate_read_request(void** pages, uint64_t* keys, int num);
 int generate_single_read_request(void* ,uint64_t);
-
-
 int find_and_set_nextbit(void);
 void unset_bit(int idx);
-
 //uint64_t bit_mask(int node_id, int pid, int type, uint32_t size);
 //int bit_unmask(uint64_t target, int* node_id, int* pid, int* type, uint32_t* size);
 uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num);
 void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, uint32_t* num);
-
 int post_meta_request_batch(int pid, int type, int size, int tx_state, int len, void* addr, uint64_t offset, int batch_size);
 int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size);
 //int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uintptr_t, int batch_size);
 int post_write_request_batch(int pid, int type, int size, uintptr_t* addr, uint64_t offset, int batch_size);
 int post_data_request(int node_id, int type, int size, uintptr_t addr, int imm_data, uint64_t offset);
 int post_recv(void);
-
 int rdpma_post_recv(void);
-
 int query_qp(struct ib_qp* qp);
-
 int send_message(int node_id, int type, void* addr, int size, uint64_t inbox_addr);
 int recv_message(int node_id);
 
@@ -378,8 +374,8 @@ static inline unsigned int inet_addr(char* addr){
 }
 
 /* from ib.c */
-//int rdpma_ib_init(void);
-//void rdpma_ib_exit(void);
+int rdpma_ib_init(void);
+void rdpma_ib_exit(void);
 
 
 

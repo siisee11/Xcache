@@ -5,7 +5,8 @@ CC=g++
 #LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -lboost_thread -lboost_system
 LDFLAGS=
 LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -libverbs
-CFLAGS=-O3 -std=c++11 -w 
+#CFLAGS=-O3 -std=c++11 -w 
+CFLAGS=-std=c++11 -w 
 INCLUDES=-I./ 
 
 SOURCES=server.cpp tcp.cpp rdma.cpp CCEH.cpp
@@ -21,7 +22,7 @@ all: $(EXECUTABLE)
 #	    $(CC) $(LDFLAGS) $(OBJECTS) -o $@ $(LIBS)
 
 $(EXECUTABLE):
-	$(CC) $(CFLAGS) server.cpp tcp.cpp queue.cpp rdma.cpp CCEH.cpp -o server $(LIBS) -DINPLACE
+	$(CC) $(CFLAGS) -g server.cpp tcp.cpp queue.cpp rdma.cpp CCEH.cpp -o server $(LIBS) -DINPLACE
 
 #CCEH.o:
 #	$(CC) $(CFLAGS) -o CCEH.o CCEH.cpp -DINPLACE $(LIBS)
@@ -32,7 +33,7 @@ tcp:
 
 rdma:
 	sudo rm -rf ./jy/*
-	sudo ./server --rdma -t 2123 ./jy/FILE
+	sudo ./server --rdma -t 2123 -p jy/FILE
 
 gdb:
 	sudo rm -rf ./jy/*
