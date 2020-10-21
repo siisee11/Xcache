@@ -29,7 +29,7 @@ void destroy_queue(struct queue_t* q){
 int count_queue(struct queue_t* q){
 	struct node_t* cur = q->head;
 	int cnt = 0;
-	while(!cur){
+	while(cur){
 		cur = cur->next;
 		cnt++;
 	}
