@@ -36,7 +36,7 @@ void die(const char* str){
 //#define MAX_NODE 				(64)
 #define MAX_NODE 				(1)
 #define SERVER_NODE_ID 				(MAX_NODE)
-#define NUM_ENTRY					(4)
+#define NUM_ENTRY					(1)
 //#define REGION_PER_NODE				(4)
 #define METADATA_SIZE				(16)
 //#define METADATA_SIZE				(4112)
@@ -114,7 +114,7 @@ struct mr_info{
 struct request_struct{
     int type;
     int node_id;
-    int pid;
+    int msg_num;
     uint32_t num;
 };
 

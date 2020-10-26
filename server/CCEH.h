@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <pthread.h>
 #include <libpmemobj.h>
+#include "util.h"
 
 #define TOID_ARRAY(x) TOID(x)
 
@@ -37,11 +38,10 @@ constexpr size_t kMask = (1 << kSegmentBits)-1;
 constexpr size_t kShift = kSegmentBits;
 constexpr size_t kSegmentSize = (1 << kSegmentBits) * 16 * 4;
 constexpr size_t kNumPairPerCacheLine = 4;
-constexpr size_t kNumCacheLine = 8;
+constexpr size_t kNumCacheLine = 4;
 
 struct Segment{
     static const size_t kNumSlot = kSegmentSize/sizeof(Pair);
-    static const size_t numLocks = kNumSlot/kNumSlot;
 
     Segment(void){ }
     ~Segment(void){ }
@@ -51,10 +51,7 @@ struct Segment{
 	    pair[i].key = INVALID;
 	}
 	local_depth = 0;
-	lock = new pthread_rwlock_t[numLocks];
-	for(int i=0; i<numLocks; ++i){
-	    pthread_rwlock_init(&lock[i], NULL);
-	}
+	sema = 0;
     }
 
     void initSegment(size_t depth){
@@ -62,19 +59,54 @@ struct Segment{
 	    pair[i].key = INVALID;
 	}
 	local_depth = depth;
-	lock = new pthread_rwlock_t[numLocks];
-	for(int i=0; i<numLocks; ++i){
-	    pthread_rwlock_init(&lock[i], NULL);
+	sema = 0;
+    }
+
+    bool suspend(void){
+	int64_t val;
+	do{
+	    val = sema;
+	    if(val < 0)
+		return false;
+	}while(!CAS(&sema, &val, -1));
+
+	int64_t wait = 0 - val - 1;
+	while(val && sema != wait){
+	    asm("nop");
+	}
+	return true;
+    }
+
+    bool lock(void){
+	int64_t val = sema;
+	while(val > -1){
+	    if(CAS(&sema, &val, val+1))
+		return true;
+	    val = sema;
+	}
+	return false;
+    }
+
+    void unlock(void){
+	int64_t val = sema;
+	while(!CAS(&sema, &val, val-1)){
+	    val = sema;
 	}
     }
 
+    void reset(void){
+	int64_t val = sema;
+	while(!CAS(&sema, &val, 0)){
+	    val = sema;
+	}
+    }
     int Insert(PMEMobjpool*, Key_t&, Value_t, size_t, size_t);
     void Insert4split(Key_t&, Value_t, size_t);
     TOID(struct Segment)* Split(PMEMobjpool*);
     size_t numElement(void);
 
     Pair pair[kNumSlot];
-    pthread_rwlock_t* lock;
+    int64_t sema = 0;
     size_t local_depth;
     
 };
@@ -86,33 +118,62 @@ struct Directory{
     //static const size_t locksize = 64;
 
     TOID_ARRAY(TOID(struct Segment)) segment;	
-    pthread_rwlock_t* lock;		
+    int64_t sema = 0;
     size_t capacity;		
     size_t depth;	
-    size_t nlocks;
+
+    bool suspend(void){
+	int64_t val;
+	do{
+	    val = sema;
+	    if(val < 0)
+		return false;
+	}while(!CAS(&sema, &val, -1));
+
+	int64_t wait = 0 - val - 1;
+	while(val && sema != wait){
+	    asm("nop");
+	}
+	return true;
+    }
+
+    bool lock(void){
+	int64_t val = sema;
+	while(val > -1){
+	    if(CAS(&sema, &val, val+1))
+		return true;
+	    val = sema;
+	}
+	return false;
+    }
+
+    void unlock(void){
+	int64_t val = sema;
+	while(!CAS(&sema, &val, val-1)){
+	    val = sema;
+	}
+    }
+
+    void reset(void){
+	int64_t val = sema;
+	while(!CAS(&sema, &val, 0)){
+	    val = sema;
+	}
+    }
 
     Directory(void){ }
-
     ~Directory(void){ }
 
     void initDirectory(void){
 	depth = kDefaultDepth;
 	capacity = pow(2, depth);
-	nlocks = capacity/locksize + 1;
-	lock = new pthread_rwlock_t[nlocks];
-	for(int i=0; i<nlocks; ++i){
-	    pthread_rwlock_init(&lock[i], NULL);
-	}
+	sema = 0;
     }
 
     void initDirectory(size_t _depth){
 	depth = _depth;
 	capacity = pow(2, _depth);
-	nlocks = capacity/locksize + 1;
-	lock = new pthread_rwlock_t[nlocks];
-	for(int i=0; i<nlocks; ++i){
-	    pthread_rwlock_init(&lock[i], NULL);
-	}
+	sema = 0;
     }
 };
 
@@ -125,6 +186,7 @@ class CCEH{
 
 	void Insert(PMEMobjpool*, Key_t&, Value_t);
 	bool InsertOnly(PMEMobjpool*, Key_t&, Value_t);	
+	bool Update(PMEMobjpool*, Key_t&, Value_t);	
 	bool Delete(Key_t&);
 	Value_t Get(Key_t&);
 	Value_t FindAnyway(Key_t&);

@@ -48,12 +48,9 @@ void rdpmadebug(char *fmt, ...)
 }
 #endif
 
-
-
-extern struct workqueue_struct *rdpma_wq;
 extern struct client_context* ctx;
 
-#define NUM_ENTRY		(4)
+#define NUM_ENTRY		(1)
 #define METADATA_SIZE	(16)  		/* [ key, remote address ] */ 
 #define MAX_PROCESS	(4096) 			/* same as PMDFC_STORAGE_SIZE */
 #define BITMAP_SIZE	(64)
@@ -70,6 +67,8 @@ extern struct client_context* ctx;
 #define PMDFC_RDMA_MAX_SEGMENTS 		256
 
 #define PMDFC_RDMA_MAX_INLINE_SEGMENTS 	4
+
+#define RDPMA_MAX_NODES 1
 
 enum{
 	MSG_WRITE_REQUEST,
@@ -111,45 +110,6 @@ enum{
 /* from rdpma.c */
 extern struct kmem_cache* request_cache;
 
-struct client_context{
-	struct rdma_cm_id* cm_id;
-	struct ib_context* context;
-	struct ib_device 	*dev;
-	struct ib_pd* pd;
-	struct ib_comp_channel* channel;
-	struct ib_cq* recv_cq;
-	struct ib_cq* send_cq;
-	struct ib_qp* qp;
-	struct ib_mr* mr;
-	struct ib_port_attr port_attr;
-
-	/* ib_connection */
-	struct rdpma_ib_connection *ic;
-
-	struct kref 		kref;
-	struct list_head 	req_list;
-	wait_queue_head_t	req_wq;
-	spinlock_t   lock;
-
-	int node_id;
-	uint64_t local_mm;
-	uintptr_t local_dma_addr;
-	uint64_t remote_mm;
-	uint32_t rkey;
-	int size;
-	int send_flags;
-	int depth;
-	atomic_t connected;
-
-	//atomic_t* process_state;
-	volatile int* process_state;
-
-	unsigned int bitmap_size;
-	unsigned long *bitmap;
-	uint64_t** temp_log;
-
-};
-
 struct mr_info{
 	uint32_t node_id;
 	uint64_t addr;
@@ -182,8 +142,8 @@ struct send_struct{
 struct request_struct{
 	struct list_head entry; // 16
 	int type; // 4
-	int pid;  // 4
-	int64_t num; // 8
+	int msg_num;  // 8
+	int64_t num; // 4
 	/*
 	   union{
 	   uint64_t remote_mm; // 8
@@ -250,6 +210,109 @@ struct node_info{
 	uint64_t mm;
 	uint32_t rkey;
 	union ib_gid gid;
+};
+
+/* Migrate belwo to rdma_internal.h */
+
+
+struct rdpma_node {
+	/* this is never called from int/bh */
+	spinlock_t			nn_lock;
+
+	/* set the moment an sc is allocated and a connect is started */
+	struct client_context *nn_ctx;
+	/* _valid is only set after the handshake passes and tx can happen */
+	unsigned			nn_ctx_valid:1;
+	/* if this is set tx just returns it */
+	int				nn_persistent_error;
+	/* It is only set to 1 after the idle time out. */
+	atomic_t			nn_timeout;
+
+	/* threads waiting for an sc to arrive wait on the wq for generation
+	 * to increase.  it is increased when a connecting socket succeeds
+	 * or fails or when an accepted socket is attached. */
+	wait_queue_head_t		nn_ctx_wq;
+
+	struct idr			nn_status_idr;
+	struct list_head		nn_status_list;
+
+	/* connects are attempted from when heartbeat comes up until either hb
+	 * goes down, the node is unconfigured, or a connect succeeds.
+	 * connect_work is queued from set_nn_state both from hb up and from
+	 * itself if a connect attempt fails and so can be self-arming.
+	 * shutdown is careful to first mark the nn such that no connects will
+	 * be attempted before canceling delayed connect work and flushing the
+	 * queue. 
+	 */
+	struct delayed_work		nn_connect_work;
+	unsigned long			nn_last_connect_attempt;
+
+	/* this is queued as nodes come up and is canceled when a connection is
+	 * established.  this expiring gives up on the node and errors out
+	 * transmits */
+	struct delayed_work		nn_connect_expired;
+
+	/* after we give up on a socket we wait a while before deciding
+	 * that it is still heartbeating and that we should do some
+	 * quorum work */
+	struct delayed_work		nn_still_up;
+};
+
+struct client_context{
+	struct rdma_cm_id* cm_id;
+	struct ib_context* context;
+	struct ib_device 	*dev;
+	struct ib_pd* pd;
+	struct ib_comp_channel* channel;
+	struct ib_cq* recv_cq;
+	struct ib_cq* send_cq;
+	struct ib_qp* qp;
+	struct ib_mr* mr;
+	struct ib_port_attr port_attr;
+
+	/* ib_connection */
+	struct rdpma_ib_connection *ic;
+
+	struct kref 		kref;
+	struct list_head 	req_list;
+	wait_queue_head_t	req_wq;
+	spinlock_t   lock;
+
+	int node_id;
+	uint64_t local_mm;
+	uintptr_t local_dma_addr;
+	uint64_t remote_mm;
+	uint32_t rkey;
+	int size;
+	int send_flags;
+	int depth;
+	atomic_t connected;
+
+	//atomic_t* process_state;
+	volatile int* process_state;
+
+	unsigned int bitmap_size;
+	unsigned long *bitmap;
+	uint64_t** temp_log;
+
+};
+
+enum rdpma_system_error {
+	RDPMA_ERR_NONE = 0,
+	RDPMA_ERR_NO_HNDLR,
+	RDPMA_ERR_NOT_FOUND,
+	RDPMA_ERR_OVERFLOW,
+	RDPMA_ERR_DIED,
+	RDPMA_ERR_MAX
+};
+
+struct rdpma_status_wait {
+	enum rdpma_system_error ns_sys_status;
+	s32			ns_status;
+	int			ns_id;
+	void* 		ns_page;
+	wait_queue_head_t	ns_wq;
+	struct list_head	ns_node_item;
 };
 
 struct rdpma_message {
@@ -338,6 +401,8 @@ void cleanup_resource(void);
 /* rdpma.c */
 int rdpma_write_message(u32 msg_type, u32 key, u32 index, u32 bit, void *page, 
 			u32 len, u8 target_node, int *status);
+int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data, 
+			u32 len, u8 target_node, int *status);
 int generate_write_request(void** pages, uint64_t* keys, int num);
 int generate_single_write_request(void*, uint64_t);
 //int generate_write_request(struct page** pages, int size);
@@ -377,6 +442,11 @@ static inline unsigned int inet_addr(char* addr){
 int rdpma_ib_init(void);
 void rdpma_ib_exit(void);
 
-
+/* from rdpma.c */
+void rdpma_complete_nsw(struct rdpma_node *nn,
+			       struct rdpma_status_wait *nsw,
+			       u64 id, enum rdpma_system_error sys_status,
+			       s32 status);
+struct rdpma_node * rdpma_nn_from_num(u8 node_num);
 
 #endif

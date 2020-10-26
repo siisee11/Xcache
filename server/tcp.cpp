@@ -32,13 +32,6 @@
 #include "server.h"
 #include "log.h"
 
-#define TIME_CHECK 1
-
-#define SAMPLE_RATE 100
-#define NR_Q_TIME_CHECK SAMPLE_RATE
-#define NR_PUT_TIME_CHECK SAMPLE_RATE
-#define NR_GET_TIME_CHECK SAMPLE_RATE
-
 #define  BUFF_SIZE   1024
 #define SA struct sockaddr 
 
@@ -69,20 +62,20 @@ extern queue_t **lfqs;
 extern std::atomic<bool> done;
 
 /* counting valuse */
-int putcnt = 0;
-int getcnt = 0;
-int sample_put_q_cnt = 0;
-int sample_get_q_cnt = 0;
-int sample_put_cnt = 0;
-int sample_get_cnt = 0;
+extern int putcnt;
+extern int getcnt;
+extern int sample_put_q_cnt;
+extern int sample_get_q_cnt;
+extern int sample_put_cnt;
+extern int sample_get_cnt;
 
 struct server_context* ctx = NULL;
 
 /* performance timer */
-uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0;
-uint64_t pmnet_rx_elapsed=0; 
-uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
-uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
+extern uint64_t network_elapsed, pmput_elapsed, pmget_elapsed;
+extern uint64_t pmnet_rx_elapsed; 
+extern uint64_t pmget_notexist_elapsed, pmget_exist_elapsed;
+extern uint64_t pmput_queue_elapsed, pmget_queue_elapsed;
 
 static void pmnet_rx_until_empty(struct pmnet_sock_container *sc);
 static int pmnet_process_message(struct pmnet_sock_container *sc, 

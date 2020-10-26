@@ -19,7 +19,7 @@
 #include "pmdfc.h"
 #include "rdpma/rdpma.h"
 
-//#define PMDFC_GET 1
+#define PMDFC_GET 1
 //#define PMDFC_DEBUG 1
 #define PMDFC_BLOOM_FILTER 1 
 
@@ -121,8 +121,7 @@ retry:
 				/* RDMA networking */
 				ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, bit,
 						storage->page_storage[bit], PAGE_SIZE, 0, &status);
-				if (!ret)
-					clear_bit(bit, storage->bitmap);
+				clear_bit(bit, storage->bitmap);
 			}
 		} else {
 			goto out;
@@ -311,15 +310,16 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	} 
 	else {
 		/* RDMA networking */
-		long longkey = ((long)oid.oid[0] << 32) | index;
-		pr_info("GET key=%lx\n", longkey);
+		ret = rdpma_read_message(MSG_READ_REQUEST, (long)oid.oid[0], index,
+				page, PAGE_SIZE, 0, &status);
 
-		/* TODO get status from belwo function */
-		ret = generate_single_read_request(response, longkey);
-
-		/* copy page content from message */
-		to_va = page_address(page);
-		memcpy(to_va, response, PAGE_SIZE);
+		if (status != 0) {
+			/* get page failed */
+			pmdfc_miss_gets++;
+			goto not_exists;
+		} else {
+			pmdfc_hit_gets++;
+		}
 	}
 
 #if defined(PMDFC_DEBUG)

@@ -15,13 +15,18 @@ static int enable;
 
 struct kmem_cache* request_cache;
 
-enum pmnet_system_error {
-	PMNET_ERR_NONE = 0,
-	PMNET_ERR_NO_HNDLR,
-	PMNET_ERR_OVERFLOW,
-	PMNET_ERR_DIED,
-	PMNET_ERR_MAX
-};
+/* struct workqueue */
+static struct workqueue_struct *rdpma_wq;
+
+/* RDPMA nodes */
+struct rdpma_node rdpma_nodes[RDPMA_MAX_NODES];
+
+static int rdpma_sys_err_translations[RDPMA_ERR_MAX] =
+		{[RDPMA_ERR_NONE]	= 0,
+		 [RDPMA_ERR_NO_HNDLR]	= -ENOPROTOOPT,
+		 [RDPMA_ERR_OVERFLOW]	= -EOVERFLOW,
+		 [RDPMA_ERR_DIED]	= -EHOSTDOWN,};
+
 
 enum ib_mtu client_mtu_to_enum(int max_transfer_unit){
 	switch(max_transfer_unit){
@@ -33,9 +38,120 @@ enum ib_mtu client_mtu_to_enum(int max_transfer_unit){
 		default:	return -1;
 	}
 }
-struct ib_pd* ctx_pd;
 
 int rdpma_post_recv(void);
+
+static inline int rdpma_sys_err_to_errno(enum rdpma_system_error err)
+{
+	int trans;
+	BUG_ON(err >= RDPMA_ERR_MAX);
+	trans = rdpma_sys_err_translations[err];
+
+	/* Just in case we mess up the translation table above */
+	BUG_ON(err != RDPMA_ERR_NONE && trans == 0);
+	return trans;
+}
+
+/* get rdpma_node by number */
+struct rdpma_node * rdpma_nn_from_num(u8 node_num)
+{
+	BUG_ON(node_num >= ARRAY_SIZE(rdpma_nodes));
+	return &rdpma_nodes[node_num];
+}
+
+static u8 rdpma_num_from_nn(struct rdpma_node *nn)
+{
+	BUG_ON(nn == NULL);
+	return nn - rdpma_nodes;
+}
+
+/* ------------------------------------------------------------ */
+
+static int rdpma_prep_nsw(struct rdpma_node *nn, struct rdpma_status_wait *nsw)
+{
+	int ret;
+
+	spin_lock(&nn->nn_lock);
+	ret = idr_alloc(&nn->nn_status_idr, nsw, 0, 0, GFP_ATOMIC);
+	if (ret >= 0) {
+		nsw->ns_id = ret;
+		list_add_tail(&nsw->ns_node_item, &nn->nn_status_list);
+	}
+	spin_unlock(&nn->nn_lock);
+	if (ret < 0)
+		return ret;
+
+	init_waitqueue_head(&nsw->ns_wq);
+	nsw->ns_sys_status = RDPMA_ERR_NONE;
+	nsw->ns_status = 0;
+	return 0;
+}
+
+static void rdpma_complete_nsw_locked(struct rdpma_node *nn,
+				      struct rdpma_status_wait *nsw,
+				      enum rdpma_system_error sys_status,
+				      s32 status)
+{
+	assert_spin_locked(&nn->nn_lock);
+
+	if (!list_empty(&nsw->ns_node_item)) {
+		list_del_init(&nsw->ns_node_item);
+		nsw->ns_sys_status = sys_status;
+		nsw->ns_status = status;
+//		idr_remove(&nn->nn_status_idr, nsw->ns_id);
+		wake_up(&nsw->ns_wq);
+	}
+}
+
+void rdpma_complete_nsw(struct rdpma_node *nn,
+			       struct rdpma_status_wait *nsw,
+			       u64 id, enum rdpma_system_error sys_status,
+			       s32 status)
+{
+	spin_lock(&nn->nn_lock);
+	if (nsw == NULL) {
+		if (id > INT_MAX)
+			goto out;
+
+		nsw = idr_find(&nn->nn_status_idr, id);
+		if (nsw == NULL)
+			goto out;
+	}
+
+	rdpma_complete_nsw_locked(nn, nsw, sys_status, status);
+	spin_unlock(&nn->nn_lock);
+	return;
+
+out:
+	pr_err("%s: idr_find cannot find nsw (%llx)\n", __func__, id);
+	spin_unlock(&nn->nn_lock);
+	return;
+}
+
+static void rdpma_complete_nodes_nsw(struct rdpma_node *nn)
+{
+	struct rdpma_status_wait *nsw, *tmp;
+	unsigned int num_kills = 0;
+
+	assert_spin_locked(&nn->nn_lock);
+
+	list_for_each_entry_safe(nsw, tmp, &nn->nn_status_list, ns_node_item) {
+		rdpma_complete_nsw_locked(nn, nsw, RDPMA_ERR_DIED, 0);
+		num_kills++;
+	}
+}
+
+static int rdpma_nsw_completed(struct rdpma_node *nn,
+			       struct rdpma_status_wait *nsw)
+{
+	int completed;
+	spin_lock(&nn->nn_lock);
+	completed = list_empty(&nsw->ns_node_item);
+	spin_unlock(&nn->nn_lock);
+	return completed;
+}
+
+/* ------------------------------------------------------------ */
 
 /**
  * ib_reg_mr_addr - map DMA mapping to addr and validate it.
@@ -60,16 +176,16 @@ void ib_dereg_mr_addr(uint64_t addr, uint64_t size){
 	ib_dma_unmap_single(ctx->dev, addr, size, DMA_BIDIRECTIONAL);
 }
 
-uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
+uint32_t bit_mask(int node_id, int msg_num, int type, int state, uint32_t num){
+	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
 	return target;
 }
 
-void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, uint32_t* num){
+void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* state, uint32_t* num){
 	*num = (uint32_t)(target & 0x000000ff);
 	*state = (int)((target >> 8) & 0x0000000f);
 	*type = (int)((target >> 12) & 0x0000000f);
-	*pid = (int)((target >> 16) & 0x00000fff);
+	*msg_num = (int)((target >> 16) & 0x00000fff);
 	*node_id = (int)((target >> 28) & 0x0000000f);
 }
 
@@ -78,6 +194,7 @@ void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, 
  * @msg_type: Type of message.
  * @key: Unique key.
  * @index: index from mapping.
+ * @bit: bit of ps_storage.
  * @data: data address.
  * @len: data length.
  * @target_node: target node number (server is 0).
@@ -89,24 +206,152 @@ int rdpma_write_message(u32 msg_type, u32 key, u32 index, u32 bit, void *data,
 			u32 len, u8 target_node, int *status){
 	uint64_t* addr;
 	int ret;
-	long longkey = key << 32 | index;
+	long longkey = (u64)key << 32 | index;
 	void* dma_addr;
+	uintptr_t dma_page_addr[REQUEST_MAX_BATCH];
+	void* pages[REQUEST_MAX_BATCH];
+	int i;
 	long offset;
+	uint64_t* remote_mm;
 	int num = 1; 	/* batching size */
+	struct rdpma_node *nn = rdpma_nn_from_num(target_node);
+	struct rdpma_status_wait nsw = {
+		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
+	};
 
-	dma_addr = (void*)GET_LOCAL_META_REGION(ctx->local_dma_addr, bit);
-	offset = bit * METADATA_SIZE * NUM_ENTRY;
-	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, bit);
+	ret = rdpma_prep_nsw(nn, &nsw);
 
+	if (nsw.ns_id >= MAX_PROCESS)
+		return -1;
+
+	dma_addr = (void*)GET_LOCAL_META_REGION(ctx->local_dma_addr, nsw.ns_id);
+	offset = nsw.ns_id * METADATA_SIZE * NUM_ENTRY;
+	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, nsw.ns_id);
 	*(addr) = longkey;
-	ctx->temp_log[bit][0] = data;
 
 	/* TODO batching or buffering */
-	ret = post_meta_request_batch(bit, msg_type, num, TX_WRITE_BEGIN, sizeof(uint64_t), dma_addr, offset, num);
+	ret = post_meta_request_batch(nsw.ns_id, msg_type, num, TX_WRITE_BEGIN, sizeof(uint64_t), dma_addr, offset, num);
+
+	wait_event(nsw.ns_wq, rdpma_nsw_completed(nn, &nsw));
+	ret = rdpma_sys_err_to_errno(nsw.ns_sys_status);
+	if (status && !ret)
+		*status = nsw.ns_status;
+
+	remote_mm = (uint64_t*)(GET_LOCAL_META_REGION(ctx->local_mm, nsw.ns_id) + sizeof(uint64_t));
+
+	pages[0] = data;
+
+	/* write page content to remote_mm */
+	for(i = 0; i < num; i++){
+		dma_page_addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
+	}
+
+	/* add nsw to nn_status_list again */
+	list_add_tail(&nsw.ns_node_item, &nn->nn_status_list);
+
+	post_write_request_batch(nsw.ns_id, MSG_WRITE, num, dma_page_addr, *remote_mm, num);
+
+	wait_event(nsw.ns_wq, rdpma_nsw_completed(nn, &nsw));
+	ret = rdpma_sys_err_to_errno(nsw.ns_sys_status);
+	if (status && !ret)
+		*status = nsw.ns_status;
+
+	for(i = 0; i < num; i++){
+		ib_dereg_mr_addr(dma_page_addr[i], PAGE_SIZE);
+	}
+
+	/* free nsw.ns_id, after this line msg_num can be reused */
+	idr_remove(&nn->nn_status_idr, nsw.ns_id);
+
+	rdpma_complete_nsw(nn, &nsw, 0, 0, 0);
 
 	return ret;
 }
 EXPORT_SYMBOL(rdpma_write_message);
+
+
+/**
+ * rdpma_read_message - post read request and read from remote memory.
+ * @msg_type: Type of message.
+ * @key: Unique key.
+ * @index: index from mapping.
+ * @data: data address.
+ * @len: data length.
+ * @target_node: target node number (server is 0).
+ * @status: status return from communication.
+ *
+ * If generate_single_write_request succeeds, then return 0.
+ */
+int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data, 
+			u32 len, u8 target_node, int *status){
+	int ret;
+	long longkey = (u64)key << 32 | index;
+	uint64_t* addr;
+	void* dma_addr;
+	uintptr_t dma_page_addr[REQUEST_MAX_BATCH];
+	void* pages[REQUEST_MAX_BATCH];
+	int i;
+	long offset;
+	uint64_t* remote_mm;
+	int page_exist = 0;
+	int num = 1; 	/* batching size */
+	struct rdpma_node *nn = rdpma_nn_from_num(target_node);
+	struct rdpma_status_wait nsw = {
+		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
+	};
+
+	ret = rdpma_prep_nsw(nn, &nsw);
+
+	if (nsw.ns_id >= MAX_PROCESS)
+		return -1;
+
+	dma_addr = (void*)GET_LOCAL_META_REGION(ctx->local_dma_addr, nsw.ns_id);
+	offset = nsw.ns_id * METADATA_SIZE * NUM_ENTRY;
+	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, nsw.ns_id);
+	*(addr) = longkey;
+	pr_info("MSG_READ_REQUEST key=%lx, msg_num=%x\n", *addr, nsw.ns_id);
+
+	post_meta_request_batch(nsw.ns_id, MSG_READ_REQUEST, num, TX_READ_BEGIN, sizeof(uint64_t), dma_addr, offset, num);
+
+	wait_event(nsw.ns_wq, rdpma_nsw_completed(nn, &nsw));
+	ret = rdpma_sys_err_to_errno(nsw.ns_sys_status);
+	if (status && !ret)
+		*status = nsw.ns_status;
+
+//	pr_info("woken, returning system status %d, user status %d\n", \
+			ret, nsw.ns_status);
+
+	/* PAGE_NOT_EXIST */
+	if (*status == -1) {
+		ret = -1;
+		goto out;
+	}
+
+	remote_mm = (uint64_t*)GET_REMOTE_ADDRESS_BASE(ctx->local_mm, nsw.ns_id);
+	pages[0] = data;
+
+	/* write page content to remote_mm */
+	for(i = 0; i < num; i++){
+		dma_page_addr[i] = ib_reg_mr_addr(pages[i], len);
+	}
+
+	post_read_request_batch(dma_page_addr, *remote_mm, num);
+
+	/* ACK to server */
+	post_meta_request_batch(nsw.ns_id, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
+
+	for(i = 0; i < num; i++){
+		ib_dereg_mr_addr(dma_page_addr[i], len);
+	}
+
+out:
+	/* free nsw.ns_id, after this line msg_num can be reused */
+	idr_remove(&nn->nn_status_idr, nsw.ns_id);
+	rdpma_complete_nsw(nn, &nsw, 0, 0, 0);
+
+	return ret;
+}
+EXPORT_SYMBOL(rdpma_read_message);
 
 /**
  * generate_single_write_request - Add new write request to request list.
@@ -129,7 +374,7 @@ int generate_single_write_request(void* page, uint64_t key){
 
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, pid);
 	new_request->type = MSG_WRITE_REQUEST;
-	new_request->pid = pid;
+	new_request->msg_num = pid;
 	new_request->num = 1;
 
 	/* add key to metadata region */
@@ -164,7 +409,7 @@ int generate_write_request(void** pages, uint64_t* keys, int num){
 
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, pid);
 	new_request->type = MSG_WRITE_REQUEST;
-	new_request->pid = pid;
+	new_request->msg_num = pid;
 	new_request->num = num;
 	for(i = 0 ; i < num ; i++){
 		*(addr + i * METADATA_SIZE) = keys[i];
@@ -202,7 +447,7 @@ int generate_single_read_request(void* page, uint64_t key){
 
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, pid);
 	new_request->type = MSG_READ_REQUEST;
-	new_request->pid = pid;
+	new_request->msg_num = pid;
 	new_request->num = 1;
 
 	*(addr) = key;
@@ -253,7 +498,7 @@ int generate_read_request(void** pages, uint64_t* keys, int num){
 
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, pid);
 	new_request->type = MSG_READ_REQUEST;
-	new_request->pid = pid;
+	new_request->msg_num = pid;
 	new_request->num = num;
 	for(i = 0; i < num; i++){
 		*(addr + i*METADATA_SIZE) = keys[i];
@@ -334,8 +579,7 @@ void handle_write(int pid, int num){
 		/* TODO: avoid register mr on critical path */
 		addr[i] = ib_reg_mr_addr(pages[i], PAGE_SIZE);
 	}
-	dprintk("[%s]: victim page %s\n", __func__, (char *)pages[0]);
-	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
+//	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
 
 	post_write_request_batch(pid, MSG_WRITE, num, addr, *remote_mm, num);
 
@@ -359,7 +603,7 @@ void handle_read(int pid, int num){
 	volatile int* process_state = &ctx->process_state[pid];
 	int i;
 
-	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
+//	dprintk("[%s]: target addr= %llx\n", __func__, *remote_mm);
 
 	for(i = 0; i < num; i++){
 		pages[i] = (void*)ctx->temp_log[pid][i];
@@ -367,7 +611,7 @@ void handle_read(int pid, int num){
 	}
 	post_read_request_batch(addr, *remote_mm, num);
 
-	dprintk("[%s]: returned page %s\n", __func__, (char *)pages[0]);
+//	dprintk("[%s]: returned page %s\n", __func__, (char *)pages[0]);
 
 	post_meta_request_batch(pid, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
 
@@ -405,25 +649,25 @@ int event_handler(void){
 		list_del_init(&new_request->entry);
 		spin_unlock(&ctx->lock);
 
-		dprintk("[%s]: handle new request(type=%s, pid=%d, num=%lld)\n", 
+		dprintk("[%s]: handle new request(type=%s, msg_num=%d, num=%lld)\n", 
 				__func__, TYPE_STR(new_request->type),
-				new_request->pid, new_request->num);
+				new_request->msg_num, new_request->num);
 
 		switch(new_request->type) {
 			case MSG_WRITE_REQUEST: 
-				handle_write_request(new_request->pid, new_request->num);
+				handle_write_request(new_request->msg_num, new_request->num);
 				break;
 			
 			case MSG_WRITE: 
-				handle_write(new_request->pid, new_request->num);
+				handle_write(new_request->msg_num, new_request->num);
 				break;
 
 			case MSG_READ_REQUEST:
-				handle_read_request(new_request->pid, new_request->num);
+				handle_read_request(new_request->msg_num, new_request->num);
 				break;
 
 			case MSG_READ:
-				handle_read(new_request->pid, new_request->num);
+				handle_read(new_request->msg_num, new_request->num);
 				break;
 
 			default:
@@ -451,7 +695,7 @@ int event_handler(void){
  * If generate_single_write_request succeeds, then return 0
  * if not return negative value.
  */
-int post_meta_request_batch(int pid, int type, int num, int tx_state, int len, 
+int post_meta_request_batch(int msg_num, int type, int num, int tx_state, int len, 
 		void* dma_addr, uint64_t offset, int batch_size){
 	struct ib_rdma_wr wr[REQUEST_MAX_BATCH];
 	const struct ib_send_wr* bad_wr;
@@ -467,13 +711,14 @@ int post_meta_request_batch(int pid, int type, int num, int tx_state, int len,
 		sge[i].length = len;
 		sge[i].lkey = ctx->mr->lkey;
 
+		/* TODO: wr_id and msg_num */
 		//wr[i].wr.wr_id = bit_mask(ctx->node_id, pid, type, size);
 		wr[i].wr.opcode = IB_WR_RDMA_WRITE_WITH_IMM;
 		wr[i].wr.sg_list = &sge[i];
 		wr[i].wr.num_sge = 1;
 		wr[i].wr.next = (i == batch_size-1) ? NULL : (struct ib_send_wr*)&wr[i+1];
 		wr[i].wr.send_flags = (i == batch_size-1) ? IB_SEND_SIGNALED : 0;
-		wr[i].wr.ex.imm_data = htonl(bit_mask(ctx->node_id, pid, type, tx_state, num));
+		wr[i].wr.ex.imm_data = htonl(bit_mask(ctx->node_id, msg_num, type, tx_state, num));
 		wr[i].remote_addr = (uintptr_t)(ctx->remote_mm + offset + i*len);
 		wr[i].rkey = ctx->rkey;
 
@@ -1031,14 +1276,15 @@ err_ib_alloc_pd:
 	return NULL;
 }
 
-int client_init_interface(void){
+int client_init_interface(struct rdpma_node *nn){
 	int ret, x;
 
 	BUG_ON(ibdev == NULL);
 	x = rdma_port_get_link_layer(ibdev, ib_port);
 	BUG_ON(x != IB_LINK_LAYER_INFINIBAND);
 
-	ctx = client_init_ctx();
+	nn->nn_ctx = client_init_ctx();
+	ctx = nn->nn_ctx;
 	if(!ctx){
 		printk(KERN_ALERT "Failed to initialize client_init_ctx\n");
 		return -1;
@@ -1062,23 +1308,9 @@ int client_init_interface(void){
 	rdpma_post_recv();
 
 	atomic_set(&ctx->connected, 1);
+	nn->nn_ctx_valid = 1;
 
 	request_cache = kmem_cache_create("request_cache", sizeof(struct request_struct), 64, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
-
-#if 0
-	thread_recv_poll_cq = kthread_create((void*)&client_poll_recv_cq, ctx->i_recv_cq, "cq_recv_poller");
-	if(IS_ERR(thread_recv_poll_cq)){
-		printk(KERN_ALERT "cq_poller thread creation failed\n");
-		return 1;
-	}
-	wake_up_process(thread_recv_poll_cq);
-	thread_send_poll_cq = kthread_create((void*)&client_poll_send_cq, ctx->send_cq, "cq_send_poller");
-	if(IS_ERR(thread_send_poll_cq)){
-		printk(KERN_ALERT "cq_poller thread creation failed\n");
-		return 1;
-	}
-	wake_up_process(thread_send_poll_cq);
-#endif
 
 	thread_handler = kthread_create((void*)&event_handler, NULL, "event_handler");
 	if(IS_ERR(thread_handler)){
@@ -1119,9 +1351,31 @@ static struct class client_class = {
 	.name = "rdpma_client_class"
 };
 
-static int __init init_net_module(void){
+/* rdma connection start here */
+static void rdpma_start_connect(struct work_struct *work)
+{
+	struct rdpma_node *nn = 
+		container_of(work, struct rdpma_node, nn_connect_work.work);
 	int ret = 0;
 
+	nn->nn_last_connect_attempt = jiffies;
+
+	ret = client_init_interface(nn);
+	if(ret){
+		pr_err("client_init_interface failed\n");
+	}
+
+	pr_info("[  OK  ] PMDFC rdma module successfully installed");
+	return;
+}
+
+
+
+static int __init init_net_module(void){
+	int i;
+	int ret = 0;
+
+	/* if rdma is enabled else do nothing */
 	if (enable)
 	{
 		ret = class_register(&client_class);
@@ -1137,14 +1391,32 @@ static int __init init_net_module(void){
 		}
 		pr_info("[  OK  ] rdpma_ib_device successfully registered\n");
 
-		ret = client_init_interface();
-		if(ret){
-			pr_err("client_init_interface failed\n");
-			goto err_rdpma_ib_init;
+		/* Codes from o2net_start_listening */
+		BUG_ON(rdpma_wq != NULL);
+		/* perpapre work queue */
+		rdpma_wq = alloc_ordered_workqueue("rdpma", WQ_MEM_RECLAIM);
+		if (rdpma_wq == NULL) {
+			return -ENOMEM; /* ? */
 		}
 
-		pr_info("[  OK  ] PMDFC rdma module successfully installed");
+		for (i = 0; i < ARRAY_SIZE(rdpma_nodes); i++) {
+			struct rdpma_node *nn = rdpma_nn_from_num(i);
+			
+			pr_info("pmnet_init::set pmnet_node\n");
+			atomic_set(&nn->nn_timeout, 0);
+			spin_lock_init(&nn->nn_lock);
 
+			INIT_DELAYED_WORK(&nn->nn_connect_work, rdpma_start_connect);
+//			INIT_DELAYED_WORK(&nn->nn_connect_expired, pmnet_connect_expired);
+//			INIT_DELAYED_WORK(&nn->nn_still_up, pmnet_still_up);
+			/* until we see hb from a node we'll return einval */
+			nn->nn_persistent_error = -ENOTCONN;
+			init_waitqueue_head(&nn->nn_ctx_wq);
+			idr_init(&nn->nn_status_idr);
+			INIT_LIST_HEAD(&nn->nn_status_list);
+
+			queue_delayed_work(rdpma_wq, &nn->nn_connect_work, 0);
+		}
 		/* follow 0/-E semantic */
 		return 0;
 

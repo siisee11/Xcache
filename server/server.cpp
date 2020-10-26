@@ -26,6 +26,21 @@ unsigned int nr_cpus;
 
 std::atomic<bool> done(false);
 
+/* counting valuse */
+int putcnt = 0;
+int getcnt = 0;
+int sample_put_q_cnt = 0;
+int sample_get_q_cnt = 0;
+int sample_put_cnt = 0;
+int sample_get_cnt = 0;
+
+/* performance timer */
+uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0;
+uint64_t pmnet_rx_elapsed=0; 
+uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
+uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
+
+
 int destroy_lock_free_queue(){
 	for (int i = 0; i < nr_cpus ; i++) {
 		destroy_queue(lfqs[i]);

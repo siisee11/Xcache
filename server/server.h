@@ -18,6 +18,13 @@
 #define LOG_SIZE (42949672960) // 40GB
 #define INDEX_SIZE (10737418240) // 10GB
 
+#define TIME_CHECK 1
+
+#define SAMPLE_RATE 100
+#define NR_Q_TIME_CHECK SAMPLE_RATE
+#define NR_PUT_TIME_CHECK SAMPLE_RATE
+#define NR_GET_TIME_CHECK SAMPLE_RATE
+
 #define DEBUG
 #ifdef DEBUG
 #define dprintf(...) do{ fprintf(stderr, __VA_ARGS__); fflush(stdout);} while(0)
@@ -44,6 +51,7 @@ struct server_context{
     TOID(CCEH) hashtable;
 };
 
+/* server.cpp */
 
 /* rdma.c */
 void init_rdma_server(char *);

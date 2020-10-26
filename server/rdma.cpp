@@ -34,10 +34,6 @@ extern int tcp_port;
 extern int errno;
 #endif
 struct rdma_server_context* rctx = NULL;
-pthread_t connection_thread;
-pthread_t thread_poll_cq;
-pthread_t event_handler_thread;
-pthread_t event_handler_thread2;
 
 pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queue_cv = PTHREAD_COND_INITIALIZER;
@@ -46,6 +42,61 @@ static int running;
 extern std::atomic<bool> done;
 
 extern unsigned int nr_cpus;
+
+/* counting valuse */
+extern int putcnt;
+extern int getcnt;
+extern int sample_put_q_cnt;
+extern int sample_get_q_cnt;
+extern int sample_put_cnt;
+extern int sample_get_cnt;
+
+/* performance timer */
+extern uint64_t network_elapsed, pmput_elapsed, pmget_elapsed;
+extern uint64_t pmnet_rx_elapsed; 
+extern uint64_t pmget_notexist_elapsed, pmget_exist_elapsed;
+extern uint64_t pmput_queue_elapsed, pmget_queue_elapsed;
+uint64_t rdpma_handle_write_req_elapsed=0 , rdpma_handle_write_elapsed=0;
+
+static void rdpma_print_stats() {
+	printf("\n--------------------REPORT---------------------\n");
+//	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
+	printf("# of puts : %d , # of gets : %d \n",
+			putcnt, getcnt);
+	printf("[SAMPLE] # of puts : %d , # of gets : %d \n",
+			sample_put_cnt, sample_get_cnt);
+	printf("[SAMPLE] # of put_Q : %d , # of get_Q : %d \n",
+			sample_put_q_cnt, sample_get_q_cnt);
+
+	if (putcnt == 0)
+		putcnt++;
+	if (getcnt == 0)
+		getcnt++;
+	if (sample_get_cnt == 0)
+		sample_get_cnt++;
+	if (sample_put_cnt == 0)
+		sample_put_cnt++;
+	if (sample_get_q_cnt == 0)
+		sample_get_q_cnt++;
+	if (sample_put_q_cnt == 0)
+		sample_put_q_cnt++;
+
+	printf("\n--------------------SUMMARY--------------------\n");
+	printf("Average (divided by number of ops)\n");
+	printf("Write_req: %lu (us), Write: %lu (us)\n",
+			rdpma_handle_write_req_elapsed/1000/putcnt,
+			rdpma_handle_write_elapsed/1000/putcnt);
+
+#if 0 
+	printf("PUT : %lu (us), GET_TOTAL : %lu (us)\n",
+			pmput_elapsed/1000/sample_put_cnt,
+			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/sample_get_cnt);
+	printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
+			pmput_queue_elapsed/1000/sample_put_q_cnt,
+			pmget_queue_elapsed/1000/sample_get_q_cnt);
+#endif
+	printf("--------------------FIN------------------------\n");
+}
 
 static void signal_handler(int signal){
 	printf("SIGNAL occur\n");
@@ -115,13 +166,13 @@ int post_recv(int node_id){
 /**
  * post_meta_request - post metadata request to target
  * @nid: Client node identifier.
- * @pid: Progress identifier.
+ * @msg_num: Msg identifier.
  * @type: Message type (i.e. MSG_READ_REQUEST, MSG_WRITE_REQUEST, ...)
  * @num: IDK
  * @tx_state: Transaction state (i.e. TX_READ_BEGIN, TX_READ_COMMITTED, ...) 
  * @len: Size of content of addr
  * @dma_addr: DMA-able address.
- * @offset: offset from base to metadata region for pid
+ * @offset: offset from base to metadata region for msg_num
  *
  * This function post send in batch manner.
  * Note that only last work request to be signaled.
@@ -129,7 +180,7 @@ int post_recv(int node_id){
  * If generate_single_write_request succeeds, then return 0
  * if not return negative value.
  */
-int post_meta_request(int nid, int pid, int type, uint32_t num, 
+int post_meta_request(int nid, int msg_num, int type, uint32_t num, 
 		int tx_state, int len, uint64_t* dma_addr, uint64_t offset){
 	struct ibv_send_wr wr;
 	struct ibv_send_wr* bad_wr;
@@ -146,11 +197,11 @@ int post_meta_request(int nid, int pid, int type, uint32_t num,
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 	wr.send_flags = IBV_SEND_SIGNALED;
-	wr.imm_data = htonl(bit_mask(nid, pid, type, tx_state, num));
+	wr.imm_data = htonl(bit_mask(nid, msg_num, type, tx_state, num));
 	wr.wr.rdma.remote_addr = (uintptr_t)(rctx->remote_mm[nid] + offset);
 	wr.wr.rdma.rkey = rctx->rkey[nid];
 
-	dprintf("[%s]: nid(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, pid, type, tx_state, num);
+//	dprintf("[%s]: nid(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, msg_num, type, tx_state, num);
 	if(ibv_post_send(rctx->qp[nid], &wr, &bad_wr)){
 		fprintf(stderr, "[%s] ibv_post_send to node %d failed\n", __func__, nid);
 		return 1;
@@ -263,19 +314,27 @@ int rdma_write(int node_id, int type, uint64_t addr, int len){
 	return 0;
 }
 
-uint32_t bit_mask(int node_id, int pid, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)pid << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
-	//  uint64_t target = ((uint64_t)node_id << 56) | ((uint64_t)pid << 48 ) | ((uint64_t)type << 32) | ((uint64_t)size & 0xffffffff);
+uint32_t bit_mask(int node_id, int msg_num, int type, int state, uint32_t num){
+	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
 	return target;
 }
 
-void bit_unmask(uint32_t target, int* node_id, int* pid, int* type, int* state, uint32_t* num){
-	//int bit_unmask(uint64_t target, int* node_id, int* pid, int* type, uint32_t* size){
+void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* state, uint32_t* num){
 	*num = (uint32_t)(target & 0x000000ff);
 	*state = (int)((target >> 8) & 0x0000000f);
 	*type = (int)((target >> 12) & 0x0000000f);
-	*pid = (int)((target >> 16) & 0x00000fff);
+	*msg_num = (int)((target >> 16) & 0x00000fff);
 	*node_id = (int)((target >> 28) & 0x0000000f);
+}
+
+/**
+ * indicator - Show stats periodically
+ */
+void rdpma_indicator() {
+	while (!done) {
+		sleep(10);
+		rdpma_print_stats();
+	}
 }
 
 void server_recv_poll_cq(struct ibv_cq *cq){
@@ -301,29 +360,30 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 
 		int ret;
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
-			int node_id, pid, type, tx_state;
+			int node_id, msg_num, type, tx_state;
 			uint32_t num;
-			bit_unmask(ntohl(wc.imm_data), &node_id, &pid, &type, &tx_state, &num);
-			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, node_id, pid);
+			bit_unmask(ntohl(wc.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
+			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, node_id, msg_num);
 			targetQ = *key % nr_cpus;
-//			dprintf("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
+//			dprintf("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 			post_recv(node_id);
 			if(type == MSG_WRITE_REQUEST){
 //				dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
-				new_request->pid = pid;
+				new_request->msg_num = msg_num;
 				new_request->num = num;
 				enqueue(lfqs[targetQ], (void*)new_request);
-				dprintf("[%s]: MSG_WRITE_REQUEST(%lx) enqueued\n", __func__, *key);
+//				dprintf("[%s]: MSG_WRITE_REQUEST(%lx) enqueued\n", __func__, *key);
+				putcnt++;
 			}
 			else if(type == MSG_WRITE){
-				dprintf("[%s]: received MSG_WRITE\n", __func__);
+//				dprintf("[%s]: received MSG_WRITE\n", __func__);
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
-				new_request->pid = pid;
+				new_request->msg_num = msg_num;
 				new_request->num = num;
 				enqueue(lfqs[targetQ], (void*)new_request);
 			}
@@ -332,14 +392,15 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 				struct request_struct* new_request = (struct request_struct*)malloc(sizeof(struct request_struct));
 				new_request->type = type;
 				new_request->node_id = node_id;
-				new_request->pid = pid;
+				new_request->msg_num = msg_num;
 				new_request->num = num;
 				enqueue(lfqs[targetQ], (void*)new_request);
+				getcnt++;
 			}
 			else if(type == MSG_READ_REPLY){
 				dprintf("[%s]: received MSG_READ_REPLY\n", __func__);
-				free((void*)rctx->temp_log[node_id][pid]);
-				//munmap((void*)rctx->temp_log[node_id][pid], num*PAGE_SIZE);
+				free((void*)rctx->temp_log[node_id][msg_num]);
+				//munmap((void*)rctx->temp_log[node_id][msg_num], num*PAGE_SIZE);
 			}
 		}
 		else if((int)wc.opcode == IBV_WC_RDMA_READ){
@@ -358,30 +419,44 @@ void event_handler(int cpu){
 	//TOID(CCEH) hashtable = rctx->hashtable;
 	int insert_cnt = 0;
 	int search_cnt = 0;
+#if defined(TIME_CHECK)
+	struct timespec start,end;
+	bool checkit = false;
+#endif
 	
-	printf("[  OK  ] event_handler is running on CPU %d \n", sched_getcpu());
+//	dprintf("[  OK  ] event_handler is running on CPU %d \n", sched_getcpu());
 
 	while(!done){
 		new_request = (struct request_struct*)dequeue(lfqs[cpu]);
 
 		if(new_request->type == MSG_WRITE_REQUEST){
-			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->pid);
-			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages (node=%x, pid=%x, key=%lx)\n", 
-					new_request->num, new_request->node_id, new_request->pid, *key);
+#if defined(TIME_CHECK)
+			clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num);
+			dprintf("Processing [MSG_WRITE_REQUEST] %d num pages (node=%x, msg_num=%x, key=%lx)\n", 
+					new_request->num, new_request->node_id, new_request->msg_num, *key);
 			uint64_t page = (uint64_t)malloc(new_request->num * PAGE_SIZE);
-			rctx->temp_log[new_request->node_id][new_request->pid] = page;
-			dprintf("[%s]: Send newly allocated page: %lx\n", __func__, page);
-			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
-			uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
+			rctx->temp_log[new_request->node_id][new_request->msg_num] = page;
+			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->msg_num + sizeof(uint64_t);
+			uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num) + sizeof(uint64_t));
 			*addr = page;
-			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REQUEST_REPLY, new_request->num, TX_WRITE_READY, sizeof(uint64_t), addr, offset);
-			dprintf("Processed  [MSG_WRITE_REQUEST] %d num pages (node=%x pid=%x)\n", new_request->num, new_request->node_id, new_request->pid);
+			dprintf("[%s]: send page address: %lx\n", __func__, (uint64_t)page);
+			post_meta_request(new_request->node_id, new_request->msg_num, MSG_WRITE_REQUEST_REPLY, new_request->num, TX_WRITE_READY, sizeof(uint64_t), addr, offset);
+
+#if defined(TIME_CHECK)
+			clock_gettime(CLOCK_MONOTONIC, &end);
+			rdpma_handle_write_req_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
 		}
 		else if(new_request->type == MSG_WRITE){
-			uint64_t ptr = rctx->temp_log[new_request->node_id][new_request->pid];
-			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->pid);
-			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, pid=%x, key=%lx)\n", 
-					new_request->num, new_request->node_id, new_request->pid, *key);
+#if defined(TIME_CHECK)
+			clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+			uint64_t ptr = rctx->temp_log[new_request->node_id][new_request->msg_num];
+			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num);
+			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, msg_num=%x, key=%lx)\n", 
+					new_request->num, new_request->node_id, new_request->msg_num, *key);
 			for(int i = 0; i < new_request->num; i++){
 				TOID(char) temp;
 				POBJ_ALLOC(rctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
@@ -391,27 +466,31 @@ void event_handler(int cpu){
 
 				D_RW(rctx->hashtable)->Insert(rctx->index_pop, *key, (Value_t)temp_addr);
 				void* check = (void*)D_RW(rctx->hashtable)->Get(*key);
-				dprintf("[%s]: page: %lx\n", __func__, (uint64_t)ptr);
-				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
-				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
+//				dprintf("[%s]: Insert value to page: %lx\n", __func__, (uint64_t)ptr);
+//				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
+//				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
 
 				key += METADATA_SIZE;
 			}
-			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
+			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->msg_num + sizeof(uint64_t);
 			/* if successfully inserted */
-			post_meta_request(new_request->node_id, new_request->pid, MSG_WRITE_REPLY, new_request->num, TX_WRITE_COMMITTED, 0, NULL, offset);
+			post_meta_request(new_request->node_id, new_request->msg_num, MSG_WRITE_REPLY, new_request->num, TX_WRITE_COMMITTED, 0, NULL, offset);
 			free((void *)ptr);
-			dprintf("Processed  [MSG_WRITE] %d num pages (node=%d pid=%d)\n", new_request->num, new_request->node_id, new_request->pid);
+#if defined(TIME_CHECK)
+			clock_gettime(CLOCK_MONOTONIC, &end);
+			rdpma_handle_write_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
 		}
 		else if(new_request->type == MSG_READ_REQUEST){
-			dprintf("Processing [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
+			uint64_t* key = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num)); 
+			dprintf("Processing [MSG_READ_REQUEST] %d num pages (node=%x, msg_num=%x, key=%lx)\n", 
+					new_request->num, new_request->node_id, new_request->msg_num, *key);
 			void* page = (void*)malloc(new_request->num * PAGE_SIZE);
-			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->pid + sizeof(uint64_t);
+			uint64_t offset = NUM_ENTRY * METADATA_SIZE * new_request->msg_num + sizeof(uint64_t);
 			void* values[new_request->num];
 			bool abort = false;
 			for(int i=0; i<new_request->num; i++){
-				uint64_t* key = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->pid) + i*METADATA_SIZE); 
-				dprintf("Target Key is %ld (%lx)\n", *key, *key);
+				key = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num) + i*METADATA_SIZE); 
 				values[i] = (void*)D_RW(rctx->hashtable)->Get(*key);
 				if(!values[i]){
 					dprintf("Value for key[%lx] not found\n", *key);
@@ -421,19 +500,18 @@ void event_handler(int cpu){
 
 			if(!abort){
 				memcpy(page, values[0], PAGE_SIZE * new_request->num);
-				rctx->temp_log[new_request->node_id][new_request->pid] = (uint64_t)page;
-				uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->pid) + sizeof(uint64_t));
+				rctx->temp_log[new_request->node_id][new_request->msg_num] = (uint64_t)page;
+				uint64_t* addr = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num) + sizeof(uint64_t));
 				*addr = (uint64_t)page;
 				dprintf("allocated page addr: %lx\n", *addr);
-				dprintf("[%s]: addr: %lx, page: %p\n", __func__, *addr, page);
-				dprintf("[%s]: msg double check: %s\n", __func__, (char*)page);
-				post_meta_request(new_request->node_id, new_request->pid, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_READY, sizeof(uint64_t), addr, offset);
+//				dprintf("[%s]: addr: %lx, page: %p\n", __func__, *addr, page);
+//				dprintf("[%s]: msg double check: %s\n", __func__, (char*)page);
+				post_meta_request(new_request->node_id, new_request->msg_num, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_READY, sizeof(uint64_t), addr, offset);
 			}
 			else{
-				post_meta_request(new_request->node_id, new_request->pid, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_ABORTED, 0, NULL, offset);
-				dprintf("Aborted [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
+				post_meta_request(new_request->node_id, new_request->msg_num, MSG_READ_REQUEST_REPLY, new_request->num, TX_READ_ABORTED, 0, NULL, offset);
+				dprintf("Aborted [MSG_READ_REQUEST] %d num pages from node %d with %d msg_num\n", new_request->num, new_request->node_id, new_request->msg_num);
 			}
-			dprintf("Processed [MSG_READ_REQUEST] %d num pages from node %d with %d pid\n", new_request->num, new_request->node_id, new_request->pid);
 		}
 		else{
 			fprintf(stderr, "Received weired request type %d from node %d\n", new_request->type, new_request->node_id);
@@ -761,6 +839,7 @@ void init_rdma_network(){
 		printf("[  OK  ] RDMA connection with %s established.\n", remote_ip);
 
 		std::thread p = std::thread( server_recv_poll_cq, rctx->recv_cq );
+		std::thread i = std::thread( rdpma_indicator );
 
 		std::mutex iomutex;
 		std::vector<std::thread> threads(nr_cpus);
@@ -785,8 +864,9 @@ void init_rdma_network(){
 		}
 
 		p.join();
-
+		i.join();
 	}
+
 	if(fd)
 		close(fd);
 	if(sock)

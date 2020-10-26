@@ -44,6 +44,8 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 			     struct rdpma_ib_ack_state *state)
 {
 	struct rdpma_ib_recv_work *recv;
+	/* TODO: change it */
+	struct rdpma_node *nn = rdpma_nn_from_num(0);
 
 	pr_info("[%s] wc wr_id 0x%llx status %u (%s) byte_len %u imm_data %u\n",
 		 __func__, 
@@ -60,9 +62,7 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 	 * to get a recv completion _before_ the rdmacm ESTABLISHED
 	 * event is processed.
 	 */
-	if (wc->status == IB_WC_SUCCESS) {
-		pr_info("[%s]: IB_WC_SUCCESS!!\n", __func__);
-	} else {
+	if (wc->status != IB_WC_SUCCESS) {
 		/* We expect errors as the qp is drained during shutdown */
 		pr_err("recv completion had status %u (%s), disconnecting and reconnecting\n",
 				  wc->status, ib_wc_status_msg(wc->status));
@@ -71,45 +71,27 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 	rdpma_post_recv();
 
 	if((int)wc->opcode == IB_WC_RECV_RDMA_WITH_IMM){
-		int node_id, pid, type, tx_state;
+		int node_id, msg_num, type, tx_state;
 		uint32_t num;
-		bit_unmask(ntohl(wc->ex.imm_data), &node_id, &pid, &type, &tx_state, &num);
-		pr_info("[%s]: node_id(%d), pid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, pid, type, tx_state, num);
+		bit_unmask(ntohl(wc->ex.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
+		pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 		if(type == MSG_WRITE_REQUEST_REPLY){
-			struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-			dprintk("[%s]: received MSG_WRITE_REQUEST_REPLY\n", __func__);
-			new_request->type = MSG_WRITE;
-			new_request->pid = pid;
-			new_request->num = num;
-
-			spin_lock(&ctx->lock);
-			list_add_tail(&new_request->entry, &ctx->req_list);
-			wake_up(&ctx->req_wq);
-			spin_unlock(&ctx->lock);
+			rdpma_complete_nsw(nn, NULL, msg_num, 0, 0);
 		}
 		else if(type == MSG_WRITE_REPLY){
 			dprintk("[%s]: received MSG_WRITE_REPLY\n", __func__);
-			unset_bit(pid);
+			rdpma_complete_nsw(nn, NULL, msg_num, 0, 0);
 			/* TODO: need to distinguish committed or aborted? */
 		}
 		else if(type == MSG_READ_REQUEST_REPLY){
 			dprintk("[%s]: received MSG_READ_REQUEST_REPLY\n", __func__);
 			if(tx_state == TX_READ_READY){
-				struct request_struct* new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
-				new_request->type = MSG_READ;
-				new_request->pid = pid;
-				new_request->num = num;
-
-				spin_lock(&ctx->lock);
-				list_add_tail(&new_request->entry, &ctx->req_list);
-				wake_up(&ctx->req_wq);
-				spin_unlock(&ctx->lock);
+				rdpma_complete_nsw(nn, NULL, msg_num, 0, 0);
 			}
 			else{
+				/* TX_READ_ABORT */
 				dprintk("[%s]: remote server aborted read request\n", __func__);
-				ctx->process_state[pid] = PROCESS_STATE_ABORT;
-				/*
-				   unset_bit(pid);*/
+				rdpma_complete_nsw(nn, NULL, msg_num, 0, -1);
 			}
 		}
 		else{

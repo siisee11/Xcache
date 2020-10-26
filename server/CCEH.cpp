@@ -92,92 +92,93 @@ void CCEH::Insert(PMEMobjpool* pop, Key_t& key, Value_t value){
     auto y = (key_hash & kMask) * kNumPairPerCacheLine;
 
 RETRY:
+    while(D_RO(dir)->sema < 0){
+	asm("nop");
+    }
+
     auto dir_depth = D_RO(dir)->depth;
 
-    auto idx = (key_hash >> (8*sizeof(key_hash) - dir_depth));
-    auto slot = idx/D_RO(dir)->locksize;
-
-    /* acquire directory shared lock */
-    if(pthread_rwlock_tryrdlock(&D_RO(dir)->lock[slot]) != 0){
-	goto RETRY;
-    }
-
-    auto x = idx;
+    auto x = (key_hash >> (8*sizeof(key_hash) - dir_depth));
     auto target = D_RO(D_RO(dir)->segment)[x];
 
-    /* double check -- we acquired dir_depth without lock */
-    if(dir_depth != D_RO(dir)->depth){
-	pthread_rwlock_unlock(&D_RO(dir)->lock[slot]);
+    if(target.oid.off == 0){
+	std::this_thread::yield();
+	goto RETRY;
+    }
+    
+    /* acquire segment exclusive lock */
+    if(!D_RW(target)->lock()){
 	std::this_thread::yield();
 	goto RETRY;
     }
 
-    /* acquire segment exclusive lock */
-    if(pthread_rwlock_trywrlock(&D_RW(target)->lock[0]) != 0){
-	pthread_rwlock_unlock(&D_RW(dir)->lock[slot]);
+    auto target_check = (key_hash >> (8*sizeof(key_hash) - dir_depth));
+    if(target.oid.off != D_RO(D_RO(dir)->segment)[target_check].oid.off){
+	D_RW(target)->unlock();
 	std::this_thread::yield();
 	goto RETRY;
     }
-    pthread_rwlock_unlock(&D_RO(dir)->lock[slot]);
 
     auto pattern = (x >> (dir_depth - D_RO(target)->local_depth));
+    if(dir_depth != D_RO(dir)->depth){
+	D_RW(target)->unlock();
+	std::this_thread::yield();
+	goto RETRY;
+    }
+
     for(unsigned i=0; i<kNumPairPerCacheLine * kNumCacheLine; ++i){
 	auto loc = (y + i) % Segment::kNumSlot;
+	auto _key = D_RO(target)->pair[loc].key;
 	/* validity check for entry keys */
-	if(((h(&D_RO(target)->pair[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-D_RO(target)->local_depth)) != pattern) || (D_RO(target)->pair[loc].key == INVALID)){
-	    D_RW(target)->pair[loc].value = value;
-	    mfence();
-	    D_RW(target)->pair[loc].key = key;
-	    pmemobj_persist(pop, (char*)&D_RO(target)->pair[loc], sizeof(Pair));
-	    /* release segment exclusive lock */
-	    pthread_rwlock_unlock(&D_RO(target)->lock[0]);
-	    return;
+	if((((h(&D_RO(target)->pair[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-D_RO(target)->local_depth)) != pattern) || (D_RO(target)->pair[loc].key == INVALID)) && (D_RO(target)->pair[loc].key != SENTINEL)){
+	    if(CAS(&D_RW(target)->pair[loc].key, &_key, SENTINEL)){
+		D_RW(target)->pair[loc].value = value;
+		mfence();
+		D_RW(target)->pair[loc].key = key;
+		pmemobj_persist(pop, (char*)&D_RO(target)->pair[loc], sizeof(Pair));
+		/* release segment exclusive lock */
+		D_RW(target)->unlock();
+		return;
+	    }
 	}
     }
 
     // COLLISION !!
-
     auto target_local_depth = D_RO(target)->local_depth;
     /* need to split segment but release the exclusive lock first to avoid deadlock */
-    pthread_rwlock_unlock(&D_RO(target)->lock[0]);
+    D_RW(target)->unlock();
 
-    /* we do not hold any lock here */
-    while(pthread_rwlock_trywrlock(&D_RO(dir)->lock[0]) != 0){
-	asm("nop");
-    }
-
-    /* need to check whether the directory has been doubled */
-    if(dir_depth != D_RO(dir)->depth){
-	pthread_rwlock_unlock(&D_RO(dir)->lock[0]);
+    if(!D_RW(target)->suspend()){
 	std::this_thread::yield();
 	goto RETRY;
     }
 
-    pthread_rwlock_wrlock(&D_RO(target)->lock[0]);
     /* need to check whether the target segment has been split */
 #ifdef INPLACE
     if(target_local_depth != D_RO(target)->local_depth){
-	pthread_rwlock_unlock(&D_RO(target)->lock[0]);
-	pthread_rwlock_unlock(&D_RO(dir)->lock[0]);
+	D_RW(target)->sema = 0;
 	std::this_thread::yield();
 	goto RETRY;
     }
 #else
     if(target_local_depth != D_RO(D_RO(D_RO(dir)->segment)[x])->local_depth){
-	pthread_rwlock_unlock(&D_RO(target)->lock[0]);
-	pthread_rwlock_unlock(&D_RO(dir)->lock[0]);
+	D_RW(target)->sema = 0;
 	std::this_thread::yield();
 	goto RETRY;
     }
 #endif
 
-    /* need to double the directory */
-    if(target_local_depth == dir_depth){
-	for(int i=1; i<D_RO(dir)->nlocks; ++i){
-	    pthread_rwlock_wrlock(&D_RO(dir)->lock[i]);
-	}
+    TOID(struct Segment)* s = D_RW(target)->Split(pop);
 
-	TOID(struct Segment)* s = D_RW(target)->Split(pop);
+    /* need to double the directory */
+    if(D_RO(target)->local_depth == D_RO(dir)->depth){
+	if(!D_RW(dir)->suspend()){
+	    D_RW(target)->sema = 0;
+	    //POBJ_FREE(&s[1]);
+	    delete s;
+	    std::this_thread::yield();
+	    goto RETRY;
+	}
 
 	auto dir_old = dir;
 	TOID_ARRAY(TOID(struct Segment)) d = D_RO(dir)->segment;
@@ -205,30 +206,24 @@ RETRY:
 	D_RW(s[0])->local_depth++;
 	pmemobj_persist(pop, (char*)&D_RO(s[0])->local_depth, sizeof(size_t));
 	/* release segment exclusive lock */
-	pthread_rwlock_unlock(&D_RO(s[0])->lock[0]);
+	D_RW(s[0])->sema = 0;
 #endif
-
-	/*
-	for(int i=0; i<D_RO(dir_old)->nlocks; ++i){
-	    pthread_rwlock_unlock(&D_RO(dir_old)->lock[i]);
-	}*/
 
 	/* TBD */
 	// POBJ_FREE(&dir_old);
 
     }
     else{ // normal split
-	if(dir_depth == target_local_depth + 1){
-	    /* two directory entries are pointing to the current target segment,
-	       so we need to acquire just one lock here */
+	if(!D_RW(dir)->lock()){
+	    D_RW(target)->sema = 0;
+	    //POBJ_FREE(&s[1]);
+	    delete s;
+	    std::this_thread::yield();
+	    goto RETRY;
+	}
 
-	    if(x/D_RO(dir)->locksize != 0){
-		pthread_rwlock_wrlock(&D_RO(dir)->lock[x/D_RO(dir)->locksize]);
-		pthread_rwlock_unlock(&D_RO(dir)->lock[0]);
-	    }
-
-	    TOID(struct Segment)* s = D_RW(target)->Split(pop);
-
+	x = (key_hash >> (8*sizeof(key_hash) - D_RO(dir)->depth));
+	if(D_RO(dir)->depth == D_RO(target)->local_depth + 1){
 	    if(x%2 == 0){
 		D_RW(D_RW(dir)->segment)[x+1] = s[1];
 #ifdef INPLACE
@@ -249,38 +244,17 @@ RETRY:
 		pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[x-1], sizeof(TOID(struct Segment))*2);
 #endif
 	    }
+	    D_RW(dir)->unlock();
 
 #ifdef INPLACE
 	    D_RW(s[0])->local_depth++;
 	    pmemobj_persist(pop, (char*)&D_RO(s[0])->local_depth, sizeof(size_t));
 	    /* release target segment exclusive lock */
-	    pthread_rwlock_unlock(&D_RO(s[0])->lock[0]);
+	    D_RW(s[0])->sema = 0;
 #endif
-	    /* release directory entry exclusive lock */
-	    pthread_rwlock_unlock(&D_RO(dir)->lock[x/D_RO(dir)->locksize]);
 	}
 	else{
-	    /* more than two directory entries are pointing to the current target
-	       segment, so we need to acquire more locks depending on the stride
-	       value and directory lock granularity */
 	    int stride = pow(2, dir_depth - target_local_depth);
-	    int from = (x - x%stride)/D_RO(dir)->locksize;
-	    int to = (x - x%stride + stride)/D_RO(dir)->locksize + 1;
-
-	    if(from != 0){
-		for(int i=from; i<to; ++i){
-		    pthread_rwlock_wrlock(&D_RO(dir)->lock[i]);
-		}
-		pthread_rwlock_unlock(&D_RO(dir)->lock[0]);
-	    }
-	    else{
-		for(int i=from+1; i<to; ++i){
-		    pthread_rwlock_wrlock(&D_RO(dir)->lock[i]);
-		}
-	    }
-
-	    TOID(struct Segment)* s = D_RW(target)->Split(pop);
-
 	    auto loc = x - (x%stride);
 	    for(int i=0; i<stride/2; ++i){
 		D_RW(D_RW(dir)->segment)[loc+stride/2+i] = s[1];
@@ -293,45 +267,69 @@ RETRY:
 	    }
 	    pmemobj_persist(pop, (char*)&D_RO(D_RO(dir)->segment)[loc], sizeof(TOID(struct Segment))*stride);
 #endif
-
+	    D_RW(dir)->unlock();
 #ifdef INPLACE
 	    D_RW(s[0])->local_depth++;
 	    pmemobj_persist(pop, (char*)&D_RO(s[0])->local_depth, sizeof(size_t));
 	    /* release target segment exclusive lock */
-	    pthread_rwlock_unlock(&D_RO(s[0])->lock[0]);
+	    D_RW(s[0])->sema = 0;
 #endif
-
-	    for(int i=from; i<to; ++i){
-		pthread_rwlock_unlock(&D_RO(dir)->lock[i]);
-	    }
 	}
     }
     std::this_thread::yield();
     goto RETRY;
 }
 
-bool CCEH::RecoverLocks(void){
-    D_RW(dir)->lock = new pthread_rwlock_t[D_RO(dir)->nlocks];
-    for(int i=0; i<D_RO(dir)->nlocks; ++i){
-	if(pthread_rwlock_init(&D_RO(dir)->lock[i], NULL))
-	    return false;
-    }
-
-    for(int i=0; i<D_RO(dir)->capacity;){
-	auto target = D_RO(D_RO(dir)->segment)[i];
-	int stride = pow(2, D_RO(dir)->depth - D_RO(target)->local_depth);
-
-	D_RW(target)->lock = new pthread_rwlock_t[Segment::numLocks];
-	for(int j=0; j<Segment::numLocks; ++j){
-	    if(pthread_rwlock_init(&D_RO(target)->lock[j], NULL))
-		return false;
-	}
-	i += stride;
-    }
-    return true;
+bool CCEH::Delete(Key_t& key){
+    return false;
 }
 
-bool CCEH::Delete(Key_t& key){
+bool CCEH::Update(PMEMobjpool* pop, Key_t& key, Value_t value){
+    auto key_hash = h(&key, sizeof(key));
+    auto y = (key_hash & kMask) * kNumPairPerCacheLine;
+
+RETRY:
+    while(D_RO(dir)->sema < 0){
+	asm("nop");
+    }
+
+    auto dir_depth = D_RO(dir)->depth;
+    auto x = (key_hash >> (8*sizeof(key_hash) - dir_depth));
+    auto target = D_RO(D_RO(dir)->segment)[x];
+
+    if(target.oid.off == 0){
+	std::this_thread::yield();
+	goto RETRY;
+    }
+
+    /* acquire segment shared lock */
+    if(!D_RW(target)->lock()){
+	std::this_thread::yield();
+	goto RETRY;
+    }
+
+    auto target_check = (key_hash >> (8*sizeof(key_hash) - dir_depth));
+    if(target.oid.off != D_RO(D_RO(dir)->segment)[target_check].oid.off){
+	D_RW(target)->unlock();
+	std::this_thread::yield();
+	goto RETRY;
+    }
+    
+    for(int i=0; i<kNumPairPerCacheLine*kNumCacheLine; ++i){
+	auto loc = (y+i) % Segment::kNumSlot;
+	if(D_RO(target)->pair[loc].key == key){
+	    D_RW(target)->pair[loc].value = value;
+	    pmemobj_persist(pop, (char*)&D_RW(target)->pair[loc].value, sizeof(Value_t));
+	    /* key found, release segment shared lock */
+	    D_RW(target)->unlock();
+	    return true;
+	}
+    }
+
+#ifdef INPLACE
+    /* key not found, release segment shared lock */ 
+    D_RW(target)->unlock();
+#endif
     return false;
 }
 
@@ -340,42 +338,36 @@ Value_t CCEH::Get(Key_t& key){
     auto y = (key_hash & kMask) * kNumPairPerCacheLine;
 
 RETRY:
+    while(D_RO(dir)->sema < 0){
+	asm("nop");
+    }
+
     auto dir_depth = D_RO(dir)->depth;
-
-    auto idx = (key_hash >> (8*sizeof(key_hash) - dir_depth));
-    auto slot = idx/D_RO(dir)->locksize;
-
-    /* acquire directory entry shared lock */
-    if(pthread_rwlock_tryrdlock(&D_RO(dir)->lock[slot]) != 0){
-	goto RETRY;
-    }
-
-    /* need double check if directory has been doubled */
-    if(dir_depth != D_RO(dir)->depth){
-	pthread_rwlock_unlock(&D_RO(dir)->lock[slot]);
-	goto RETRY;
-    }
-
-    auto x = idx;
+    auto x = (key_hash >> (8*sizeof(key_hash) - dir_depth));
     auto target = D_RO(D_RO(dir)->segment)[x];
 
 #ifdef INPLACE
     /* acquire segment shared lock */
-    if(pthread_rwlock_tryrdlock(&D_RO(target)->lock[0]) != 0){
-	pthread_rwlock_unlock(&D_RO(dir)->lock[slot]);
+    if(!D_RW(target)->lock()){
+	std::this_thread::yield();
 	goto RETRY;
     }
 #endif
-    /* release directory entry shared lock */
-    pthread_rwlock_unlock(&D_RO(dir)->lock[slot]);
 
+    auto target_check = (key_hash >> (8*sizeof(key_hash) - dir_depth));
+    if(target.oid.off != D_RO(D_RO(dir)->segment)[target_check].oid.off){
+	D_RW(target)->unlock();
+	std::this_thread::yield();
+	goto RETRY;
+    }
+    
     for(int i=0; i<kNumPairPerCacheLine*kNumCacheLine; ++i){
 	auto loc = (y+i) % Segment::kNumSlot;
 	if(D_RO(target)->pair[loc].key == key){
 	    Value_t v = D_RO(target)->pair[loc].value;
 #ifdef INPLACE
 	    /* key found, release segment shared lock */
-	    pthread_rwlock_unlock(&D_RO(target)->lock[0]);
+	    D_RW(target)->unlock();
 #endif
 	    return v;
 	}
@@ -383,11 +375,14 @@ RETRY:
 
 #ifdef INPLACE
     /* key not found, release segment shared lock */ 
-    pthread_rwlock_unlock(&D_RO(target)->lock[0]);
+    D_RW(target)->unlock();
 #endif
     return NONE;
 }
 
+bool CCEH::RecoverLocks(void){
+    return true;
+}
 double CCEH::Utilization(void){
     size_t sum = 0;
     size_t cnt = 0;
@@ -422,6 +417,10 @@ Value_t CCEH::FindAnyway(Key_t& key){
     for(size_t i=0; i<D_RO(dir)->capacity; ++i){
 	for(size_t j=0; j<Segment::kNumSlot; ++j){
 	    if(D_RO(D_RO(D_RO(dir)->segment)[i])->pair[j].key == key){
+		cout << "segment(" << i << ")" << endl;
+		cout << "global_depth(" << D_RO(dir)->depth << "), local_depth(" << D_RO(D_RO(D_RO(dir)->segment)[i])->local_depth << ")" << endl;
+		cout << "pattern: " << bitset<sizeof(int64_t)>(i >> (D_RO(dir)->depth - D_RO(D_RO(D_RO(dir)->segment)[i])->local_depth)) << endl;
+		cout << "Key MSB: " << bitset<sizeof(int64_t)>(h(&key, sizeof(key)) >> (8*sizeof(key) - D_RO(D_RO(D_RO(dir)->segment)[i])->local_depth)) << endl;
 		return D_RO(D_RO(D_RO(dir)->segment)[i])->pair[j].value;
 	    }
 	}

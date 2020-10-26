@@ -1,8 +1,8 @@
 # read_big_file.py
 
 #file_name = "hihi.txt"
-#file_name = "/test/2Gdummyfile"
-file_name = "/test/4Gdummyfile"
+file_name = "/test/2Gdummyfile"
+#file_name = "/test/4Gdummyfile"
 
 fr = open(file_name, 'r')
 fw = open(file_name + ".copy", 'w')

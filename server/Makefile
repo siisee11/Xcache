@@ -33,6 +33,7 @@ tcp:
 
 rdma:
 	sudo rm -rf ./jy/*
+	sudo rm -rf ./hk/*
 	sudo ./server --rdma -t 2123 -p jy/FILE
 
 gdb:
