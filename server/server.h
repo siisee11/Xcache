@@ -55,6 +55,7 @@ struct server_context{
 
 /* rdma.c */
 void init_rdma_server(char *);
+void sigint_callback_handler_rdma(int signum);
 
 /* tcp.cpp */
 int init_tcp_server(char *);

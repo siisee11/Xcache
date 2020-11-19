@@ -113,9 +113,10 @@ int main(int argc, char* argv[]){
 
 	init_lock_free_queue();
 
-	if ( rdma_flag )
+	if ( rdma_flag ) {
+		signal(SIGINT, sigint_callback_handler_rdma);
 		init_rdma_server(path);
-	else {
+	} else {
 		signal(SIGINT, sigint_callback_handler);
 		signal(SIGSEGV, sigsegv_callback_handler);
 		init_tcp_server(path);

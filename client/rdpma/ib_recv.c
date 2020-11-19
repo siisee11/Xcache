@@ -47,10 +47,10 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 	/* TODO: change it */
 	struct rdpma_node *nn = rdpma_nn_from_num(0);
 
-	pr_info("[%s] wc wr_id 0x%llx status %u (%s) byte_len %u imm_data %u\n",
-		 __func__, 
-		 (unsigned long long)wc->wr_id, wc->status,
-		 ib_wc_status_msg(wc->status), wc->byte_len,
+//	pr_info("[%s] wc wr_id 0x%llx status %u (%s) byte_len %u imm_data %u\n", \
+		 __func__,  \
+		 (unsigned long long)wc->wr_id, wc->status, \
+		 ib_wc_status_msg(wc->status), wc->byte_len, \
 		 be32_to_cpu(wc->ex.imm_data));
 
 //	rdpma_ib_stats_inc(s_ib_rx_cq_event);
@@ -74,7 +74,7 @@ void rdpma_ib_recv_cqe_handler(struct rdpma_ib_connection *ic,
 		int node_id, msg_num, type, tx_state;
 		uint32_t num;
 		bit_unmask(ntohl(wc->ex.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
-		pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
+//		pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 		if(type == MSG_WRITE_REQUEST_REPLY){
 			rdpma_complete_nsw(nn, NULL, msg_num, 0, 0);
 		}

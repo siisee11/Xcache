@@ -1,10 +1,11 @@
 CONFIG_MODULE_SIG=n
-obj-m := pmdfc_client.o pmnet.o rdpma_mod.o
+obj-m := pmdfc_client.o pmnet.o rdpma_mod.o rdpma_testing.o
 #obj-m := pmdfc_client.o pmnet.o pmrdma.o
 
 pmdfc_client-objs := pmdfc.o bloom_filter.o 
 pmnet-objs := tcp.o nodemanager.o netdebug.o sys.o masklog.o
 rdpma_mod-objs := rdpma/ib.o rdpma/ib_cm.o rdpma/ib_recv.o rdpma/ib_send.o rdpma/rdpma.o
+rdpma_testing-objs := rdpma/page_test.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD     := $(shell pwd)
@@ -43,6 +44,8 @@ rdma:
 	insmod ./pmnet.ko ip="10.0.0.53" port=5432
 	insmod ./rdpma_mod.ko ip="10.0.0.53" port=2123 enable=1
 	insmod ./pmdfc_client.ko rdma=1
+test:
+	insmod ./rdpma_testing.ko
 unload:
 	rmmod ./pmdfc_client.ko
 	rmmod ./pmnet.ko

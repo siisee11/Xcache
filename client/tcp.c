@@ -939,6 +939,9 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 
 	/* PAGE_EXIST */
 	if (*status != -1) {
+		if (unlikely(nsw.ns_page == NULL))
+			goto out;
+
 		to_va = page_address(page);
 		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
 		kfree(nsw.ns_page);

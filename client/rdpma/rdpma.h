@@ -29,7 +29,7 @@
 
 #define DEPTH 64
 
-#define DEBUG
+#define DDEBUG
 #define RDPMA_DEBUG
 
 #ifdef DEBUG

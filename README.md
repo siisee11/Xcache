@@ -3,13 +3,16 @@ Persistent Memory Distributed File Cache
 
 ## history
 
-6/8/2020 migrated from jeopardy
+6/8/2020 	migrated from jeopardy
+27/10/2020 	Merge RDMA and TCP code
 
 ## description
 
 client: pmdfc client kernel module
-
 server: pmdfc server userspace program
+
+This module implemented under linux kernel 5.3
+Please update kernel over 5.3
 
 ## Reference
 

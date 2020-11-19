@@ -44,7 +44,6 @@ static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
 /* list, lock and condition variables */
 static LIST_HEAD(page_list_head);
 DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
-static atomic_t filled = {.counter = 0};
 static int done = 0;
 
 /* Global page storage */
@@ -315,6 +314,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 		if (status != 0) {
 			/* get page failed */
+			pr_info("MISS!!!!!\n");
 			pmdfc_miss_gets++;
 			goto not_exists;
 		} else {
@@ -550,7 +550,7 @@ static int __init pmdfc_init(void)
 #if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
 	bloom_filter_init();
-	pr_info(" *** bloom filter | init | bloom_filter_init *** \n");
+	pr_info("[  OK  ] bloom filter initialized\n");
 #endif
 
 	ret = pmdfc_cleancache_register_ops();
@@ -583,7 +583,6 @@ static void pmdfc_exit(void)
 #endif
 
 	done = 1;
-	atomic_and(1, &filled);
 	wake_up_interruptible(&pmdfc_worker_wq);
 	/* cancle in_process works and destory workqueue */
 	cancel_work_sync(&pmdfc_remotify_work);

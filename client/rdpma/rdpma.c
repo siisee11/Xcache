@@ -261,9 +261,9 @@ int rdpma_write_message(u32 msg_type, u32 key, u32 index, u32 bit, void *data,
 	}
 
 	/* free nsw.ns_id, after this line msg_num can be reused */
+	rdpma_complete_nsw(nn, &nsw, 0, 0, 0);
 	idr_remove(&nn->nn_status_idr, nsw.ns_id);
 
-	rdpma_complete_nsw(nn, &nsw, 0, 0, 0);
 
 	return ret;
 }
@@ -280,7 +280,8 @@ EXPORT_SYMBOL(rdpma_write_message);
  * @target_node: target node number (server is 0).
  * @status: status return from communication.
  *
- * If generate_single_write_request succeeds, then return 0.
+ * If get succeeds, then return 0.
+ * else return -1.
  */
 int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data, 
 			u32 len, u8 target_node, int *status){
@@ -309,7 +310,7 @@ int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data,
 	offset = nsw.ns_id * METADATA_SIZE * NUM_ENTRY;
 	addr = (uint64_t*)GET_LOCAL_META_REGION(ctx->local_mm, nsw.ns_id);
 	*(addr) = longkey;
-	pr_info("MSG_READ_REQUEST key=%lx, msg_num=%x\n", *addr, nsw.ns_id);
+//	pr_info("MSG_READ_REQUEST key=%lx, msg_num=%x\n", *addr, nsw.ns_id);
 
 	post_meta_request_batch(nsw.ns_id, MSG_READ_REQUEST, num, TX_READ_BEGIN, sizeof(uint64_t), dma_addr, offset, num);
 
@@ -318,8 +319,8 @@ int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data,
 	if (status && !ret)
 		*status = nsw.ns_status;
 
-//	pr_info("woken, returning system status %d, user status %d\n", \
-			ret, nsw.ns_status);
+//	pr_info("woken, returning user status %d, msg_num %x, longkey %llx \n", \
+			nsw.ns_status, nsw.ns_id, longkey);
 
 	/* PAGE_NOT_EXIST */
 	if (*status == -1) {
@@ -338,7 +339,7 @@ int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data,
 	post_read_request_batch(dma_page_addr, *remote_mm, num);
 
 	/* ACK to server */
-	post_meta_request_batch(nsw.ns_id, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
+//	post_meta_request_batch(nsw.ns_id, MSG_READ_REPLY, num, TX_READ_COMMITTED, 0, NULL, offset, num);
 
 	for(i = 0; i < num; i++){
 		ib_dereg_mr_addr(dma_page_addr[i], len);
@@ -346,8 +347,8 @@ int rdpma_read_message(u32 msg_type, u32 key, u32 index, void *data,
 
 out:
 	/* free nsw.ns_id, after this line msg_num can be reused */
-	idr_remove(&nn->nn_status_idr, nsw.ns_id);
 	rdpma_complete_nsw(nn, &nsw, 0, 0, 0);
+	idr_remove(&nn->nn_status_idr, nsw.ns_id);
 
 	return ret;
 }
@@ -784,7 +785,7 @@ int post_read_request_batch(uintptr_t* addr, uint64_t offset, int batch_size){
 		wr[i].remote_addr = (uintptr_t)(offset + i * PAGE_SIZE);
 		wr[i].rkey = ctx->rkey;
 //		dprintk("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
-		pr_info("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
+//		pr_info("[%s]: target addr: %llx\n", __func__, wr[i].remote_addr);
 	}
 
 	ret = ib_post_send(ctx->qp, &wr[0].wr, &bad_wr);
@@ -1401,8 +1402,6 @@ static int __init init_net_module(void){
 
 		for (i = 0; i < ARRAY_SIZE(rdpma_nodes); i++) {
 			struct rdpma_node *nn = rdpma_nn_from_num(i);
-			
-			pr_info("pmnet_init::set pmnet_node\n");
 			atomic_set(&nn->nn_timeout, 0);
 			spin_lock_init(&nn->nn_lock);
 

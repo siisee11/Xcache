@@ -76,7 +76,7 @@ struct pmnm_node *init_pmnm_node(const char *name,
 {
 	struct pmnm_node *node = NULL;
 
-	pr_info("init_pmnm_node: name= %s, ip=%s, port=%d\n", name, ip, port);
+//	pr_info("init_pmnm_node: name= %s, ip=%s, port=%d\n", name, ip, port);
 
 	if (strlen(name) > PMNM_MAX_NAME_LEN)
 		return ERR_PTR(-ENAMETOOLONG);
@@ -98,7 +98,7 @@ struct pmnm_node *init_pmnm_node(const char *name,
 			ntohs(node->nd_ipv4_port)); 
 #endif
 
-	pr_info("pmnm: Registering node %s\n", name);
+//	pr_info("pmnm: Registering node %s\n", name);
 
 	return node;
 }
@@ -119,7 +119,7 @@ void init_pmnm_cluster(void){
 	struct pmnm_node *server_node = NULL;
 	struct pmnm_node *client_node = NULL;
 
-	pr_info("nodemanager: init_pmnm_cluster\n");
+//	pr_info("nodemanager: init_pmnm_cluster\n");
 
 	cluster = kzalloc(sizeof(struct pmnm_cluster), GFP_KERNEL);
 	if (cluster == NULL)

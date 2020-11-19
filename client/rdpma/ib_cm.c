@@ -31,9 +31,11 @@ static void rdpma_ib_cq_comp_handler_recv(struct ib_cq *cq, void *context)
 
 //	rdpmadebug("conn %p cq %p\n", conn, cq);
 
-	tasklet_schedule(&ic->i_recv_tasklet);
+	queue_delayed_work(rdpma_ib_wq, &ic->i_recv_work, 0);
+//	tasklet_schedule(&ic->i_recv_tasklet);
 }
 
+#if 0
 static void poll_scq(struct rdpma_ib_connection *ic, struct ib_cq *cq,
 		     struct ib_wc *wcs)
 {
@@ -72,6 +74,7 @@ static void rdpma_ib_tasklet_fn_send(unsigned long data)
 	ib_req_notify_cq(ic->i_send_cq, IB_CQ_NEXT_COMP);
 	poll_scq(ic, ic->i_send_cq, ic->i_send_wc);
 }
+#endif 
 
 static void poll_rcq(struct rdpma_ib_connection *ic, struct ib_cq *cq,
 		     struct ib_wc *wcs,
@@ -92,19 +95,31 @@ static void poll_rcq(struct rdpma_ib_connection *ic, struct ib_cq *cq,
 	}
 }
 
+static void rdpma_ib_wq_fn_recv(struct work_struct *work)
+{
+	struct rdpma_ib_connection *ic = 
+		container_of(work, struct rdpma_ib_connection, i_recv_work.work);
+
+	struct rdpma_ib_device *rdpma_ibdev = ic->rdpma_ibdev;
+	struct rdpma_ib_ack_state state;
+
+	/* if cq has been already reaped, ignore incoming cq event */
+	if (atomic_read(&ic->i_cq_quiesce))
+		return;
+
+	memset(&state, 0, sizeof(state));
+	poll_rcq(ic, ic->i_recv_cq, ic->i_recv_wc, &state);
+//	ib_req_notify_cq(ic->i_recv_cq, IB_CQ_SOLICITED);
+	ib_req_notify_cq(ic->i_recv_cq, IB_CQ_NEXT_COMP);
+//	poll_rcq(ic, ic->i_recv_cq, ic->i_recv_wc, &state);
+}
+
 static void rdpma_ib_tasklet_fn_recv(unsigned long data)
 {
 	struct rdpma_ib_connection *ic = (struct rdpma_ib_connection *)data;
 	struct rdpma_ib_device *rdpma_ibdev = ic->rdpma_ibdev;
 	struct rdpma_ib_ack_state state;
 
-#if 0
-	if (!rdpma_ibdev)
-		rdpma_conn_drop(conn);
-
-//	rdpma_ib_stats_inc(s_ib_tasklet_call);
-
-#endif
 	/* if cq has been already reaped, ignore incoming cq event */
 	if (atomic_read(&ic->i_cq_quiesce))
 		return;
@@ -397,7 +412,8 @@ int rdpma_ib_conn_alloc(struct client_context *ctx, gfp_t gfp)
 	*/
 
 	INIT_LIST_HEAD(&ic->ib_node);
-	tasklet_init(&ic->i_send_tasklet, rdpma_ib_tasklet_fn_send,
+	INIT_DELAYED_WORK(&ic->i_recv_work, rdpma_ib_wq_fn_recv);
+//	tasklet_init(&ic->i_send_tasklet, rdpma_ib_tasklet_fn_send, \
 		     (unsigned long)ic);
 	tasklet_init(&ic->i_recv_tasklet, rdpma_ib_tasklet_fn_recv,
 		     (unsigned long)ic);

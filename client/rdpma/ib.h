@@ -29,6 +29,8 @@ extern struct ib_device *ibdev;
 extern struct rw_semaphore rdpma_ib_devices_lock;
 extern struct list_head rdpma_ib_devices;
 
+extern struct workqueue_struct *rdpma_ib_wq;
+
 #if 0
 /*
  * IB posts RDS_FRAG_SIZE fragments of pages to the receive queues to
@@ -159,6 +161,8 @@ struct rdpma_ib_connection {
 	/* To control the number of wrs from fastreg */
 	atomic_t		i_fastreg_wrs;
 	atomic_t		i_fastreg_inuse_count;
+
+	struct delayed_work i_recv_work;
 
 	/* interrupt handling */
 	struct tasklet_struct	i_send_tasklet;

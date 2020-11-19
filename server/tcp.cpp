@@ -626,7 +626,6 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 #endif 
 		int targetQ = msg_in->hdr->key % nr_cpus;
 		enqueue(lfqs[targetQ], msg_in);
-		printf("entry in Q=%d\n", count_queue(lfqs[targetQ]));
 		pushed = true;
 		ret = 1;
 	}

@@ -9,8 +9,8 @@
 #include <linux/kthread.h>
 #include "rdpma.h"
 
-#define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 8)
+#define THREAD_NUM 4
+#define TOTAL_CAPACITY (PAGE_SIZE * 256)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 void*** vpages;
@@ -26,6 +26,50 @@ struct thread_data{
 
 struct task_struct** write_threads;
 struct task_struct** read_threads;
+
+int rdpma_single_write_message_test(void* arg){
+	struct thread_data* my_data = (struct thread_data*)arg;
+	int ret, status;
+	uint32_t key, index;
+	char *test_string;
+
+	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	strcpy(test_string, "hi, dicl");
+
+	key = 4000;
+	index = 1;
+
+	ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, 0,
+			test_string, PAGE_SIZE, 0, &status);
+
+	complete(my_data->comp);
+
+	printk("[ PASS ] %s succeeds \n", __func__);
+
+	return 0;
+}
+
+int rdpma_write_message_test(void* arg){
+	struct thread_data* my_data = (struct thread_data*)arg;
+	int tid = my_data->tid;
+	int i, ret;
+	int status;
+	uint32_t index = 0;
+	uint32_t key;
+
+	for(i = 0; i < ITERATIONS; i++){
+		key = (uint32_t)keys[tid][i];
+		pr_info("write_message: %u\n", key);
+		ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, 0,
+			(char *)vpages[tid][i], PAGE_SIZE, 0, &status);
+	}
+
+	complete(my_data->comp);
+
+	printk("[ PASS ] %s succeeds \n", __func__);
+
+	return 0;
+}
 
 int single_write_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
@@ -43,16 +87,54 @@ int single_write_test(void* arg){
 	return 0;
 }
 
-int write_test(void* arg){
+int rdpma_single_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
+	int ret, status;
+	int result = 0;
+	uint32_t key = 4000, index = 1;
+	char test_string[PAGE_SIZE] = "hi, dicl";
+	void *result_page;
+
+	result_page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
+
+	ret = rdpma_read_message(MSG_READ_REQUEST, key, index,
+			result_page, PAGE_SIZE, 0, &status);
+
+	if(memcmp(result_page, test_string, PAGE_SIZE) != 0){
+		printk("failed Searching for key %lx\n", key);
+		result++;
+	}
+
+	if (result == 0)
+		printk("[ PASS ] %s succeeds\n", __func__);
+
+	complete(my_data->comp);
+	return 0;
+}
+
+int rdpma_read_message_test(void* arg){
+	struct thread_data* my_data = (struct thread_data*)arg;
+	int ret, i, status;
+	int result = 0;
+	uint32_t key, index = 0;
 	int tid = my_data->tid;
-	int i, ret;
-	uint64_t key;
+	int nfailed = 0;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
-		ret = generate_single_write_request(vpages[tid][i], key);
+		ret = rdpma_read_message(MSG_READ_REQUEST, key, index,
+				return_page[tid], PAGE_SIZE, 0, &status);
+
+		if(memcmp(return_page[tid], (char *)vpages[tid][i], PAGE_SIZE) != 0){
+			printk("failed Searching for key %lx\n return: %s\nexpect: %s", key, (char *)return_page[tid], (char *)vpages[tid][i]);
+			nfailed++;
+		}
 	}
+
+	if (nfailed == 0)
+		printk("[ PASS ] %s succeeds\n", __func__);
+	else
+		printk("failedSearch: %d\n", nfailed);
 
 	complete(my_data->comp);
 	return 0;
@@ -82,33 +164,6 @@ int single_read_test(void* arg){
 	return 0;
 }
 
-
-int read_test(void* arg){
-	struct thread_data* my_data = (struct thread_data*)arg;
-	int i, ret;
-	int tid = my_data->tid;
-	int nfailed = 0;
-	uint64_t key;
-
-	for(i = 0; i < ITERATIONS; i++){
-		key = keys[tid][i];
-		ret = generate_single_read_request(return_page[tid], key);
-
-		if(memcmp(return_page[tid], vpages[tid][i], PAGE_SIZE) != 0){
-			printk("failed Searching for key %llu\n", key);
-			nfailed++;
-		}
-	}
-
-	if (nfailed == 0)
-		printk("[ PASS ] %s succeeds\n", __func__);
-	else
-		printk("failedSearch: %d\n", nfailed);
-
-	complete(my_data->comp);
-	return 0;
-}
-
 int main(void){
 	int i;
 	ktime_t start, end;
@@ -125,7 +180,8 @@ int main(void){
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
 //		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
-		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
+//		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&rdpma_write_message_test, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
 
@@ -148,7 +204,8 @@ int main(void){
 
 	for(i=0; i<THREAD_NUM; i++){
 //		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
-		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
+//		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&rdpma_read_message_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
@@ -217,7 +274,7 @@ int init_pages(void){
 				printk(KERN_ALERT "vpages[%d][%d] allocation failed\n", i, j);
 				goto ALLOC_ERR;
 			}
-			sprintf(str, "%d", j + 1);
+			sprintf(str, "%d", key++ );
 //			get_random_bytes(&rand, sizeof(u64));
 //			memcpy(vpages[i][j], &rand, sizeof(u64));
 			strcpy(vpages[i][j], str);
@@ -225,6 +282,7 @@ int init_pages(void){
 	}
 
 	keys = (uint64_t**)kmalloc(sizeof(uint64_t*)*THREAD_NUM, GFP_KERNEL);
+	key = 0;
 	if(!keys){
 		printk(KERN_ALERT "keys allocation failed\n");
 		goto ALLOC_ERR;
@@ -232,7 +290,7 @@ int init_pages(void){
 	for(i=0; i<THREAD_NUM; i++){
 		keys[i] = (uint64_t*)kmalloc(sizeof(uint64_t)*ITERATIONS, GFP_KERNEL);
 		for(j=0; j<ITERATIONS; j++){
-			keys[i][j] = ++key;
+			keys[i][j] = key++;
 		}
 	}
 

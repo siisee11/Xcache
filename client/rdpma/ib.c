@@ -45,8 +45,8 @@
 #include "ib.h"
 #include "ib_mr.h"
 
-struct workqueue_struct *rdpma_wq;
-EXPORT_SYMBOL_GPL(rdpma_wq);
+struct workqueue_struct *rdpma_ib_wq;
+EXPORT_SYMBOL_GPL(rdpma_ib_wq);
 
 struct ib_device *ibdev;
 
@@ -70,34 +70,6 @@ MODULE_PARM_DESC(rdpma_ib_retry_count, " Number of hw retries before reporting a
 DECLARE_RWSEM(rdpma_ib_devices_lock);
 struct list_head rdpma_ib_devices;
 
-#if 0
-/* NOTE: if also grabbing ibdev lock, grab this first */
-DEFINE_SPINLOCK(ib_nodev_conns_lock);
-LIST_HEAD(ib_nodev_conns);
-
-
-static void rdpma_ib_nodev_connect(void)
-{
-	struct rdpma_ib_connection *ic;
-
-	spin_lock(&ib_nodev_conns_lock);
-	list_for_each_entry(ic, &ib_nodev_conns, ib_node)
-		rdpma_conn_connect_if_down(ic->conn);
-	spin_unlock(&ib_nodev_conns_lock);
-}
-
-static void rdpma_ib_dev_shutdown(struct rdpma_ib_device *rdpma_ibdev)
-{
-	struct rdpma_ib_connection *ic;
-	unsigned long flags;
-
-	spin_lock_irqsave(&rdpma_ibdev->spinlock, flags);
-	list_for_each_entry(ic, &rdpma_ibdev->conn_list, ib_node)
-		rdpma_conn_path_drop(&ic->conn->c_path[0], true);
-	spin_unlock_irqrestore(&rdpma_ibdev->spinlock, flags);
-}
-#endif
-
 /*
  * rdpma_ib_destroy_mr_pool() blocks on a few things and mrs drop references
  * from interrupt context so we push freing off into a work struct in krdpmad.
@@ -107,12 +79,7 @@ static void rdpma_ib_dev_free(struct work_struct *work)
 	struct rdpma_ib_ipaddr *i_ipaddr, *i_next;
 	struct rdpma_ib_device *rdpma_ibdev = container_of(work,
 					struct rdpma_ib_device, free_work);
-#if 0
-	if (rdpma_ibdev->mr_8k_pool)
-		rdpma_ib_destroy_mr_pool(rdpma_ibdev->mr_8k_pool);
-	if (rdpma_ibdev->mr_1m_pool)
-		rdpma_ib_destroy_mr_pool(rdpma_ibdev->mr_1m_pool);
-#endif
+
 	if (rdpma_ibdev->pd)
 		ib_dealloc_pd(rdpma_ibdev->pd);
 
@@ -130,7 +97,7 @@ void rdpma_ib_dev_put(struct rdpma_ib_device *rdpma_ibdev)
 {
 	BUG_ON(refcount_read(&rdpma_ibdev->refcount) == 0);
 	if (refcount_dec_and_test(&rdpma_ibdev->refcount))
-		queue_work(rdpma_wq, &rdpma_ibdev->free_work);
+		queue_work(rdpma_ib_wq, &rdpma_ibdev->free_work);
 }
 
 static void rdpma_ib_add_one(struct ib_device *device)
@@ -315,7 +282,7 @@ static void rdpma_ib_unregister_client(void)
 {
 	ib_unregister_client(&rdpma_ib_client);
 	/* wait for rdpma_ib_dev_free() to complete */
-	flush_workqueue(rdpma_wq);
+	flush_workqueue(rdpma_ib_wq);
 }
 
 void rdpma_ib_exit(void)
@@ -339,8 +306,8 @@ int rdpma_ib_init(void)
 	
 	pr_info("RDPMA IB module init....\n");
 
-	rdpma_wq = create_singlethread_workqueue("krdsd");
-	if (!rdpma_wq)
+	rdpma_ib_wq = create_singlethread_workqueue("krdsd");
+	if (!rdpma_ib_wq)
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&rdpma_ib_devices);
