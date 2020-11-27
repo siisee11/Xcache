@@ -119,8 +119,6 @@ void init_pmnm_cluster(void){
 	struct pmnm_node *server_node = NULL;
 	struct pmnm_node *client_node = NULL;
 
-//	pr_info("nodemanager: init_pmnm_cluster\n");
-
 	cluster = kzalloc(sizeof(struct pmnm_cluster), GFP_KERNEL);
 	if (cluster == NULL)
 		goto out;

@@ -195,11 +195,8 @@ static void pmnet_update_recv_stats(struct pmnet_sock_container *sc)
 }
 
 #else
-
 # define pmnet_update_send_stats(a, b)
-
 # define pmnet_update_recv_stats(sc)
-
 #endif /* CONFIG_PMDFC_FS_STATS */
 
 

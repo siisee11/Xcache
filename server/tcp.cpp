@@ -419,6 +419,12 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 		/* PMNET_MSG_GETPAGE */
 		case PMNET_MSG_GETPAGE:{
 			getcnt++;
+#ifdef PRETEND_GET_FAIL
+			/* page not exists */
+			memset(&reply, 0, PAGE_SIZE);
+			ret = pmnet_send_message(sc, PMNET_MSG_NOTEXIST, ntohl(hdr->key), ntohl(hdr->index), 
+					ntohl(hdr->msg_num), NULL, 0);
+#else
 
 #if defined(TIME_CHECK)
 			if (msg_in->sampled) {
@@ -483,6 +489,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 //				printf("PAGE NOT EXIST (key=%x, index=%x, msg_num=%x)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
 			}
+#endif /* PRETEND_GET_FAIL */
 			break;
 		}
 
@@ -624,6 +631,7 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 			clock_gettime(CLOCK_MONOTONIC, &msg_in->timer);
 		}
 #endif 
+
 		int targetQ = msg_in->hdr->key % nr_cpus;
 		enqueue(lfqs[targetQ], msg_in);
 		pushed = true;

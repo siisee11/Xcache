@@ -19,9 +19,17 @@
 #include "pmdfc.h"
 #include "rdpma/rdpma.h"
 
+#define PMDFC_PUT 1
 #define PMDFC_GET 1
-//#define PMDFC_DEBUG 1
 #define PMDFC_BLOOM_FILTER 1 
+#define PMDFC_REMOTIFY 1
+#define PMDFC_NETWORK 1
+
+#ifndef PMDFC_PUT
+#undef PMDFC_GET
+#endif
+
+//#define PMDFC_DEBUG 1
 
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
@@ -113,8 +121,10 @@ retry:
 			index = storage->index_storage[bit];
 			if (!rdma) {
 				/* TCP networking */
+#ifdef PMDFC_NETWORK
 				ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
 					storage->page_storage[bit], PAGE_SIZE, 0, &status);
+#endif
 				clear_bit(bit, storage->bitmap);
 			} else {
 				/* RDMA networking */
@@ -139,6 +149,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
+#if defined(PMDFC_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	void *pg_from;
 	int i;
@@ -244,6 +255,8 @@ retry:
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 #endif
 out:
+
+#endif /* PMDFC_PUT */
 	return;
 }
 
