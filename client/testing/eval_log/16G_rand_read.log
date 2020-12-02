@@ -1,0 +1,161 @@
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 40.762 (s)	BW:402.333 (MB/s)
+------ END ------
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 40.662 (s)	BW:403.324 (MB/s)
+------ END ------
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 40.511 (s)	BW:404.826 (MB/s)
+------ END ------
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 41.108 (s)	BW:398.952 (MB/s)
+------ END ------ => Four vanila
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 43.914 (s)	BW:373.457 (MB/s)
+------ END ------ => undef PMDFC_PUT
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 43.996 (s)	BW:372.759 (MB/s)
+------ END ------ => undef PMDFC_PUT
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 44.018 (s)	BW:372.578 (MB/s)
+------ END ------ => undef PMDFC_PUT
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 207.747 (s)	BW:78.942 (MB/s)
+------ END ------ => PMDFC (normal running)
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 337.719 (s)	BW:48.561 (MB/s)
+------ END ------ => PMDFC (normal running = second run)
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 180.146 (s)	BW:91.037 (MB/s)
+------ END ------ ==> PRETEND GET FAIL
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 272.280 (s)	BW:60.232 (MB/s)
+------ END ------ ==> PRETEND GET FAIL (second run)
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 44.646 (s)	BW:367.335 (MB/s)
+------ END ------ ==> undef PMDFC_GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 42.914 (s)	BW:382.160 (MB/s)
+------ END ------ => undef PMDFC_GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 366.156 (s)	BW:44.790 (MB/s)
+------ END ------ => undef PMDFC_BF
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 340.718 (s)	BW:48.134 (MB/s)
+------ END ------ => undef PMDFC_BF
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 52.570 (s)	BW:311.965 (MB/s)
+------ END ------ => undef PMDFC_NETWORK
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 51.799 (s)	BW:316.608 (MB/s)
+------ END ------ => undef PMDFC_NETWORK
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 44.129 (s)	BW:371.634 (MB/s)
+------ END ------ => NO-ENQUEUE
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution tme: 45.281 (s)	BW:362.179 (MB/s)
+------ END ------ => NO-ENQUEUE
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 45.247 (s)	BW:362.456 (MB/s)
+------ END ------ => NO-GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 44.820 (s)	BW:365.909 (MB/s)
+------ END ------ => NO-GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 290.574 (s)	BW:56.440 (MB/s)
+------ END ------ -=> USELESS-GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 291.421 (s)	BW:56.276 (MB/s)
+------ END ------ -=> USELESS-GET

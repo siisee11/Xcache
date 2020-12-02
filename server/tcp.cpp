@@ -632,10 +632,15 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		}
 #endif 
 
+#ifdef NOENQUEUE
+		pushed = true;
+		ret = 1;
+#else
 		int targetQ = msg_in->hdr->key % nr_cpus;
 		enqueue(lfqs[targetQ], msg_in);
 		pushed = true;
 		ret = 1;
+#endif
 	}
 
 out:

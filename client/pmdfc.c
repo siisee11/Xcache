@@ -19,15 +19,11 @@
 #include "pmdfc.h"
 #include "rdpma/rdpma.h"
 
-#define PMDFC_PUT 1
+//#define PMDFC_PUT 1
 #define PMDFC_GET 1
-#define PMDFC_BLOOM_FILTER 1 
+//#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
 #define PMDFC_NETWORK 1
-
-#ifndef PMDFC_PUT
-#undef PMDFC_GET
-#endif
 
 //#define PMDFC_DEBUG 1
 
@@ -149,7 +145,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
-#if defined(PMDFC_GET)
+#if defined(PMDFC_PUT)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	void *pg_from;
 	int i;
@@ -308,6 +304,8 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif
 
 	if (!rdma) {
+
+#ifdef PMDFC_NETWORK
 		/* TCP networking */
 		pmnet_send_recv_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, 
 				page, PAGE_SIZE, 0, &status);
@@ -319,6 +317,9 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		} else {
 			pmdfc_hit_gets++;
 		}
+#else
+		goto not_exists;
+#endif
 	} 
 	else {
 		/* RDMA networking */

@@ -1,0 +1,127 @@
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.428 (s)	BW:486.479 (MB/s)
+------ END ------ => undef PMDFC_PUT
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.847 (s)	BW:463.450 (MB/s)
+------ END ------ => vanila
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 10.206 (s)	BW:401.708 (MB/s)
+------ END ------ => undef PMDFC_NETWORK
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.840 (s)	BW:463.816 (MB/s)
+------ END ------ => vanila
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 28.869 (s)	BW:142.022 (MB/s)
+------ END ------ => Server Immediate return (PRETEND_GET_FAIL)
+
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 9.496 (s)	BW:431.744 (MB/s)
+------ END ------ => undef PMDFC_GET, Server => NOENQUEUE  234732 KB/sec
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.805 (s)	BW:465.637 (MB/s)
+------ END ------ => vanila
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.704 (s)	BW:471.035 (MB/s)
+------ END ------ => undef PMDFC_GET, Server => NOENQUEUE  250000 KB/sec
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 9.428 (s)	BW:434.892 (MB/s)
+------ END ------ => undef PMDFC_GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.826 (s)	BW:464.511 (MB/s)
+------ END ------ => undef PMDFC_GET   200000 KB/sec
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 51.671 (s)	BW:79.348 (MB/s)
+------ END ------
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 63.913 (s)	BW:64.150 (MB/s)
+------ END ------
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 9.860 (s)	BW:415.804 (MB/s)
+------ END ------ => undef PMDFC_PUT (Bloomfilter filter get so there is no get request to server)
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.807 (s)	BW:465.541 (MB/s)
+------ END ------ => undef PMDFC_PUT (Bloomfilter filter get so there is no get request to server)
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.739 (s)	BW:469.152 (MB/s)
+------ END ------ => undef PMDFC_PUT (Bloomfilter filter get so there is no get request to server)
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.344 (s)	BW:491.373 (MB/s)
+------ END ------ => Vanila
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.208 (s)	BW:499.504 (MB/s)
+------ END ------ => Vanila
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 8.347 (s)	BW:491.222 (MB/s)
+------ END ------ => Vanila
