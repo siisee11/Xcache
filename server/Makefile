@@ -16,16 +16,10 @@ EXECUTABLE=server
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./lib/pmdk
 export LD_LIBRARY_PATH
 
-#all: $(SOURCES) $(EXECUTABLE)
 all: $(EXECUTABLE)
-#$(EXECUTABLE): $(OBJECTS) 
-#	    $(CC) $(LDFLAGS) $(OBJECTS) -o $@ $(LIBS)
 
 $(EXECUTABLE):
 	$(CC) $(CFLAGS) -g server.cpp tcp.cpp queue.cpp rdma.cpp CCEH.cpp -o server $(LIBS) -DINPLACE
-
-#CCEH.o:
-#	$(CC) $(CFLAGS) -o CCEH.o CCEH.cpp -DINPLACE $(LIBS)
 
 tcp:
 	sudo rm -rf ./jy/*

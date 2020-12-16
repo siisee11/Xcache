@@ -714,13 +714,16 @@ void init_network_server()
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY); 
 	servaddr.sin_port = htons(PORT); 
 
+	int optval = 1;
+	setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
+
 	// Binding newly created socket to given IP and verification 
 	if ((bind(sockfd, (SA*)&servaddr, sizeof(servaddr))) != 0) { 
 		printf("[ FAIL ] socket bind failed...\n"); 
 		exit(0); 
 	} 
 	else
-		printf("[  OK  ]Socket successfully binded..\n"); 
+		printf("[  OK  ] Socket successfully binded..\n"); 
 
 	// Now server is ready to listen and verification 
 	if ((listen(sockfd, 5)) != 0) { 
