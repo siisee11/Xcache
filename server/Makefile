@@ -4,10 +4,10 @@
 CC=g++
 #LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -lboost_thread -lboost_system
 LDFLAGS=
-LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -libverbs
+LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -libverbs -lnuma
 #CFLAGS=-O3 -std=c++11 -w 
-CFLAGS=-std=c++11 -w 
-INCLUDES=-I./ 
+CFLAGS := -std=c++17 -g
+INCLUDES=-I./ -I./src/
 
 SOURCES=server.cpp tcp.cpp rdma.cpp CCEH.cpp
 OBJECTS=server.o 
@@ -16,14 +16,25 @@ EXECUTABLE=server
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./lib/pmdk
 export LD_LIBRARY_PATH
 
-all: $(EXECUTABLE)
+all: CCEH $(EXECUTABLE)
 
 $(EXECUTABLE):
-	$(CC) $(CFLAGS) -g server.cpp tcp.cpp queue.cpp rdma.cpp CCEH.cpp -o server $(LIBS) -DINPLACE
+	$(CC) $(CFLAGS) -o bin/tcp_server src/tcp_server.cpp src/lfcq.o src/CCEH_lrfu.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS)
+
+CCEH: 
+	$(CXX) $(CFLAGS) -c -o src/CCEH_balanced.o src/CCEH_PM_hybrid.cpp $(INCLUDES) $(LIBS) -DBALANCED
+	$(CXX) $(CFLAGS) -c -o src/CCEH_random.o src/CCEH_PM_hybrid.cpp $(INCLUDES) $(LIBS) -DRANDOM
+	$(CXX) $(CFLAGS) -c -o src/CCEH_lrfu.o src/CCEH_PM_hybrid.cpp $(INCLUDES) $(LIBS) -DLRFU
+	$(CXX) $(CFLAGS) -c -o src/CCEH_skewed.o src/CCEH_PM_hybrid.cpp $(INCLUDES) $(LIBS)
+	$(CXX) $(CFLAGS) -c -g -o src/NuMA_KV_PM.o src/NuMA_KV_PM.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
+	$(CXX) $(CFLAGS) -c -g -o src/NuMA_KV_PM_NUMA.o src/NuMA_KV_PM.cpp $(INCLUDES) $(LIBS) -DNUMAQ 
+	$(CXX) $(CFLAGS) -c -g -o src/NuMA_KV_PM_NUMA_LFCQ.o src/NuMA_KV_PM.cpp $(INCLUDES) $(LIBS) -DNUMAQ -DLFCQ -DKV_DEBUG
+	$(CXX) $(CFLAGS) -c -g -o src/lfcq.o src/circular_queue.cpp $(LIBS)
 
 tcp:
-	sudo rm -rf ./jy/*
-	sudo ./server -t 5432 -p jy/FILE
+	sudo rm -rf /mnt/pmem0/jy/*
+	sudo rm -rf /mnt/pmem1/jy/*
+	sudo bin/tcp_server -t 5432 --pm_path /jy/1 --dataset /home/siisee11/git/NuMA/input_rand.txt --nr_data 10000000 -W 20 -K 26-27,36-37 -P 28-29,38-39 --tablesize 32768 --verbose -h
 
 rdma:
 	sudo rm -rf ./jy/*
@@ -31,11 +42,13 @@ rdma:
 	sudo ./server --rdma -t 2123 -p jy/FILE
 
 gdb:
-	sudo rm -rf ./jy/*
-	sudo gdb ./server
+	sudo rm -rf /mnt/pmem0/jy/*
+	sudo rm -rf /mnt/pmem1/jy/*
+	sudo gdb bin/tcp_server
 
 free:
-	sudo rm -rf ./jy/*
+	sudo rm -rf /mnt/pmem0/jy/*
+	sudo rm -rf /mnt/pmem1/jy/*
 
 clean: 
 	rm -rf src/*.o *.o server

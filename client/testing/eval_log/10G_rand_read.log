@@ -1,0 +1,7 @@
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 5.318 (s)	BW:1925.362 (MB/s)
+------ END ------

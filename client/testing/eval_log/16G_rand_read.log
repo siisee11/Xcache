@@ -159,3 +159,10 @@ RAND_READ:	Execution time: 290.574 (s)	BW:56.440 (MB/s)
 
 RAND_READ:	Execution time: 291.421 (s)	BW:56.276 (MB/s)
 ------ END ------ -=> USELESS-GET
+------ START ------
+	Random read: 1
+
+	FINISH..
+
+RAND_READ:	Execution time: 365.132 (s)	BW:44.915 (MB/s)
+------ END ------

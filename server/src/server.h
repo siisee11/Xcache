@@ -12,8 +12,8 @@
 #include <stddef.h>
 #include <libpmemobj.h>
 
-#include "CCEH.h"
-#include "queue.h"
+#include "NuMA_KV_PM.h"
+#include "circular_queue.h"
 
 #define LOG_SIZE (42949672960) // 40GB
 #define INDEX_SIZE (10737418240) // 10GB
@@ -27,19 +27,11 @@
 #define NR_PUT_TIME_CHECK SAMPLE_RATE
 #define NR_GET_TIME_CHECK SAMPLE_RATE
 
-#define DEBUG
-#ifdef DEBUG
-#define dprintf(...) do{ fprintf(stderr, __VA_ARGS__); fflush(stdout);} while(0)
-#else
-#define dprintf(...)
-#endif
 
 extern int tcp_port;
 extern int ib_port;
 
 /* lock free queues */
-extern queue_t **lfqs;
-extern unsigned int nr_cpus;
 
 struct server_context{
     int node_id;
@@ -49,8 +41,8 @@ struct server_context{
     int num_node;
 
     PMEMobjpool* log_pop;
-    PMEMobjpool* index_pop;
-    TOID(CCEH) hashtable;
+	PMEMobjpool* pop[NUM_NUMA];
+    NUMA_KV* kv;
 };
 
 /* server.cpp */

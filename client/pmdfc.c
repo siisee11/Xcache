@@ -19,13 +19,13 @@
 #include "pmdfc.h"
 #include "rdpma/rdpma.h"
 
-//#define PMDFC_PUT 1
+#define PMDFC_PUT 1
 #define PMDFC_GET 1
 //#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
 #define PMDFC_NETWORK 1
 
-//#define PMDFC_DEBUG 1
+#define PMDFC_DEBUG 1
 
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
