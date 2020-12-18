@@ -40,7 +40,7 @@ struct server_context{
     int cur_node;
     int num_node;
 
-    PMEMobjpool* log_pop;
+    PMEMobjpool* log_pop[NUM_NUMA];
 	PMEMobjpool* pop[NUM_NUMA];
     NUMA_KV* kv;
 };

@@ -8,7 +8,8 @@
  * This code is only helpful to know how to generate random characters...
  */
 size_t BUF_SIZE = 1 * 1024; // (1 << 10);, BUF_SIZE - 1 for newline 
-size_t LINE_SIZE = (1 << 24);
+size_t GIGA_LINE_SIZE = (1 << 20);
+size_t LINE_SIZE = GIGA_LINE_SIZE * 11;
 
 char* gen_sentence() {
     srand((unsigned int)time(NULL));

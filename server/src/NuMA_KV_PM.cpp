@@ -141,7 +141,8 @@ NUMA_KV::NUMA_KV(PMEMobjpool **pop, size_t initCap, size_t nThreads, size_t nPol
 			wr = NULL;
 
 			if (type == MSG_GET) {
-				if(value != reinterpret_cast<Value_t>(key)){
+				if ( value == NONE ) {
+//				if(value != reinterpret_cast<Value_t>(key)){
 					failedSearch++;
 				}
 			}
@@ -259,6 +260,11 @@ void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 #else /* NUMAQ */
 
 #ifdef KV_DEBUG
+	auto node = cceh->GetNodeID(key);
+
+	if( thisNode != node )
+		miss_cnt[thisNode]++;
+
 	struct timespec i_start;
 	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
@@ -308,6 +314,11 @@ void NUMA_KV::Get(Key_t& key, int unique_id, int thisNode) {
 #endif /* REQUESTPOOL */
 
 #ifdef KV_DEBUG
+	auto node = cceh->GetNodeID(key);
+
+	if( thisNode != node )
+		miss_cnt[thisNode]++;
+
 	struct timespec g_start;
 	clock_gettime(CLOCK_MONOTONIC, &g_start);
 #endif
@@ -318,7 +329,8 @@ void NUMA_KV::Get(Key_t& key, int unique_id, int thisNode) {
 	getTime += g_end.tv_nsec - g_start.tv_nsec + (g_end.tv_sec - g_start.tv_sec)*1000000000;
 #endif
 
-	if(ret != reinterpret_cast<Value_t>(key)){
+//	if(ret != reinterpret_cast<Value_t>(key)){
+	if ( ret == NONE ) {
 		failedSearch++;
 	}
 	wr->key = key;
@@ -366,7 +378,7 @@ size_t NUMA_KV::Capacity(void) {
 }
 
 int NUMA_KV::GetFailedSearch(void) {
-	return failedSearch;
+	return failedSearch.load();
 }
 
 void NUMA_KV::PrintStats(void) {
@@ -377,9 +389,10 @@ void NUMA_KV::PrintStats(void) {
 	auto segs = cceh->SegmentLoads();
 	auto metrics = cceh->Metrics();
 
+	printf("Failed Search = %d\n", failedSearch.load());
 	printf("Util =%.3f\t Capa =%lu\n", util, cap);
-	printf("Freqeuncy on Node \t0= %d, 1= %d\n", freqs[0], freqs[1]);
-	printf("Migration from Node \t0= %d, 1= %d\n", miss_cnt[0].load(), miss_cnt[1].load());
+	printf("Freqeuncy on Node \t0= %d, 1= %d   ( counted on only Insert )\n", freqs[0], freqs[1]);
+	printf("Remote request on Node \t0= %d, 1= %d\n", miss_cnt[0].load(), miss_cnt[1].load());
 	printf("Segments in Node \t0= %zu, 1= %zu\n", segs[0], segs[1]);
 	printf("LRFU Value on Node \t0= %f, 1=%f\n", metrics[0], metrics[1]);
 	printf("QueueTime = \t%.3f (usec/req)\n", perNodeQueueTime/1000.0/numData/2);

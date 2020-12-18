@@ -21,7 +21,7 @@
 
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
-//#define PMDFC_BLOOM_FILTER 1 
+#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
 #define PMDFC_NETWORK 1
 

@@ -3,5 +3,5 @@
 
 	FINISH..
 
-RAND_READ:	Execution time: 5.318 (s)	BW:1925.362 (MB/s)
+RAND_READ:	Execution time: 4.854 (s)	BW:2109.800 (MB/s)
 ------ END ------

@@ -90,7 +90,6 @@ struct bitmask *pollcpubuf;
 /* Global variables */
 struct server_context* ctx = NULL;
 queue_t **lfqs;
-
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
@@ -102,6 +101,8 @@ int sample_get_q_cnt = 0;
 int sample_put_cnt = 0;
 int sample_get_cnt = 0;
 
+std::atomic<int> process_cnt[40];
+
 /* performance timer */
 uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0;
 uint64_t pmnet_rx_elapsed=0; 
@@ -110,7 +111,7 @@ uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
 
 static void pmnet_rx_until_empty(struct pmnet_sock_container *sc);
 static int pmnet_process_message(struct pmnet_sock_container *sc, 
-		struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in);
+		struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in, int thisNode);
 
 static void dprintf( const char* format, ... ) {
 	if (verbose_flag) {
@@ -133,35 +134,20 @@ static void usage(){
 static void print_stats() {
 	printf("\n--------------------REPORT---------------------\n");
 	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
-	printf("Approximate total(Multipled by sample rate)\n PUT %lu (us), GET : %lu (us) \n",
-			pmput_elapsed/1000*SAMPLE_RATE,
-			(pmget_exist_elapsed + pmget_notexist_elapsed)/1000*SAMPLE_RATE);
-
-	printf("Approximate RX & Queuing delay (Multipled by sample rate)\n");
-	printf("RX : %lu (us), PUT_Q : %lu (us), GET_Q : %lu (us)\n",
-			pmnet_rx_elapsed/1000*SAMPLE_RATE,
-			pmput_queue_elapsed/1000*SAMPLE_RATE,
-			pmget_queue_elapsed/1000*SAMPLE_RATE);
-
 	printf("# of puts : %d , # of gets : %d \n",
 			putcnt, getcnt);
-	printf("[SAMPLE] # of puts : %d , # of gets : %d \n",
-			sample_put_cnt, sample_get_cnt);
-	printf("[SAMPLE] # of put_Q : %d , # of get_Q : %d \n",
-			sample_put_q_cnt, sample_get_q_cnt);
+	printf("# of requested processed on cpu\n[ ");
+	for ( int i = 0 ; i < nr_cpus ; i++ ) {
+		printf("%d ", process_cnt[i].load());
+	}
+	printf(" ]\n");
 
-	if (putcnt == 0)
-		putcnt++;
-	if (getcnt == 0)
-		getcnt++;
-	if (sample_get_cnt == 0)
-		sample_get_cnt++;
-	if (sample_put_cnt == 0)
-		sample_put_cnt++;
-	if (sample_get_q_cnt == 0)
-		sample_get_q_cnt++;
-	if (sample_put_q_cnt == 0)
-		sample_put_q_cnt++;
+	if (putcnt == 0) putcnt++;
+	if (getcnt == 0) getcnt++;
+	if (sample_get_cnt == 0) sample_get_cnt++;
+	if (sample_put_cnt == 0) sample_put_cnt++;
+	if (sample_get_q_cnt == 0) sample_get_q_cnt++;
+	if (sample_put_q_cnt == 0) sample_put_q_cnt++;
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
@@ -172,6 +158,8 @@ static void print_stats() {
 			pmput_queue_elapsed/1000/sample_put_q_cnt,
 			pmget_queue_elapsed/1000/sample_get_q_cnt);
 	printf("--------------------FIN------------------------\n");
+
+	ctx->kv->PrintStats();
 }
 
 
@@ -198,8 +186,6 @@ static struct pmnet_sock_container *sc_alloc()
 	sc = (pmnet_sock_container *)calloc(1, sizeof(*sc));
 	if (sc == NULL)
 		goto out;
-
-	printf("sc alloced\n");
 
 	ret = sc;
 	sc = NULL;
@@ -245,13 +231,14 @@ void consumer(struct pmnet_sock_container *sc) {
 	int ret;
 	struct pmnet_msg_in *msg_in;
 
-	printf("[ INFO ] CONSUMER Running on CPU %d... \n", cpu);
+	printf("[ INFO ] CONSUMER Running on CPU %d|%d ... \n", cpu, thisNode);
 
 	/* consume request from queue */
 	/* TODO: Batching */
 	while (!done) {
-		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[cpu]);
-		ret = pmnet_process_message(sc, msg_in->hdr, msg_in);
+		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[thisNode]);
+		process_cnt[cpu]++;
+		ret = pmnet_process_message(sc, msg_in->hdr, msg_in, thisNode);
 		free(msg_in);
 	}
 
@@ -394,7 +381,7 @@ static void pmnet_sendpage(struct pmnet_sock_container *sc,
 /* this returns -errno if the header was unknown or too large, etc.
  * after this is called the buffer us reused for the next message */
 static int pmnet_process_message(struct pmnet_sock_container *sc, 
-			struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in)
+			struct pmnet_msg *hdr, struct pmnet_msg_in *msg_in, int thisNode)
 {
 	int ret = 0;
 	int status;
@@ -461,15 +448,15 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			 */
 			/* TODO: batch insertion */
 			TOID(char) temp;
-			POBJ_ALLOC(ctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
-			uint64_t temp_addr = (uint64_t)ctx->log_pop + temp.oid.off;
+			POBJ_ALLOC(ctx->log_pop[thisNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
+			uint64_t temp_addr = (uint64_t)ctx->log_pop[thisNode] + temp.oid.off;
 			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
-			pmemobj_persist(ctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);	
+			pmemobj_persist(ctx->log_pop[thisNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);	 /* TODO: this cause slowdown */
 
 			/*
 			 * 2. Save that address with key
 			 */
-			ctx->kv->Insert((Key_t&)key, (Value_t)temp_addr, putcnt, 0);
+			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
 
 #if defined(TIME_CHECK)
 			if (checkit) {
@@ -502,7 +489,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 #endif
 
 			/* alloc new page pointer to send */
-			saved_page = calloc(1, PAGE_SIZE);
+			saved_page = malloc(PAGE_SIZE);
 
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
@@ -522,8 +509,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			 */
 			bool abort = false;
 			/* TODO: Get return nothing */
-//			void* addr = ctx->kv->Get((Key_t&)key, getcnt, 0);
-			ctx->kv->Get((Key_t&)key, getcnt, 0);
+//			void* addr = ctx->kv->Get(key, getcnt, 0);
+			ctx->kv->Get(key, 0, thisNode);
 
 			void * addr = NULL;
 			if(!addr){
@@ -707,7 +694,7 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		pushed = true;
 		ret = 1;
 #else
-		int targetQ = msg_in->hdr->key % (nr_cpus/2);
+		int targetQ = msg_in->hdr->key % (NUM_NUMA);
 		enqueue(lfqs[targetQ], msg_in);
 		pushed = true;
 		ret = 1;
@@ -883,22 +870,29 @@ void init_network_server()
 static struct server_context* server_init_ctx(char *ipath){
 	int flags;
 	void* ptr;
-	char log_path[32] = "./jy/log";
+	char base_path[32] = "/mnt/pmem0";
+	char log_path[32] = "/jy/log";
+
 	ctx = (struct server_context*)malloc(sizeof(struct server_context));
 	ctx->node_id = 0;
 
-	if(access(log_path, 0) != 0){
-		ctx->log_pop = pmemobj_create(log_path, "log", LOG_SIZE, 0666);
-		if(!ctx->log_pop){
-			perror("pmemobj_create");
-			exit(0);
+	for(int i=0; i<NUM_NUMA; i++){
+		snprintf(&base_path[9], sizeof(int), "%d", i);
+		strncpy(&base_path[10], log_path, strlen(log_path));
+		dprintf("[ INFO ] File used for log: %s\n", base_path);
+		if(access(base_path, 0) != 0){
+			ctx->log_pop[i] = pmemobj_create(base_path, "log", LOG_SIZE, 0666);
+			if(!ctx->log_pop[i]){
+				perror("pmemobj_create");
+				exit(1);
+			}
 		}
-	}
-	else{
-		ctx->log_pop = pmemobj_open(log_path, "log");
-		if(!ctx->log_pop){
-			perror("pmemobj_open");
-			exit(0);
+		else{
+			ctx->log_pop[i] = pmemobj_open(base_path, "log");
+			if(!ctx->log_pop[i]){
+				perror("pmemobj_open");
+				exit(1);
+			}
 		}
 	}
 	printf("[  OK  ] log initialized\n");
@@ -909,16 +903,16 @@ static struct server_context* server_init_ctx(char *ipath){
 	for(int i=0; i<NUM_NUMA; i++){
 		snprintf(&path[9], sizeof(int), "%d", i);
 		strncpy(&path[10], pm_path, strlen(pm_path));
-		dprintf("[ INFO ] File used: %s\n", path);
+		dprintf("[ INFO ] File used for index: %s\n", path);
 		if(access(path, 0) != 0){
-			ctx->pop[i] = pmemobj_create(path, "CCEH", INDEX_SIZE, 0666);
+			ctx->pop[i] = pmemobj_create(path, "index", INDEX_SIZE, 0666);
 			if(!ctx->pop[i]){
 				perror("pmemobj_create");
 				exit(1);
 			}
 		}
 		else{
-			ctx->pop[i] = pmemobj_open(path, "CCEH");
+			ctx->pop[i] = pmemobj_open(path, "index");
 			if(!ctx->pop[i]){
 				perror("pmemobj_open");
 				exit(1);
@@ -1094,9 +1088,15 @@ int main(int argc, char* argv[]){
 	printCpuBuf(nr_cpus, kvcpubuf, "kv");
 	printCpuBuf(nr_cpus, pollcpubuf, "cqpoll");
 
-	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
-	for (int i = 0; i < nr_cpus; i++) {
+//	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
+	lfqs = (queue_t**)malloc(NUM_NUMA * sizeof(queue_t*));
+//	for (int i = 0; i < nr_cpus; i++) {
+	for (int i = 0; i < NUM_NUMA; i++) {
 		lfqs[i] = create_queue("lfqs");
+	}
+
+	for (int i = 0; i < nr_cpus; i++) {
+		process_cnt[i] = 0;
 	}
 
 	signal(SIGINT, sigint_callback_handler);
