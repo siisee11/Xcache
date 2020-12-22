@@ -17,7 +17,7 @@
 #include "common.h"
 
 #include "src/IHash.h"
-#include "src/kv_store.h"
+#include "src/Ikvstore.h"
 #include "src/CCEH_PM_hybrid.h"
 #include "src/atomic.h"
 #include "circular_queue.h"
@@ -108,6 +108,8 @@ class NUMA_KV : public KVStore {
 		void Insert(Key_t&, Value_t, int, int);
 		bool Delete(Key_t&);
 		void Get(Key_t&, int, int);
+		Value_t Get(Key_t&, int);
+		int GetNodeID(Key_t&);
 		Value_t FindAnyway(Key_t&);
 		bool Recovery(void);
 		bool WaitComplete(void);
@@ -121,7 +123,7 @@ class NUMA_KV : public KVStore {
 
 		void* operator new(size_t size) {
 			void *ret;
-			posix_memalign(&ret, 64, size);
+			if (posix_memalign(&ret, 64, size) ) ret=NULL;
 			return ret;
 		}
 

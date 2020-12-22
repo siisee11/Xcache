@@ -280,6 +280,26 @@ void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 	return;
 }
 
+Value_t NUMA_KV::Get(Key_t& key, int thisNode) {
+	auto node = cceh->GetNodeID(key);
+
+	if( thisNode != node )
+		miss_cnt[thisNode]++;
+
+#ifdef KV_DEBUG
+	struct timespec g_start;
+	clock_gettime(CLOCK_MONOTONIC, &g_start);
+#endif
+	auto ret = cceh->Get(key);
+#ifdef KV_DEBUG
+	struct timespec g_end;
+	clock_gettime(CLOCK_MONOTONIC, &g_end);
+	getTime += g_end.tv_nsec - g_start.tv_nsec + (g_end.tv_sec - g_start.tv_sec)*1000000000;
+#endif
+
+	return ret; 
+}
+
 void NUMA_KV::Get(Key_t& key, int unique_id, int thisNode) {
 #ifdef NUMAQ
 	auto node = cceh->GetNodeID(key);
@@ -338,6 +358,11 @@ void NUMA_KV::Get(Key_t& key, int unique_id, int thisNode) {
 #endif /* NUMAQ */
 	
 	return; 
+}
+
+ 
+int NUMA_KV::GetNodeID(Key_t& key) {
+	return cceh->GetNodeID(key);
 }
 
 Value_t NUMA_KV::FindAnyway(Key_t& key) {

@@ -7,7 +7,7 @@
 #include <linux/mm_types.h>
 #include <linux/random.h>
 #include <linux/kthread.h>
-#include "rdpma.h"
+#include "tcp.h"
 
 #define THREAD_NUM 4
 #define TOTAL_CAPACITY (PAGE_SIZE * 256)
@@ -27,7 +27,7 @@ struct thread_data{
 struct task_struct** write_threads;
 struct task_struct** read_threads;
 
-int rdpma_single_write_message_test(void* arg){
+int single_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
 	uint32_t key, index;
@@ -39,8 +39,8 @@ int rdpma_single_write_message_test(void* arg){
 	key = 4000;
 	index = 1;
 
-	ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, 0,
-			test_string, PAGE_SIZE, 0, &status);
+	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
+		test_string, PAGE_SIZE, 0, &status);
 
 	complete(my_data->comp);
 
@@ -49,7 +49,7 @@ int rdpma_single_write_message_test(void* arg){
 	return 0;
 }
 
-int rdpma_write_message_test(void* arg){
+int write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int tid = my_data->tid;
 	int i, ret;
@@ -60,7 +60,7 @@ int rdpma_write_message_test(void* arg){
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
 		pr_info("write_message: %u\n", key);
-		ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, 0,
+		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
 			(char *)vpages[tid][i], PAGE_SIZE, 0, &status);
 	}
 
@@ -71,23 +71,8 @@ int rdpma_write_message_test(void* arg){
 	return 0;
 }
 
-int single_write_test(void* arg){
-	struct thread_data* my_data = (struct thread_data*)arg;
-	int ret;
-	uint64_t key;
-	char test_string[PAGE_SIZE] = "hi, dicl";
 
-	key = 4000;
-	ret = generate_single_write_request(test_string, key);
-
-	complete(my_data->comp);
-
-	printk("[ PASS ] %s succeeds \n", __func__);
-
-	return 0;
-}
-
-int rdpma_single_read_message_test(void* arg){
+int single_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
 	int result = 0;
@@ -97,11 +82,11 @@ int rdpma_single_read_message_test(void* arg){
 
 	result_page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
 
-	ret = rdpma_read_message(MSG_READ_REQUEST, key, index,
+	ret = pmnet_send_recv_message(PMNET_MSG_GETPAGE, key, index, 
 			result_page, PAGE_SIZE, 0, &status);
 
 	if(memcmp(result_page, test_string, PAGE_SIZE) != 0){
-		printk("failed Searching for key %lx\n", key);
+		printk("[ FAIL ] Searching for key %x\n", key);
 		result++;
 	}
 
@@ -112,7 +97,7 @@ int rdpma_single_read_message_test(void* arg){
 	return 0;
 }
 
-int rdpma_read_message_test(void* arg){
+int read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, i, status;
 	int result = 0;
@@ -122,11 +107,11 @@ int rdpma_read_message_test(void* arg){
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
-		ret = rdpma_read_message(MSG_READ_REQUEST, key, index,
+		ret = pmnet_send_recv_message(PMNET_MSG_GETPAGE, key, index, 
 				return_page[tid], PAGE_SIZE, 0, &status);
 
 		if(memcmp(return_page[tid], (char *)vpages[tid][i], PAGE_SIZE) != 0){
-			printk("failed Searching for key %lx\n return: %s\nexpect: %s", key, (char *)return_page[tid], (char *)vpages[tid][i]);
+			printk("failed Searching for key %x\n return: %s\nexpect: %s", key, (char *)return_page[tid], (char *)vpages[tid][i]);
 			nfailed++;
 		}
 	}
@@ -140,29 +125,6 @@ int rdpma_read_message_test(void* arg){
 	return 0;
 }
 
-int single_read_test(void* arg){
-	struct thread_data* my_data = (struct thread_data*)arg;
-	int ret;
-	int result = 0;
-	uint64_t key = 4000;
-	char test_string[PAGE_SIZE] = "hi, dicl";
-	void *result_page;
-
-	result_page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
-
-	ret = generate_single_read_request(result_page, key);
-
-	if(memcmp(result_page, test_string, PAGE_SIZE) != 0){
-		printk("failed Searching for key %llx\n", key);
-		result++;
-	}
-
-	if (result == 0)
-		printk("[ PASS ] %s succeeds\n", __func__);
-
-	complete(my_data->comp);
-	return 0;
-}
 
 int main(void){
 	int i;
@@ -179,9 +141,8 @@ int main(void){
 	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
-//		write_threads[i] = kthread_create((void*)&single_write_test, (void*)args[i], "page_writer");
-//		write_threads[i] = kthread_create((void*)&write_test, (void*)args[i], "page_writer");
-		write_threads[i] = kthread_create((void*)&rdpma_write_message_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&write_message_test, (void*)args[i], "page_writer");
+//		write_threads[i] = kthread_create((void*)&single_write_message_test, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
 
@@ -203,9 +164,8 @@ int main(void){
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){
-//		read_threads[i] = kthread_create((void*)&single_read_test, (void*)args[i], "page_reader");
-//		read_threads[i] = kthread_create((void*)&read_test, (void*)args[i], "page_reader");
-		read_threads[i] = kthread_create((void*)&rdpma_read_message_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&read_message_test, (void*)args[i], "page_reader");
+//		read_threads[i] = kthread_create((void*)&single_read_message_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
@@ -274,9 +234,7 @@ int init_pages(void){
 				printk(KERN_ALERT "vpages[%d][%d] allocation failed\n", i, j);
 				goto ALLOC_ERR;
 			}
-			sprintf(str, "%d", key++ );
-//			get_random_bytes(&rand, sizeof(u64));
-//			memcpy(vpages[i][j], &rand, sizeof(u64));
+			sprintf(str, "%lld", key++ );
 			strcpy(vpages[i][j], str);
 		}
 	}
@@ -306,7 +264,7 @@ int init_pages(void){
 
 	atomic_set(&failedSearch, 0);
 
-	printk(KERN_INFO "[ PASS ] pmdfc rdma initialization");
+	printk(KERN_INFO "[ PASS ] pmdfc initialization");
 	return 0;
 
 
@@ -335,7 +293,7 @@ ALLOC_ERR:
 
 void show_test_info(void){
 
-	pr_info("+------------ PMDFC RDMA TEST INFO --------------+\n");
+	pr_info("+------------ PMDFC SERVER TEST INFO ------------+\n");
 	pr_info("| NUMBER OF THREAD: %d  \t\t\t\t|\n", THREAD_NUM);
 	pr_info("| TOTAL CAPACITY  : %ld \t\t\t|\n", TOTAL_CAPACITY);
 	pr_info("| ITERATIONS      : %ld \t\t\t\t|\n", ITERATIONS);
@@ -408,5 +366,5 @@ static void __exit exit_test_module(void){
 module_init(init_test_module);
 module_exit(exit_test_module);
 
-MODULE_AUTHOR("Hokeun & Jaeyoun");
+MODULE_AUTHOR("Jaeyoun");
 MODULE_LICENSE("GPL");

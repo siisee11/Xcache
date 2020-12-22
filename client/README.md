@@ -10,6 +10,10 @@ Before load this module, you must initiate server first.
 ```make ipoib``` to load module using TCP over Infiniband fabric.
 ```make rdma``` to load module using RDMA.
 
+After load module, you can test it.
+```make tcptest``` to test tcp.
+```make rdmatest``` to test rdma
+
 ```dmesg -w``` to watch kernel dmesg log.
 
 ## How to test

@@ -1050,7 +1050,6 @@ int query_qp(struct ib_qp* qp){
 	return 1;
 }
 
-
 int tcp_send(struct socket* sock, char* buf, int len){
 	struct msghdr msg;
 	struct kvec iov;

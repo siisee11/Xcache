@@ -824,7 +824,8 @@ out:
  * @target_node:
  * @status: return status value
  */
-int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *page,
+
+int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, void* data,
 		struct kvec *caller_vec, size_t caller_veclen, u8 target_node, int *status)
 {
 	int ret = 0;
@@ -839,7 +840,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 	struct pmnet_send_tracking nst;
 	void *to_va;
 
-	BUG_ON(page == NULL);
+	BUG_ON(data == NULL);
 
 	pmnet_init_nst(&nst, msg_type, key, current, target_node);
 
@@ -939,8 +940,7 @@ int pmnet_send_recv_message_vec(u32 msg_type, u32 key, u32 index, struct page *p
 		if (unlikely(nsw.ns_page == NULL))
 			goto out;
 
-		to_va = page_address(page);
-		memcpy(to_va, nsw.ns_page, PAGE_SIZE);
+		memcpy(data, nsw.ns_page, PAGE_SIZE);
 		kfree(nsw.ns_page);
 	}
 
@@ -1068,14 +1068,14 @@ int pmnet_send_message(u32 msg_type, u32 key, u32 index, void *data, u32 len,
 }
 EXPORT_SYMBOL_GPL(pmnet_send_message);
 
-int pmnet_send_recv_message(u32 msg_type, u32 key, u32 index, struct page *page, u32 len,
+int pmnet_send_recv_message(u32 msg_type, u32 key, u32 index, void *data, u32 len,
 		u8 target_node, int *status)
 {
 	struct kvec vec = {
 		.iov_base = NULL,
 		.iov_len = 0,
 	};
-	return pmnet_send_recv_message_vec(msg_type, key, index, page, &vec, 1,
+	return pmnet_send_recv_message_vec(msg_type, key, index, data, &vec, 1,
 			target_node, status);
 }
 EXPORT_SYMBOL_GPL(pmnet_send_recv_message);
@@ -1145,7 +1145,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 	pmnet_set_func_start_time(sc);
 	switch(be16_to_cpu(hdr->msg_type)) {
 		case PMNET_MSG_SENDPAGE:
-//			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n",  \
+			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n",  \
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			ret_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
@@ -1226,18 +1226,6 @@ static int pmnet_check_handshake(struct pmnet_sock_container *sc)
 		pmnet_ensure_shutdown(nn, sc, -ENOTCONN);
 		return -1;
 	}
-/*
-	if (be32_to_cpu(hand->pmhb_heartbeat_timeout_ms) !=
-			pmHB_MAX_WRITE_TIMEOUT_MS) {
-		printk(KERN_NOTICE "pmnet: " SC_NODEF_FMT " uses a heartbeat "
-		       "timeout of %u ms, but we use %u ms locally. "
-		       "Disconnecting.\n", SC_NODEF_ARGS(sc),
-		       be32_to_cpu(hand->pmhb_heartbeat_timeout_ms),
-		       PMHB_MAX_WRITE_TIMEOUT_MS);
-		pmnet_ensure_shutdown(nn, sc, -ENOTCONN);
-		return -1;
-	}
-*/
 
 	pr_info("handshake complete...\n");
 	sc->sc_handshake_ok = 1;

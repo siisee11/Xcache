@@ -104,7 +104,7 @@ int sample_get_cnt = 0;
 std::atomic<int> process_cnt[40];
 
 /* performance timer */
-uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0;
+uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0, pmlog_alloc_elapsed = 0;
 uint64_t pmnet_rx_elapsed=0; 
 uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
 uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
@@ -151,12 +151,12 @@ static void print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("PUT : %lu (us), GET_TOTAL : %lu (us)\n",
-			pmput_elapsed/1000/sample_put_cnt,
-			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/sample_get_cnt);
-	printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
-			pmput_queue_elapsed/1000/sample_put_q_cnt,
-			pmget_queue_elapsed/1000/sample_get_q_cnt);
+	printf("PUT (Log alloc) : %.3f (us), GET_TOTAL : %.3f (us)\n",
+			pmlog_alloc_elapsed/1000.0/sample_put_cnt,
+			(pmget_exist_elapsed/1000.0 + pmget_notexist_elapsed/1000.0)/sample_get_cnt);
+	printf("PUT_Q : %.3f (us), GET_Q : %.3f (us)\n",
+			pmput_queue_elapsed/1000.0/sample_put_q_cnt,
+			pmget_queue_elapsed/1000.0/sample_get_q_cnt);
 	printf("--------------------FIN------------------------\n");
 
 	ctx->kv->PrintStats();
@@ -236,7 +236,7 @@ void consumer(struct pmnet_sock_container *sc) {
 	/* consume request from queue */
 	/* TODO: Batching */
 	while (!done) {
-		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[thisNode]);
+		msg_in = (struct pmnet_msg_in*)dequeue(lfqs[thisNode * 2 + (cpu % 2)]); /* lfqs node0-put-Q, node0-get-Q, node1-put-Q, node1-get-Q */
 		process_cnt[cpu]++;
 		ret = pmnet_process_message(sc, msg_in->hdr, msg_in, thisNode);
 		free(msg_in);
@@ -300,8 +300,6 @@ static void pmnet_init_msg(struct pmnet_msg *msg, uint16_t data_len,
 
 static void pmnet_initialize_handshake(void)
 {
-//	pmnet_hand->pmhb_heartbeat_timeout_ms = cpu_to_be32(
-//			PMHB_MAX_WRITE_TIMEOUT_MS);
 	pmnet_hand->pmnet_idle_timeout_ms = htonl(PMNET_IDLE_TIMEOUT_MS_DEFAULT);
 	pmnet_hand->pmnet_keepalive_delay_ms = htonl(PMNET_KEEPALIVE_DELAY_MS_DEFAULT);
 	pmnet_hand->pmnet_reconnect_delay_ms = htonl(PMNET_RECONNECT_DELAY_MS_DEFAULT);
@@ -450,20 +448,21 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			TOID(char) temp;
 			POBJ_ALLOC(ctx->log_pop[thisNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
 			uint64_t temp_addr = (uint64_t)ctx->log_pop[thisNode] + temp.oid.off;
-			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
-			pmemobj_persist(ctx->log_pop[thisNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);	 /* TODO: this cause slowdown */
+//			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
+//			pmemobj_persist(ctx->log_pop[thisNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);	 /* TODO: this cause slowdown */
+			pmemobj_memcpy_persist(ctx->log_pop[thisNode], (void*)temp_addr, from_va, sizeof(char)*PAGE_SIZE);
+
+#if defined(TIME_CHECK)
+			if (checkit) {
+				clock_gettime(CLOCK_MONOTONIC, &end);
+				pmlog_alloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+			}
+#endif
 
 			/*
 			 * 2. Save that address with key
 			 */
 			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
-
-#if defined(TIME_CHECK)
-			if (checkit) {
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				pmput_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-			}
-#endif
 
 //			printf("[ Inserted %lx : ", key);
 //			printf("%lx ]\n", (void *)D_RW(ctx->kv->Get(key));
@@ -508,11 +507,10 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			 * 2. get page by POBJ address
 			 */
 			bool abort = false;
-			/* TODO: Get return nothing */
-//			void* addr = ctx->kv->Get(key, getcnt, 0);
-			ctx->kv->Get(key, 0, thisNode);
+			const void* addr = ctx->kv->Get(key, thisNode);
+//			ctx->kv->Get(key, 0, thisNode);
+//			void * addr = NULL;
 
-			void * addr = NULL;
 			if(!addr){
 				abort = true;
 			}
@@ -530,7 +528,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				}
 #endif
 //				printf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-//				printf("%lx ]\n", (void *)D_RW(ctx->kv->Get(key));
+//				printf("%s ]\n", saved_page);
 			}
 			else{
 				/* page not exists */
@@ -694,8 +692,11 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		pushed = true;
 		ret = 1;
 #else
-		int targetQ = msg_in->hdr->key % (NUM_NUMA);
-		enqueue(lfqs[targetQ], msg_in);
+		uint64_t key = pmnet_long_key(ntohl(msg_in->hdr->key), ntohl(msg_in->hdr->index));
+		int targetNode = ctx->kv->GetNodeID(key);
+		int targetQueue = ntohs(msg_in->hdr->msg_type) == PMNET_MSG_PUTPAGE ? 0 : 1;
+		enqueue(lfqs[targetNode * 2 + targetQueue], msg_in);
+//		enqueue(lfqs[0 + targetQueue], msg_in); /* XXX */
 		pushed = true;
 		ret = 1;
 #endif
@@ -837,7 +838,7 @@ void init_network_server()
 		// A mutex ensures orderly access to std::cout from multiple threads.
 		std::mutex iomutex;
 		std::vector<std::thread> threads(nr_cpus/2);
-		for (unsigned i = 0; i < nr_cpus/2; ++i) {
+		for (unsigned i = 0; i < nr_cpus/2; ++i) {   /* XXX */
 			threads[i] = std::thread(consumer, sc);
 
 			// Create a cpu_set_t object representing a set of CPUs. Clear it and mark
@@ -881,14 +882,14 @@ static struct server_context* server_init_ctx(char *ipath){
 		strncpy(&base_path[10], log_path, strlen(log_path));
 		dprintf("[ INFO ] File used for log: %s\n", base_path);
 		if(access(base_path, 0) != 0){
-			ctx->log_pop[i] = pmemobj_create(base_path, "log", LOG_SIZE, 0666);
+			ctx->log_pop[i] = pmemobj_create(base_path, POBJ_LAYOUT_NAME(LOG), LOG_SIZE, 0666);
 			if(!ctx->log_pop[i]){
 				perror("pmemobj_create");
 				exit(1);
 			}
 		}
 		else{
-			ctx->log_pop[i] = pmemobj_open(base_path, "log");
+			ctx->log_pop[i] = pmemobj_open(base_path, POBJ_LAYOUT_NAME(LOG));
 			if(!ctx->log_pop[i]){
 				perror("pmemobj_open");
 				exit(1);
@@ -905,14 +906,14 @@ static struct server_context* server_init_ctx(char *ipath){
 		strncpy(&path[10], pm_path, strlen(pm_path));
 		dprintf("[ INFO ] File used for index: %s\n", path);
 		if(access(path, 0) != 0){
-			ctx->pop[i] = pmemobj_create(path, "index", INDEX_SIZE, 0666);
+			ctx->pop[i] = pmemobj_create(path, POBJ_LAYOUT_NAME(HashTable), INDEX_SIZE, 0666);
 			if(!ctx->pop[i]){
 				perror("pmemobj_create");
 				exit(1);
 			}
 		}
 		else{
-			ctx->pop[i] = pmemobj_open(path, "index");
+			ctx->pop[i] = pmemobj_open(path, POBJ_LAYOUT_NAME(HashTable));
 			if(!ctx->pop[i]){
 				perror("pmemobj_open");
 				exit(1);
@@ -1089,9 +1090,9 @@ int main(int argc, char* argv[]){
 	printCpuBuf(nr_cpus, pollcpubuf, "cqpoll");
 
 //	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
-	lfqs = (queue_t**)malloc(NUM_NUMA * sizeof(queue_t*));
+	lfqs = (queue_t**)malloc(NUM_NUMA * sizeof(queue_t*) * 2); /* GET, PUT QUEUE seperation */
 //	for (int i = 0; i < nr_cpus; i++) {
-	for (int i = 0; i < NUM_NUMA; i++) {
+	for (int i = 0; i < NUM_NUMA * 2; i++) {
 		lfqs[i] = create_queue("lfqs");
 	}
 

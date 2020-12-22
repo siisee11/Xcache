@@ -13,6 +13,8 @@ class KVStore {
     virtual void Insert(Key_t&, Value_t, int, int) = 0;
     virtual bool Delete(Key_t&) = 0;
     virtual void Get(Key_t&, int, int) = 0;
+    virtual Value_t Get(Key_t&, int) = 0;
+	virtual int GetNodeID(Key_t&) = 0;
 	virtual Value_t FindAnyway(Key_t&) = 0;
 	virtual	std::vector<size_t> SegmentLoads(void) = 0;
 	virtual bool WaitComplete(void) = 0;

@@ -25,6 +25,7 @@ struct Metric {
 
 struct Segment_root;
 struct Segment;
+
 POBJ_LAYOUT_BEGIN(HashTable);
 POBJ_LAYOUT_ROOT(HashTable, struct Segment_root);
 POBJ_LAYOUT_TOID(HashTable, struct Segment);
@@ -119,7 +120,6 @@ struct Directory{
 	static const size_t kDefaultDepth = 10;
 
 	TOID(struct Segment)* segment;
-	//struct Segment** segment;	
 	int64_t sema = 0;
 	size_t capacity;		
 	size_t depth;	
@@ -176,13 +176,13 @@ struct Directory{
 
 	void* operator new(size_t size){
 		void* ret;
-		posix_memalign(&ret, 64, size);
+		if (posix_memalign(&ret, 64, size) ) ret=NULL;
 		return ret;
 	}
 
 	void* operator new[](size_t size){
 		void* ret;
-		posix_memalign(&ret, 64, size);
+		if (posix_memalign(&ret, 64, size) ) ret=NULL;
 		return ret;
 	}
 };
@@ -212,7 +212,7 @@ class CCEH : public IHash {
 
 		void* operator new(size_t size){
 			void* ret;
-			posix_memalign(&ret, 64, size);
+			if (posix_memalign(&ret, 64, size) ) ret=NULL;
 			return ret;
 		}
 

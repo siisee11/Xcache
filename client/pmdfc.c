@@ -308,7 +308,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #ifdef PMDFC_NETWORK
 		/* TCP networking */
 		pmnet_send_recv_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, 
-				page, PAGE_SIZE, 0, &status);
+				page_address(page), PAGE_SIZE, 0, &status);
 
 		if (status != 0) {
 			/* get page failed */
@@ -324,11 +324,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	else {
 		/* RDMA networking */
 		ret = rdpma_read_message(MSG_READ_REQUEST, (long)oid.oid[0], index,
-				page, PAGE_SIZE, 0, &status);
+				page_address(page), PAGE_SIZE, 0, &status);
 
 		if (status != 0) {
 			/* get page failed */
-			pr_info("MISS!!!!!\n");
 			pmdfc_miss_gets++;
 			goto not_exists;
 		} else {

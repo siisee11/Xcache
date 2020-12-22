@@ -255,7 +255,6 @@ int CCEH::GetNodeID(Key_t& key){
 RETRY:
 	auto x = (f_hash >> (8*sizeof(f_hash) - dir->depth));
 
-	auto target_segment = dir->segment[x];
 	uint64_t target_node = (uint64_t)D_RO(dir->segment[x]) - dir->segment[x].oid.off;
 	for(int i=0; i<NUM_NUMA; ++i){
 		if(target_node == (uint64_t)pop[i])
@@ -307,21 +306,22 @@ RETRY:
 #endif
 	int cur_node_id = GetNodeID(target);
 
+	struct Segment *_target = D_RW(target);
 
-	auto target_local_depth = (D_RO(target)->local_depth & DEPTH_MASK);
+	auto target_local_depth = (_target->local_depth & DEPTH_MASK);
 	auto pattern = (f_hash >> (8*sizeof(f_hash) - target_local_depth));
 	for(unsigned i=0; i<kNumPairPerCacheLine * kNumCacheLine; ++i){
 		auto loc = (f_idx + i) % Segment::kNumSlot;
-		auto _key = D_RO(target)->bucket[loc].key;
+		auto _key = _target->bucket[loc].key;
 		/* validity check for entry keys */
-		if((((hash_funcs[0](&D_RO(target)->bucket[loc].key, sizeof(Key_t), f_seed) >> (8*sizeof(f_hash)-target_local_depth)) != pattern) || (D_RO(target)->bucket[loc].key == INVALID)) && (D_RO(target)->bucket[loc].key != SENTINEL)){
-			if(CAS(&D_RW(target)->bucket[loc].key, &_key, SENTINEL)){
-				D_RW(target)->bucket[loc].value = value;
+		if((((hash_funcs[0](&_target->bucket[loc].key, sizeof(Key_t), f_seed) >> (8*sizeof(f_hash)-target_local_depth)) != pattern) || (_target->bucket[loc].key == INVALID)) && (D_RO(target)->bucket[loc].key != SENTINEL)){
+			if(CAS(&_target->bucket[loc].key, &_key, SENTINEL)){
+				_target->bucket[loc].value = value;
 				mfence();
-				D_RW(target)->bucket[loc].key = key;
-				pmemobj_persist(pop[cur_node_id], (char*)&D_RO(target)->bucket[loc], sizeof(Pair));
+				_target->bucket[loc].key = key;
+				pmemobj_persist(pop[cur_node_id], (char*)&_target->bucket[loc], sizeof(Pair));
 				/* release segment exclusive lock */
-				D_RW(target)->unlock();
+				_target->unlock();
 
 #ifdef LRFU
 				/* Calculate LRFU */
