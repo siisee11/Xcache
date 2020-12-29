@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <vector>
 #include <cmath>
+
 #include "src/CCEH_PM_hybrid.h"
 #include "src/hash.h"
 #include "src/util.h"
@@ -452,7 +453,7 @@ RETRY:
 	}
 
 	auto s = D_RW(target)->Split(pop[target_node_id]);
-#else
+#else /* SKEWED */
 	size_t load = segments_in_node[0];
 	while(!CAS(&segments_in_node[0], &load, load+1)){
 		load = segments_in_node[0];

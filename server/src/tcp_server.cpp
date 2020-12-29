@@ -38,7 +38,12 @@
 #include <cstring>
 #include <atomic>
 
+#ifdef APPDIRECT
 #include "NuMA_KV_PM.h"
+#else
+#include "NuMA_KV.h"
+#endif
+
 #include "variables.h"
 #include "CCEH_PM_hybrid.h"
 #include "circular_queue.h"
@@ -155,19 +160,18 @@ static void print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("PUT (Log alloc) : %.3f (usec/op), GET(SUCC): %.3f (usec/op), GET(FAIL): %.3f (usec/op)\n",
-			pmlog_alloc_elapsed/1000.0/sample_put_cnt,
+	printf("PUT : %.3f (usec/op), GET(SUCC): %.3f (usec/op), GET(FAIL): %.3f (usec/op)\n",
+			pmput_elapsed/1000.0/sample_put_cnt,
 			pmget_exist_elapsed/1000.0/sample_succ_get_cnt,
 			pmget_notexist_elapsed/1000.0/sample_fail_get_cnt);
 	printf("PUT_Q : %.3f (usec/op), GET_Q : %.3f (usec/op)\n",
 			pmput_queue_elapsed/1000.0/sample_put_q_cnt,
 			pmget_queue_elapsed/1000.0/sample_get_q_cnt);
-	printf("--------------------FIN------------------------\n");
 
 	ctx->kv->PrintStats();
+
+	printf("--------------------FIN------------------------\n");
 }
-
-
 
 static void printCpuBuf(size_t nr_cpus, struct bitmask *bm, const char *str) {
 	/* Print User specified cpus */
@@ -443,8 +447,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				sample_put_cnt++;
 				checkit = true;
 			}
-#endif
+#endif   /* --------------------------------------------------------------------- pmput */
 
+#ifdef APPDIRECT
 			/* 
 			 * Insert received page into hash 
 			 * 1. Alloc POBJ and get its address
@@ -453,21 +458,24 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			TOID(char) temp;
 			POBJ_ALLOC(ctx->log_pop[thisNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
 			uint64_t temp_addr = (uint64_t)ctx->log_pop[thisNode] + temp.oid.off;
-			pmemobj_memcpy_persist(ctx->log_pop[thisNode], (void*)temp_addr, from_va, sizeof(char)*PAGE_SIZE);
-//			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
-//			pmemobj_persist(ctx->log_pop[thisNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);		/* TODO: this cause slowdown */
+			pmemobj_memcpy_persist(ctx->log_pop[thisNode], (void*)temp_addr, from_va, sizeof(char)*PAGE_SIZE); /* TODO: this cause slowdown */
 
 			/*
 			 * 2. Save that address with key
 			 */
 			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
+#else /* MEMORY MODE */
+			uint64_t *temp_addr = (uint64_t *)malloc(sizeof(char) * PAGE_SIZE);
+			memcpy(temp_addr, from_va, sizeof(char) * PAGE_SIZE);
+			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
+#endif
 
 #if defined(TIME_CHECK)
 			if (checkit) {
 				clock_gettime(CLOCK_MONOTONIC, &end);
-				pmlog_alloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+				pmput_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 			}
-#endif
+#endif   /* --------------------------------------------------------------------- pmput */
 
 //			printf("[ Inserted %lx : ", key);
 //			printf("%lx ]\n", (void *)D_RW(ctx->kv->Get(key));
@@ -504,7 +512,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				checkit = true;
 			}
-#endif
+#endif   /* --------------------------------------------------------------------- pmget */
 
 			/*
 			 * Get saved page.
@@ -521,9 +529,14 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 			if(!abort){
 				/* page exists */
+#ifdef APPDIRECT
 				memcpy(saved_page, addr, PAGE_SIZE);
 				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
 					ntohl(hdr->msg_num), saved_page, PAGE_SIZE);
+#else
+				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
+					ntohl(hdr->msg_num), (void *)addr, PAGE_SIZE);
+#endif
 
 #if defined(TIME_CHECK)
 				if (checkit) {
@@ -531,7 +544,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 					pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 					sample_succ_get_cnt++;
 				}
-#endif
+#endif   /* --------------------------------------------------------------------- pmget */
 //				printf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
 //				printf("%s ]\n", saved_page);
 			}
@@ -547,7 +560,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 					pmget_notexist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 					sample_fail_get_cnt++;
 				}
-#endif
+#endif   /* --------------------------------------------------------------------- pmget */
 
 //				printf("PAGE NOT EXIST (key=%x, index=%x, msg_num=%x)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
 			}
@@ -564,7 +577,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
 			/* delete key */
 			ctx->kv->Delete(key);
-
 			break;
 		}
 
@@ -699,10 +711,13 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		ret = 1;
 #else
 		uint64_t key = pmnet_long_key(ntohl(msg_in->hdr->key), ntohl(msg_in->hdr->index));
+#ifdef APPDIRECT
 		int targetNode = ctx->kv->GetNodeID(key);
+#else
+		int targetNode = rand() % NUM_NUMA;
+#endif
 		int targetQueue = ntohs(msg_in->hdr->msg_type) == PMNET_MSG_PUTPAGE ? 0 : 1;
 		enqueue(lfqs[targetNode * 2 + targetQueue], msg_in);
-//		enqueue(lfqs[0 + targetQueue], msg_in); /* XXX */
 		pushed = true;
 		ret = 1;
 #endif
@@ -883,6 +898,7 @@ static struct server_context* server_init_ctx(char *ipath){
 	ctx = (struct server_context*)malloc(sizeof(struct server_context));
 	ctx->node_id = 0;
 
+#ifdef APPDIRECT
 	for(int i=0; i<NUM_NUMA; i++){
 		snprintf(&base_path[9], sizeof(int), "%d", i);
 		strncpy(&base_path[10], log_path, strlen(log_path));
@@ -939,6 +955,10 @@ static struct server_context* server_init_ctx(char *ipath){
 		}
 		dprintf("[  OK  ] KVStore Recovered \n");
 	}
+#else /* MEMORY MODE */
+	ctx->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, numKVThreads, numPollThreads);
+	dprintf("[  OK  ] KVStore Initialized\n");
+#endif
 
 	return ctx;
 }
@@ -1095,9 +1115,7 @@ int main(int argc, char* argv[]){
 	printCpuBuf(nr_cpus, kvcpubuf, "kv");
 	printCpuBuf(nr_cpus, pollcpubuf, "cqpoll");
 
-//	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
 	lfqs = (queue_t**)malloc(NUM_NUMA * sizeof(queue_t*) * 2); /* GET, PUT QUEUE seperation */
-//	for (int i = 0; i < nr_cpus; i++) {
 	for (int i = 0; i < NUM_NUMA * 2; i++) {
 		lfqs[i] = create_queue("lfqs");
 	}

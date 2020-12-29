@@ -12,7 +12,12 @@
 #include <stddef.h>
 #include <libpmemobj.h>
 
+#ifdef APPDIRECT
 #include "NuMA_KV_PM.h"
+#else
+#include "NuMA_KV.h"
+#endif
+
 #include "circular_queue.h"
 
 #define LOG_SIZE (42949672960) // 40GB
@@ -40,8 +45,10 @@ struct server_context{
     int cur_node;
     int num_node;
 
+#ifdef APPDIRECT
     PMEMobjpool* log_pop[NUM_NUMA];
 	PMEMobjpool* pop[NUM_NUMA];
+#endif
     NUMA_KV* kv;
 };
 

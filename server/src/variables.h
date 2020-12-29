@@ -14,4 +14,7 @@ extern struct bitmask *netcpubuf;
 extern struct bitmask *kvcpubuf;
 extern struct bitmask *pollcpubuf;
 
+extern int putcnt;
+extern int getcnt;
+
 #endif

@@ -6,6 +6,13 @@ It communicate with clients kernel module (pmdfc_client).
 
 PM server use CCEH and hotring as page content storage.
 
+## Defines
+tcp_server.cpp : APPDIRECT (Use PM as APPDIRECT MODE else as MEMORY MODE)
+NuMA_KV(_PM).cpp : NUMAQ (Use queue for NUMA awareness)
+CCEH_PM_hybrid.cpp : BALANCED (Traking number of segment on NUMA and distribute newlly allocated segment on lighter NUMA node)
+CCEH_PM_hybrid.cpp : RANDOM (Alloc newlly allocated segment on random NUMA node)
+CCEH_PM_hybrid.cpp : LRFU (Alloc newlly allocated segment on lowest lrfu NUMA node)
+CCEH_PM_hybrid.cpp :      (Alloc only on NUMA node 0)
 
 ## Requirement
 

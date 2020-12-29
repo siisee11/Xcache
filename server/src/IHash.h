@@ -16,15 +16,12 @@ class IHash {
     virtual bool Delete(Key_t&) = 0;
     virtual Value_t Get(Key_t&) = 0;
     virtual Value_t FindAnyway(Key_t&) = 0;
-	virtual	std::vector<size_t> SegmentLoads(void) = 0;
-	virtual	std::vector<double> Metrics(void) = 0;
     virtual double Utilization(void) = 0;
-	virtual std::vector<unsigned> Freqs(void) = 0;
     virtual size_t Capacity(void) = 0;
 	virtual bool Recovery(void) = 0;
-
-    Timer timer;
-    double breakdown = 0;
+	virtual std::vector<unsigned> Freqs(void) = 0;
+	virtual	std::vector<size_t> SegmentLoads(void) = 0;
+	virtual	std::vector<double> Metrics(void) = 0;
 };
 
 

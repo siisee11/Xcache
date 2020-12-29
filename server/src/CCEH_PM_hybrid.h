@@ -202,13 +202,13 @@ class CCEH : public IHash {
 		Value_t Get(Key_t&);
 		Value_t FindAnyway(Key_t&);
 
-		std::vector<size_t> SegmentLoads(void);
 		double Utilization(void);
-		std::vector<unsigned> Freqs(void);
 		size_t Capacity(void);
 		size_t Depth(void);
-		std::vector<double> Metrics(void);
 		bool Recovery(void);
+		std::vector<size_t> SegmentLoads(void);
+		std::vector<unsigned> Freqs(void);
+		std::vector<double> Metrics(void);
 
 		void* operator new(size_t size){
 			void* ret;

@@ -46,6 +46,8 @@ rdma:
 	insmod ./pmnet.ko ip="10.0.0.53" port=5432
 	insmod ./rdpma_mod.ko ip="10.0.0.53" port=2123 enable=1
 	insmod ./pmdfc_client.ko rdma=1
+pmdfc:
+	insmod ./pmdfc_client.ko
 tcptest:
 	insmod ./pmnet_testing.ko
 rdmatest:
