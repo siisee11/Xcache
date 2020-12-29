@@ -861,6 +861,7 @@ void init_rdma_network(){
 	struct sockaddr_in local_sock;
 	int gid_idx = 0; /* XXX 0 -> 2 */
 	int on = 1;
+	union ibv_gid gid;
 	running = 1;
 
 	sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -879,12 +880,21 @@ void init_rdma_network(){
 	if((listen(sock, 10)) < 0)
 		die("Socket listen failed\n");
 
+	ret = ibv_query_gid(rctx->context, ib_port, gid_idx, &gid);
+	if(ret){
+		fprintf(stderr, "Error, failed to query GID index %d of port %d in device '%s'\n",
+						gid_idx, ib_port, ibv_get_device_name(rctx->context->device));
+		close(fd);
+		close(sock);
+		exit(1);
+	}
+
 	while(!done){
 		socklen_t sin_size = sizeof(struct sockaddr);
 		struct sockaddr_in remote_sock;
 		char remote_ip[INET_ADDRSTRLEN];
 		struct node_info local_node, remote_node;
-		union ibv_gid gid;
+//		union ibv_gid gid;
 		memset(&local_node, 0, sizeof(struct node_info));
 		memset(&remote_node, 0, sizeof(struct node_info));
 		memset(&remote_sock, 0, sizeof(struct sockaddr_in));
