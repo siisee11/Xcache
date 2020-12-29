@@ -100,6 +100,8 @@ int sample_put_q_cnt = 0;
 int sample_get_q_cnt = 0;
 int sample_put_cnt = 0;
 int sample_get_cnt = 0;
+int sample_succ_get_cnt = 0;
+int sample_fail_get_cnt = 0;
 
 std::atomic<int> process_cnt[40];
 
@@ -136,6 +138,8 @@ static void print_stats() {
 	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
 	printf("# of puts : %d , # of gets : %d \n",
 			putcnt, getcnt);
+	printf("# of sample_put_cnt : %d , # of sample_get_cnt : %d \n",
+			sample_put_cnt, sample_get_cnt);
 	printf("# of requested processed on cpu\n[ ");
 	for ( int i = 0 ; i < nr_cpus ; i++ ) {
 		printf("%d ", process_cnt[i].load());
@@ -151,10 +155,11 @@ static void print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("PUT (Log alloc) : %.3f (us), GET_TOTAL : %.3f (us)\n",
+	printf("PUT (Log alloc) : %.3f (usec/op), GET(SUCC): %.3f (usec/op), GET(FAIL): %.3f (usec/op)\n",
 			pmlog_alloc_elapsed/1000.0/sample_put_cnt,
-			(pmget_exist_elapsed/1000.0 + pmget_notexist_elapsed/1000.0)/sample_get_cnt);
-	printf("PUT_Q : %.3f (us), GET_Q : %.3f (us)\n",
+			pmget_exist_elapsed/1000.0/sample_succ_get_cnt,
+			pmget_notexist_elapsed/1000.0/sample_fail_get_cnt);
+	printf("PUT_Q : %.3f (usec/op), GET_Q : %.3f (usec/op)\n",
 			pmput_queue_elapsed/1000.0/sample_put_q_cnt,
 			pmget_queue_elapsed/1000.0/sample_get_q_cnt);
 	printf("--------------------FIN------------------------\n");
@@ -448,9 +453,14 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			TOID(char) temp;
 			POBJ_ALLOC(ctx->log_pop[thisNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
 			uint64_t temp_addr = (uint64_t)ctx->log_pop[thisNode] + temp.oid.off;
-//			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
-//			pmemobj_persist(ctx->log_pop[thisNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);	 /* TODO: this cause slowdown */
 			pmemobj_memcpy_persist(ctx->log_pop[thisNode], (void*)temp_addr, from_va, sizeof(char)*PAGE_SIZE);
+//			memcpy((void*)temp_addr, from_va, PAGE_SIZE);
+//			pmemobj_persist(ctx->log_pop[thisNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);		/* TODO: this cause slowdown */
+
+			/*
+			 * 2. Save that address with key
+			 */
+			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
 
 #if defined(TIME_CHECK)
 			if (checkit) {
@@ -458,11 +468,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				pmlog_alloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 			}
 #endif
-
-			/*
-			 * 2. Save that address with key
-			 */
-			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
 
 //			printf("[ Inserted %lx : ", key);
 //			printf("%lx ]\n", (void *)D_RW(ctx->kv->Get(key));
@@ -495,8 +500,8 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 
 #if defined(TIME_CHECK)
 			if (getcnt % NR_GET_TIME_CHECK == 0) {
-				clock_gettime(CLOCK_MONOTONIC, &start);
 				sample_get_cnt++;
+				clock_gettime(CLOCK_MONOTONIC, &start);
 				checkit = true;
 			}
 #endif
@@ -509,7 +514,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			bool abort = false;
 			const void* addr = ctx->kv->Get(key, thisNode);
 //			ctx->kv->Get(key, 0, thisNode);
-//			void * addr = NULL;
 
 			if(!addr){
 				abort = true;
@@ -525,6 +529,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				if (checkit) {
 					clock_gettime(CLOCK_MONOTONIC, &end);
 					pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+					sample_succ_get_cnt++;
 				}
 #endif
 //				printf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
@@ -540,6 +545,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				if (checkit) {
 					clock_gettime(CLOCK_MONOTONIC, &end);
 					pmget_notexist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+					sample_fail_get_cnt++;
 				}
 #endif
 

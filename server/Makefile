@@ -22,6 +22,7 @@ all: CCEH $(EXECUTABLE)
 $(EXECUTABLE):
 	$(CC) $(CFLAGS) -o bin/tcp_server_lrfu src/tcp_server.cpp src/lfcq.o src/CCEH_lrfu.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS)
 	$(CC) $(CFLAGS) -o bin/tcp_server_skewed src/tcp_server.cpp src/lfcq.o src/CCEH_skewed.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS)
+	$(CC) $(CFLAGS) -o bin/rdma_server_skewed src/rdma_server.cpp src/lfcq.o src/CCEH_skewed.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS)
 
 CCEH: 
 	$(CXX) $(CFLAGS) -c -o src/CCEH_balanced.o src/CCEH_PM_hybrid.cpp $(INCLUDES) $(LIBS) -DBALANCED
@@ -36,17 +37,16 @@ tcp:
 	sudo rm -rf /mnt/pmem0/jy/*
 	sudo rm -rf /mnt/pmem1/jy/*
 	sudo bin/tcp_server_skewed -t 5432 --pm_path /jy/1 --dataset /home/siisee11/git/NuMA/input_rand.txt --nr_data 10000000 -W 20 -K 26-27,36-37 -P 28-29,38-39 --tablesize 32768 --verbose -h
-#	sudo bin/tcp_server -t 5432 --pm_path /jy/1 --dataset /home/siisee11/git/NuMA/input_rand.txt --nr_data 10000000 -W 20 -K 26-27,36-37 -P 28-29,38-39 --tablesize 32768 --verbose -h
 
 rdma:
-	sudo rm -rf ./jy/*
-	sudo rm -rf ./hk/*
-	sudo ./server --rdma -t 2123 -p jy/FILE
+	sudo rm -rf /mnt/pmem0/jy/*
+	sudo rm -rf /mnt/pmem1/jy/*
+	sudo bin/rdma_server_skewed -t 5432 --pm_path /jy/1 --dataset /home/siisee11/git/NuMA/input_rand.txt --nr_data 10000000 -W 20 -K 26-27,36-37 -P 28-29,38-39 --tablesize 32768 --verbose -h
 
 gdb:
 	sudo rm -rf /mnt/pmem0/jy/*
 	sudo rm -rf /mnt/pmem1/jy/*
-	sudo gdb bin/tcp_server
+	sudo gdb bin/rdma_server_skewed
 
 free:
 	sudo rm -rf /mnt/pmem0/jy/*

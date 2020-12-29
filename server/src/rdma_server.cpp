@@ -1,5 +1,19 @@
 #include <stdio.h> 
 #include <netdb.h> 
+#include <fcntl.h>
+#include <stdarg.h>
+#include <unistd.h>
+#include <cstdlib>
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <thread>
+#include <getopt.h>
+#include <vector>
+#include <ctime>
+
+#include <numa.h>
+#include <netdb.h> 
 #include <netinet/in.h> 
 #include <stdlib.h> 
 #include <string.h> 
@@ -24,8 +38,16 @@
 #include <cstring>
 #include <atomic>
 
-#include "server.h"
+#include "NuMA_KV_PM.h"
+#include "variables.h"
+#include "CCEH_PM_hybrid.h"
+#include "circular_queue.h"
+
 #include "rdma.h"
+#include "server.h"
+#include "tcp_internal.h"
+#include "log.h"
+
 
 extern int ib_port;
 extern int tcp_port;
@@ -33,57 +55,85 @@ extern int tcp_port;
 #ifdef DEBUG
 extern int errno;
 #endif
-struct rdma_server_context* rctx = NULL;
 
+
+/* option values */
+int tcp_port = -1;
+int ib_port = 1;
+static int rdma_flag= 0;
+char *path;
+char *data_path;
+char *pm_path;
+size_t initialTableSize = 32*1024;
+size_t numData = 0;
+size_t numKVThreads = 0;
+size_t numNetworkThreads = 0;
+size_t numPollThreads = 0;
+bool numa_on = false;
+bool verbose_flag = false;
+bool human = false;
+struct bitmask *netcpubuf;
+struct bitmask *kvcpubuf;
+struct bitmask *pollcpubuf;
+
+/* Global variables */
+struct rdma_server_context* rctx = NULL;
+queue_t **lfqs;
+unsigned int nr_cpus;
+std::atomic<bool> done(false);
+
+/*
 pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queue_cv = PTHREAD_COND_INITIALIZER;
+*/
 
 static int running;
-extern std::atomic<bool> done;
 
-extern unsigned int nr_cpus;
 
 /* counting valuse */
-extern int putcnt;
-extern int getcnt;
-extern int sample_put_q_cnt;
-extern int sample_get_q_cnt;
-extern int sample_put_cnt;
-extern int sample_get_cnt;
-
+int putcnt = 0;
+int getcnt = 0;
+int sample_succ_get_cnt = 0;
+int sample_fail_get_cnt = 0;
 int found_cnt = 0;
 int notfound_cnt = 0;
+std::atomic<int> process_cnt[40];
 
 /* performance timer */
-extern uint64_t network_elapsed, pmput_elapsed, pmget_elapsed;
-extern uint64_t pmnet_rx_elapsed; 
-extern uint64_t pmget_notexist_elapsed, pmget_exist_elapsed;
-extern uint64_t pmput_queue_elapsed, pmget_queue_elapsed;
+uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0, pmlog_alloc_elapsed = 0;
+uint64_t pmnet_rx_elapsed=0; 
+uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
+uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
 uint64_t rdpma_handle_write_req_elapsed=0 , rdpma_handle_write_elapsed=0;
 uint64_t rdpma_handle_read_req_elapsed=0 , rdpma_handle_read_elapsed=0;
+
+static void dprintf( const char* format, ... ) {
+	if (verbose_flag) {
+		va_list args;
+		va_start( args, format );
+		vprintf( format, args );
+		va_end( args );
+	}
+}
+
+static void usage(){
+	printf("Usage\n");
+	printf("\nOptions:\n");
+	printf("\t-t --tcp_port=<port> (required) use <port> to listen tcp connection\n");
+	printf("\t-i --ib_port=<port> (required) use <port> of infiniband device (default=1)\n");
+	printf("\t-p --path=<port> (required) use <port> of infiniband device (default=1)\n");
+}
 
 static void rdpma_print_stats() {
 	printf("\n--------------------REPORT---------------------\n");
 //	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
 	printf("# of puts : %d , # of gets : %d ( %d / %d )\n",
 			putcnt, getcnt, found_cnt, notfound_cnt);
-	printf("[SAMPLE] # of puts : %d , # of gets : %d \n",
-			sample_put_cnt, sample_get_cnt);
-	printf("[SAMPLE] # of put_Q : %d , # of get_Q : %d \n",
-			sample_put_q_cnt, sample_get_q_cnt);
 
 	if (putcnt == 0)
 		putcnt++;
 	if (getcnt == 0)
 		getcnt++;
-	if (sample_get_cnt == 0)
-		sample_get_cnt++;
-	if (sample_put_cnt == 0)
-		sample_put_cnt++;
-	if (sample_get_q_cnt == 0)
-		sample_get_q_cnt++;
-	if (sample_put_q_cnt == 0)
-		sample_put_q_cnt++;
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
@@ -95,16 +145,27 @@ static void rdpma_print_stats() {
 			rdpma_handle_read_req_elapsed/getcnt/1000,
 			rdpma_handle_read_elapsed/getcnt/1000);
 
-#if 0 
-	printf("PUT : %lu (us), GET_TOTAL : %lu (us)\n",
-			pmput_elapsed/1000/sample_put_cnt,
-			(pmget_exist_elapsed/1000 + pmget_notexist_elapsed/1000)/sample_get_cnt);
-	printf("PUT_Q : %lu (us), GET_Q : %lu (us)\n",
-			pmput_queue_elapsed/1000/sample_put_q_cnt,
-			pmget_queue_elapsed/1000/sample_get_q_cnt);
-#endif
+	rctx->kv->PrintStats();
+
 	printf("--------------------FIN------------------------\n");
+
 }
+
+static void printCpuBuf(size_t nr_cpus, struct bitmask *bm, const char *str) {
+	/* Print User specified cpus */
+	dprintf("[ INFO ] %s\t threads: \t", str);
+	for ( int i = 0; i< nr_cpus; i++) {
+		if (i % 4 == 0)
+			dprintf(" ");
+		if (numa_bitmask_isbitset(bm, i))
+			dprintf("1");
+		else
+			dprintf("0");
+	}
+	dprintf("\n");
+}
+
+
 
 void sigint_callback_handler_rdma(int signal){
 	rdpma_print_stats();
@@ -351,6 +412,9 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 	int ne;
 	static int num = 1;
 	int targetQ;
+	int targetNode = 0;
+	int targetOp = 0;
+	int targetQueue = 0;
 
 	while(1){
 		ne = 0;
@@ -373,8 +437,13 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 			uint32_t num;
 			bit_unmask(ntohl(wc.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, node_id, msg_num);
+			targetNode = rctx->kv->GetNodeID(*key);
+			targetOp = type == MSG_WRITE_REQUEST || MSG_WRITE ? 0 : 1;
+			targetQueue = targetNode * 2 + targetOp;
+
 			targetQ = *key % nr_cpus;
-//			dprintf("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
+
+			//			dprintf("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 			post_recv(node_id);
 			if(type == MSG_WRITE_REQUEST){
 //				dprintf("[%s]: received MSG_WRITE_REQUEST\n", __func__);
@@ -383,7 +452,7 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 				new_request->node_id = node_id;
 				new_request->msg_num = msg_num;
 				new_request->num = num;
-				enqueue(lfqs[targetQ], (void*)new_request);
+				enqueue(lfqs[targetQueue], (void*)new_request);
 //				dprintf("[%s]: MSG_WRITE_REQUEST(%lx) enqueued\n", __func__, *key);
 				putcnt++;
 			}
@@ -394,7 +463,7 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 				new_request->node_id = node_id;
 				new_request->msg_num = msg_num;
 				new_request->num = num;
-				enqueue(lfqs[targetQ], (void*)new_request);
+				enqueue(lfqs[targetQueue], (void*)new_request);
 			}
 			else if(type == MSG_READ_REQUEST){
 //				dprintf("[%s]: received MSG_READ_REQUEST\n", __func__);
@@ -403,7 +472,7 @@ void server_recv_poll_cq(struct ibv_cq *cq){
 				new_request->node_id = node_id;
 				new_request->msg_num = msg_num;
 				new_request->num = num;
-				enqueue(lfqs[targetQ], (void*)new_request);
+				enqueue(lfqs[targetQueue], (void*)new_request);
 				getcnt++;
 			}
 			else if(type == MSG_READ_REPLY){
@@ -466,18 +535,21 @@ void event_handler(int cpu){
 			uint64_t* key = (uint64_t*)GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num);
 //			dprintf("Processing [MSG_WRITE] %d num pages (node=%x, msg_num=%x, key=%lx)\n", \
 					new_request->num, new_request->node_id, new_request->msg_num, *key);
+			int targetNode = rctx->kv->GetNodeID(*key);
 			for(int i = 0; i < new_request->num; i++){
 				TOID(char) temp;
-				POBJ_ALLOC(rctx->log_pop, &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
+				POBJ_ALLOC(rctx->log_pop[targetNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL);
 				uint64_t temp_addr = (uint64_t)rctx->log_pop + temp.oid.off;
 				memcpy((void*)temp_addr, (void *)(ptr + i * PAGE_SIZE), PAGE_SIZE);
-				pmemobj_persist(rctx->log_pop, (char*)temp_addr, sizeof(char)*PAGE_SIZE);
+				pmemobj_persist(rctx->log_pop[targetNode], (char*)temp_addr, sizeof(char)*PAGE_SIZE);
 
-				D_RW(rctx->hashtable)->Insert(rctx->index_pop, *key, (Value_t)temp_addr);
+				rctx->kv->Insert(*key, (Value_t)temp_addr, 0, 0); /* XXX */
+				/*
 				void* check = (void*)D_RW(rctx->hashtable)->Get(*key);
-//				dprintf("[%s]: Insert value to page: %lx\n", __func__, (uint64_t)ptr);
-//				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
-//				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
+				dprintf("[%s]: Insert value to page: %lx\n", __func__, (uint64_t)ptr);
+				fprintf(stderr, "Inserted value for key %lu (%lx)\n", *key, *key);
+				dprintf("[%s]: msg double check: %s\n", __func__, (char*)ptr);
+				*/
 
 				key += METADATA_SIZE;
 			}
@@ -503,7 +575,7 @@ void event_handler(int cpu){
 			bool abort = false;
 			for(int i=0; i<new_request->num; i++){
 				key = (uint64_t*)(GET_CLIENT_META_REGION(rctx->local_mm, new_request->node_id, new_request->msg_num) + i*METADATA_SIZE); 
-				values[i] = (void*)D_RW(rctx->hashtable)->Get(*key);
+				values[i] = (void*)rctx->kv->Get(*key, 0); /* XXX */
 				if(!values[i]){
 					dprintf("Value for key[%lx] not found\n", *key);
 					abort = true;
@@ -618,10 +690,11 @@ static int modify_qp(struct ibv_qp* qp, int my_psn, int sl, struct node_info* de
 }
 
 /* make PM file and global context */
-static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int size, int rx_depth, char *path){
+static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int size, int rx_depth, char *ipath){
 	int flags;
 	void* ptr;
-	char log_path[32] = "./jy/log";
+	char base_path[32] = "/mnt/pmem0";
+	char log_path[32] = "/jy/log";
 	const size_t hashtable_initialSize = 1024*16*4; 
 
 	rctx = (struct rdma_server_context*)malloc(sizeof(struct rdma_server_context));
@@ -630,49 +703,71 @@ static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int s
 	rctx->send_flags = IBV_SEND_SIGNALED;
 	rctx->rx_depth = rx_depth;
 	rctx->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
-	rctx->hashtable = OID_NULL;
 
 	dprintf("create request queue...\n");
-	rctx->request_queue = create_queue();
+	rctx->request_queue = create_queue("lfqs");
 	rctx->temp_log = (uint64_t**)malloc(sizeof(uint64_t*)*MAX_NODE);
 	for(int i=0; i<MAX_NODE; i++){
 		rctx->temp_log[i] = (uint64_t*)malloc(sizeof(uint64_t)*MAX_PROCESS);
 	}
 
-	if(access(log_path, 0) != 0){
-		rctx->log_pop = pmemobj_create(log_path, "log", LOG_SIZE, 0666);
-		if(!rctx->log_pop){
-			perror("pmemobj_create");
-			exit(0);
+	for( int i = 0; i < NUM_NUMA; i++ ) {
+		snprintf(&base_path[9], sizeof(int), "%d", i);
+		strncpy(&base_path[10], log_path, strlen(log_path));
+		if(access(base_path, 0) != 0){
+			rctx->log_pop[i] = pmemobj_create(base_path, POBJ_LAYOUT_NAME(LOG), LOG_SIZE, 0666);
+			if(!rctx->log_pop[i]){
+				perror("pmemobj_create");
+				exit(0);
+			}
 		}
-	}
-	else{
-		rctx->log_pop = pmemobj_open(log_path, "log");
-		if(!rctx->log_pop){
-			perror("pmemobj_open");
-			exit(0);
+		else{
+			rctx->log_pop[i] = pmemobj_open(base_path, POBJ_LAYOUT_NAME(LOG));
+			if(!rctx->log_pop){
+				perror("pmemobj_open");
+				exit(0);
+			}
 		}
 	}
 	dprintf("[  OK  ] log initialized\n");
 
-	if(access(path, 0) != 0){
-		rctx->index_pop = pmemobj_create(path, "index", INDEX_SIZE, 0666);
-		if(!rctx->index_pop){
-			perror("pmemobj_create");
-			exit(0);
+	bool exists = false;
+	char path[32] = "/mnt/pmem0";
+
+	for( int i = 0 ; i < NUM_NUMA; i++ ){
+		snprintf(&path[9], sizeof(int), "%d", i);
+		strncpy(&path[10], pm_path, strlen(pm_path));
+		dprintf("[ INFO ] File used for index: %s\n", path);
+		if(access(path, 0) != 0){
+			rctx->pop[i] = pmemobj_create(path, POBJ_LAYOUT_NAME(HashTable), INDEX_SIZE, 0666);
+			if(!rctx->pop[i]){
+				perror("pmemobj_create");
+				exit(1);
+			}
 		}
-		rctx->hashtable = POBJ_ROOT(rctx->index_pop, CCEH);
-		D_RW(rctx->hashtable)->initCCEH(rctx->index_pop, hashtable_initialSize);
+		else{
+			rctx->pop[i] = pmemobj_open(path, POBJ_LAYOUT_NAME(HashTable));
+			if(!rctx->pop[i]){
+				perror("pmemobj_open");
+				exit(1);
+			}
+			exists = true;
+		}
 	}
-	else{
-		rctx->index_pop = pmemobj_open(path, "index");
-		if(!rctx->index_pop){
-			perror("pmemobj_open");
-			exit(0);
+
+	if(!exists) {
+		rctx->kv = new NUMA_KV(rctx->pop, initialTableSize/Segment::kNumSlot, numKVThreads, numPollThreads);
+		dprintf("[  OK  ] KVStore Initialized\n");
+	} else {
+		rctx->kv = new NUMA_KV(rctx->pop, true, numKVThreads, numPollThreads);
+		if(!rctx->kv->Recovery()) {
+			dprintf("[ FAIL ] KVStore Recovered \n");
+			exit(1);
 		}
-		rctx->hashtable = POBJ_ROOT(rctx->index_pop, CCEH);
+		dprintf("[  OK  ] KVStore Recovered \n");
 	}
 	dprintf("[  OK  ] hashtable initialized\n");
+
 
 	rctx->context = ibv_open_device(dev);
 	if(!rctx->context){
@@ -711,7 +806,7 @@ static struct rdma_server_context* server_init_ctx(struct ibv_device* dev, int s
 		goto destroy_qp;
 	}
 
-	dprintf("[ INFO ] %s: Allocate queue pair region\n", __func__);
+//	printf("[%s] Allocate queue pair region\n", __func__);
 	rctx->qp = (struct ibv_qp**)malloc(MAX_NODE * sizeof(struct ibv_qp*));
 	for(int i=0; i<MAX_NODE; i++){
 		struct ibv_qp_init_attr init_attr;
@@ -764,7 +859,7 @@ void init_rdma_network(){
 	int cur_node = 0;
 	int sock, fd, ret;
 	struct sockaddr_in local_sock;
-	int gid_idx = 0;
+	int gid_idx = 0; /* XXX 0 -> 2 */
 	int on = 1;
 	running = 1;
 
@@ -802,12 +897,13 @@ void init_rdma_network(){
 			exit(1);
 		}
 		inet_ntop(AF_INET, &remote_sock.sin_addr, remote_ip, INET_ADDRSTRLEN);
-//		dprintf("TCP Socket accepted a connection %d from %s\n", cur_node, remote_ip);
+		dprintf("TCP Socket accepted a connection %d from %s\n", cur_node, remote_ip);
 
 		//	ret = ibv_query_gid(rctx->context, ib_port, 2, &gid);
 		ret = ibv_query_gid(rctx->context, ib_port, gid_idx, &gid);
 		if(ret){
-			fprintf(stderr, "ib_query_gid failed\n");
+			fprintf(stderr, "Error, failed to query GID index %d of port %d in device '%s'\n",
+							gid_idx, ib_port, ibv_get_device_name(rctx->context->device));
 			close(fd);
 			close(sock);
 			exit(1);
@@ -824,7 +920,7 @@ void init_rdma_network(){
 				local_node.node_id, local_node.lid, local_node.qpn, local_node.psn, local_node.mm, local_node.rkey);
 		ret = write(fd, (char*)&local_node, sizeof(struct node_info));
 		if(ret != sizeof(struct node_info)){
-			fprintf(stderr, "[TCP] write failed\n");
+			fprintf(stderr, "[ FAIL ] TCP write failed\n");
 			close(fd);
 			close(sock);
 			exit(1);
@@ -833,7 +929,7 @@ void init_rdma_network(){
 		//	ret = tcp_recv(fd, &remote_node, sizeof(struct node_info));
 		ret = read(fd, (char*)&remote_node, sizeof(struct node_info));
 		if(ret != sizeof(struct node_info)){
-			fprintf(stderr, "[TCP] read failed\n");
+			fprintf(stderr, "[ FAIL ] TCP read failed\n");
 			close(fd);
 			close(sock);
 			exit(1);
@@ -958,6 +1054,7 @@ int server_init_interface(char *path){
 	if(!dev)
 		die("ib_device is not found\n");
 
+/*
 	context = ibv_open_device(dev);
 	if(!context)
 		die("ibv_open_device failed\n");
@@ -965,7 +1062,6 @@ int server_init_interface(char *path){
 	ret = ibv_query_device(context, &dev_attr);
 	if(ret)
 		die("ibv_query_device failed\n");
-/*
 	dattr.comp_mask = IBV_EXP_DEVICE_ATTR_ODP | IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS;
 	ret = ibv_exp_query_device(context, &dattr);
 	if (dattr.exp_device_cap_flags & IBV_EXP_DEVICE_ODP)
@@ -977,8 +1073,11 @@ int server_init_interface(char *path){
 		die("server_init_rctx failed\n");
 
 	ret = ibv_query_port(rctx->context, ib_port, &rctx->port_attr);
-	if(ret)
-		die("ibv_query_port failed\n");
+	if(ret) {
+		fprintf(stderr, "Error, failed to query port %d attributes in device '%s'\n",
+						ib_port, ibv_get_device_name(rctx->context->device));
+		die("terminated\n");
+	}
 
 	ibv_free_device_list(dev_list);
 
@@ -1000,4 +1099,145 @@ void init_rdma_server(char *path){
 
 	printf("[ PASS ] Server successfully shutdown.\n");
 
+}
+
+int main(int argc, char* argv[]){
+	char hostname[64];
+
+	const char *short_options = "vs:t:i:n:d:z:hK:P:W:";
+	static struct option long_options[] =
+	{
+		{"verbose", 0, NULL, 'v'},
+		{"tcp_port", 1, NULL, 't'},
+		{"ib_port", 1, NULL, 'i'},
+		{"tablesize", 1, NULL, 's'},
+		{"dataset", 1, NULL, 'd'},
+		{"pm_path", 1, NULL, 'z'},
+		{"nr_data", 1, NULL, 'n'},
+		{"netcpubind", 1, NULL, 'W'},
+		{"kvcpubind", 1, NULL, 'K'},
+		{"pollcpubind", 1, NULL, 'P'},
+		{0, 0, 0, 0} 
+	};
+
+
+	while(1){
+		int c = getopt_long(argc, argv, short_options, long_options, NULL);
+		if(c == -1) break;
+		switch(c){
+			case 'i':
+				ib_port = strtol(optarg, NULL, 0);
+				if(ib_port <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+					return 0;
+				}
+				break;
+			case 't':
+				tcp_port = strtol(optarg, NULL, 0);
+				if(tcp_port <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+					return 0;
+				}
+				break;
+			case 'n':
+				numData = strtol(optarg, NULL, 0);
+				if(numData <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+					return 0;
+				}
+				break;
+			case 's':
+				initialTableSize = strtol(optarg, NULL, 0);
+				if(initialTableSize <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+					return 0;
+				}
+				break;
+			case 'd':
+				data_path = strdup(optarg);
+				break;
+			case 'z':
+				pm_path= strdup(optarg);
+				break;
+			case 'W':
+				netcpubuf = numa_parse_cpustring(optarg);
+				if (!netcpubuf) {
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+				}
+				break;
+			case 'K':
+				kvcpubuf = numa_parse_cpustring(optarg);
+				if (!kvcpubuf) {
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+				}
+				break;
+			case 'P':
+				pollcpubuf = numa_parse_cpustring(optarg);
+				if (!pollcpubuf) {
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+				}
+				break;
+			case 'h':
+				human = true;
+				break;
+			case 'v':
+				verbose_flag = 1;
+				break;
+			default:
+				printf ("%c, <%s> is invalid\n", (char)c,optarg);
+				usage();
+				return 0;
+		}
+	}
+
+	gethostname(hostname, 64);
+	dprintf("[ INFO ] Hostname:\t %s IB port:\t %d TCP port:\t %d\n", hostname, ib_port, tcp_port);
+
+	struct timespec i_start, i_end, g_start, g_end;
+	uint64_t i_elapsed, g_elapsed;
+
+
+	/* GET NUMA and CPU information */
+	nr_cpus = std::thread::hardware_concurrency();
+	dprintf("[ INFO ] NR_CPUS= %d\n", nr_cpus);
+
+	/* count number of threads */
+	for (int i = 0; i < nr_cpus ; i++) {
+		if (numa_bitmask_isbitset(netcpubuf, i))
+			numNetworkThreads++;	
+
+		if (numa_bitmask_isbitset(kvcpubuf, i))
+			numKVThreads++;	
+
+		if (numa_bitmask_isbitset(pollcpubuf, i))
+			numPollThreads++;	
+	}
+
+	/* Print User specified cpu binding */
+	printCpuBuf(nr_cpus, netcpubuf, "net");
+	printCpuBuf(nr_cpus, kvcpubuf, "kv");
+	printCpuBuf(nr_cpus, pollcpubuf, "cqpoll");
+
+//	lfqs = (queue_t**)malloc(nr_cpus * sizeof(queue_t*));
+	lfqs = (queue_t**)malloc(NUM_NUMA * sizeof(queue_t*) * 2); /* GET, PUT QUEUE seperation */
+//	for (int i = 0; i < nr_cpus; i++) {
+	for (int i = 0; i < NUM_NUMA * 2; i++) {
+		lfqs[i] = create_queue("lfqs");
+	}
+
+	for (int i = 0; i < nr_cpus; i++) {
+		process_cnt[i] = 0;
+	}
+
+	signal(SIGINT, sigint_callback_handler_rdma);
+	init_rdma_server(path);
+
+	return 0;
 }

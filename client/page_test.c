@@ -10,7 +10,7 @@
 #include "tcp.h"
 
 #define THREAD_NUM 4
-#define TOTAL_CAPACITY (PAGE_SIZE * 256)
+#define TOTAL_CAPACITY (PAGE_SIZE * 100000)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 void*** vpages;
@@ -59,7 +59,7 @@ int write_message_test(void* arg){
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
-		pr_info("write_message: %u\n", key);
+//		pr_info("write_message: %u\n", key);
 		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
 			(char *)vpages[tid][i], PAGE_SIZE, 0, &status);
 	}
@@ -100,7 +100,6 @@ int single_read_message_test(void* arg){
 int read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, i, status;
-	int result = 0;
 	uint32_t key, index = 0;
 	int tid = my_data->tid;
 	int nfailed = 0;
@@ -111,7 +110,7 @@ int read_message_test(void* arg){
 				return_page[tid], PAGE_SIZE, 0, &status);
 
 		if(memcmp(return_page[tid], (char *)vpages[tid][i], PAGE_SIZE) != 0){
-			printk("failed Searching for key %x\n return: %s\nexpect: %s", key, (char *)return_page[tid], (char *)vpages[tid][i]);
+//			printk("failed Searching for key %x\n return: %s\nexpect: %s", key, (char *)return_page[tid], (char *)vpages[tid][i]);
 			nfailed++;
 		}
 	}
@@ -188,7 +187,6 @@ int main(void){
 int init_pages(void){
 	int i, j;
 	uint64_t key = 0;
-	u64 rand;
 	char str[8];
 
 	write_threads = (struct task_struct**)kmalloc(sizeof(struct task_struct*)*THREAD_NUM, GFP_KERNEL);

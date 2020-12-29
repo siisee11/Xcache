@@ -18,10 +18,6 @@
 
 #include <infiniband/verbs.h>
 
-#include "queue.h"
-#include "CCEH.h"
-#include "log.h"
-
 #define LOG_SIZE (42949672960) // 40GB
 #define INDEX_SIZE (10737418240) // 10GB
 
@@ -97,9 +93,10 @@ struct rdma_server_context{
     struct queue_t* request_queue;
 
     uint64_t** temp_log;
-    PMEMobjpool* log_pop;
-    PMEMobjpool* index_pop;
-    TOID(CCEH) hashtable;
+
+    PMEMobjpool* log_pop[NUM_NUMA];
+	PMEMobjpool* pop[NUM_NUMA];
+    NUMA_KV* kv;
 };
 
 

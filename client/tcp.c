@@ -1145,7 +1145,7 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 	pmnet_set_func_start_time(sc);
 	switch(be16_to_cpu(hdr->msg_type)) {
 		case PMNET_MSG_SENDPAGE:
-			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n",  \
+//			pr_info("SERVER-->CLIENT: PMNET_MSG_SENDPAGE (key=%x, index=%x, msg_num=%x)\n",  \
 					be32_to_cpu(hdr->key), be32_to_cpu(hdr->index), be32_to_cpu(hdr->msg_num));
 
 			ret_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
