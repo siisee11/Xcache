@@ -332,11 +332,14 @@ RETRY:
 				lrfu[cur_node_id].crf = crf;
 				lrfu[cur_node_id].atime = gtime;
 #endif
+
+#ifdef STATISTIC
 				/* statistic */
 				unsigned f = freq[cur_node_id];
 				while(!CAS(&freq[cur_node_id], &f, f+1)){
 					f = freq[cur_node_id];
 				}
+#endif
 
 				return;
 			}
@@ -365,11 +368,14 @@ RETRY:
 				lrfu[cur_node_id].crf = crf;
 				lrfu[cur_node_id].atime = gtime;
 #endif
+
+#ifdef STATISTIC
 				/* statistic */
 				unsigned f = freq[cur_node_id];
 				while(!CAS(&freq[cur_node_id], &f, f+1)){
 					f = freq[cur_node_id];
 				}
+#endif
 
 				return;
 			}
@@ -447,17 +453,22 @@ RETRY:
 	if ( lrfu[cur_node_id].crf - min_load > 1 )
 		target_node_id = min_node_id;
 
+#ifdef STATISTIC
 	size_t load = segments_in_node[target_node_id];
 	while(!CAS(&segments_in_node[target_node_id], &load, load+1)){
 		load = segments_in_node[target_node_id];
 	}
+#endif
 
 	auto s = D_RW(target)->Split(pop[target_node_id]);
 #else /* SKEWED */
+
+#ifdef STATISTIC
 	size_t load = segments_in_node[0];
 	while(!CAS(&segments_in_node[0], &load, load+1)){
 		load = segments_in_node[0];
 	}
+#endif
 	auto s = D_RW(target)->Split(pop[0]);
 #endif
 

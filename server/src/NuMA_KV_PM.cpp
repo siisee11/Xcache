@@ -23,6 +23,8 @@ extern size_t numData;
 extern struct bitmask *netcpubuf;
 extern struct bitmask *kvcpubuf;
 extern struct bitmask *pollcpubuf;
+extern int putcnt;
+extern int getcnt;
 
 RequestPool* RequestPool::instance = nullptr;
 
@@ -53,6 +55,7 @@ NUMA_KV::NUMA_KV(PMEMobjpool **pop, size_t initCap, size_t nThreads, size_t nPol
 		dprintf("[ FAIL ] NUMA feature OFF\n");
 
 
+#ifdef NUMAQ
 	perNodeQueue = (queue_t**)malloc(kNumNodes * sizeof(queue_t*));
 	for (int i = 0; i < kNumNodes; i++) {
 		perNodeQueue[i] = create_queue("perNodeQueue");
@@ -208,6 +211,7 @@ NUMA_KV::NUMA_KV(PMEMobjpool **pop, size_t initCap, size_t nThreads, size_t nPol
 		if ( t_id == nPollThreads )
 			break;
 	}
+#endif /* -------------------------------------------- NUMAQ ------------------------------------------- */
 
 	dprintf("[  OK  ] Thread init\n");
 }
@@ -420,9 +424,9 @@ void NUMA_KV::PrintStats(void) {
 	printf("Remote request on Node \t0= %d, 1= %d\n", miss_cnt[0].load(), miss_cnt[1].load());
 	printf("Segments in Node \t0= %zu, 1= %zu\n", segs[0], segs[1]);
 	printf("LRFU Value on Node \t0= %f, 1=%f\n", metrics[0], metrics[1]);
-	printf("QueueTime = \t%.3f (usec/req)\n", perNodeQueueTime/1000.0/numData/2);
-	printf("InsertTime = \t%.3f (usec/req)\n", insertTime/1000.0/numData);
-	printf("GetTime= \t%.3f (usec/req)\n", getTime/1000.0/numData);
+	printf("QueueTime = \t%.3f (usec/req)\n", perNodeQueueTime/1000.0/putcnt + getcnt);
+	printf("InsertTime = \t%.3f (usec/req)\n", insertTime/1000.0/putcnt);
+	printf("GetTime= \t%.3f (usec/req)\n", getTime/1000.0/getcnt);
 
 	printf("%.3f, %lu, %d, %d, %d, %d, %zu, %zu, %.3f, %.3f, %.3f, %.3f, %.3f\n", util, cap, freqs[0], freqs[1], miss_cnt[0].load(), miss_cnt[1].load(), segs[0], segs[1], metrics[0], metrics[1],
 			perNodeQueueTime/1000.0/numData/2, insertTime/1000.0/numData, getTime/1000.0/numData);

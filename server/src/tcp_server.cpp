@@ -113,7 +113,7 @@ std::atomic<int> process_cnt[40];
 /* performance timer */
 uint64_t network_elapsed=0, pmput_elapsed=0, pmget_elapsed=0, pmlog_alloc_elapsed = 0;
 uint64_t pmnet_rx_elapsed=0; 
-uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0;
+uint64_t pmget_notexist_elapsed=0, pmget_exist_elapsed=0, pmget_send_elapsed =0;
 uint64_t pmput_queue_elapsed=0, pmget_queue_elapsed=0;
 
 static void pmnet_rx_until_empty(struct pmnet_sock_container *sc);
@@ -160,10 +160,10 @@ static void print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("PUT : %.3f (usec/op), GET(SUCC): %.3f (usec/op), GET(FAIL): %.3f (usec/op)\n",
+	printf("PUT : %.3f (usec/op), GET: %.3f (usec/op), GET(SEND): %.3f (usec/op)\n",
 			pmput_elapsed/1000.0/sample_put_cnt,
-			pmget_exist_elapsed/1000.0/sample_succ_get_cnt,
-			pmget_notexist_elapsed/1000.0/sample_fail_get_cnt);
+			pmget_elapsed/1000.0/sample_get_cnt,
+			pmget_send_elapsed/1000.0/sample_get_cnt);
 	printf("PUT_Q : %.3f (usec/op), GET_Q : %.3f (usec/op)\n",
 			pmput_queue_elapsed/1000.0/sample_put_q_cnt,
 			pmget_queue_elapsed/1000.0/sample_get_q_cnt);
@@ -392,7 +392,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 {
 	int ret = 0;
 	int status;
-	char reply[4096];
 	void *data;
 	size_t datalen;
 	void *to_va, *from_va;
@@ -465,9 +464,9 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			 */
 			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
 #else /* MEMORY MODE */
-			uint64_t *temp_addr = (uint64_t *)malloc(sizeof(char) * PAGE_SIZE);
-			memcpy(temp_addr, from_va, sizeof(char) * PAGE_SIZE);
-			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
+//			uint64_t *temp_addr = (uint64_t *)malloc(sizeof(char) * PAGE_SIZE);
+//			memcpy(temp_addr, from_va, sizeof(char) * PAGE_SIZE);  /* malloc and memcpy overhead is large */
+			ctx->kv->Insert(key, (Value_t)from_va, 0, thisNode);
 #endif
 
 #if defined(TIME_CHECK)
@@ -487,7 +486,6 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 			getcnt++;
 #ifdef PRETEND_GET_FAIL
 			/* page not exists */
-			memset(&reply, 0, PAGE_SIZE);
 			ret = pmnet_send_message(sc, PMNET_MSG_NOTEXIST, ntohl(hdr->key), ntohl(hdr->index), 
 					ntohl(hdr->msg_num), NULL, 0);
 #else
@@ -497,22 +495,16 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				pmget_queue_elapsed += start.tv_nsec - msg_in->timer.tv_nsec + 1000000000 * (start.tv_sec - msg_in->timer.tv_sec);
 				sample_get_q_cnt++;
+				sample_get_cnt++;
+				checkit = true;
 			}
-#endif
+#endif   /* --------------------------------------------------------------------- pmget_queue */
 
 			/* alloc new page pointer to send */
 			saved_page = malloc(PAGE_SIZE);
 
 			/* key */
 			key = pmnet_long_key(ntohl(hdr->key), ntohl(hdr->index));
-
-#if defined(TIME_CHECK)
-			if (getcnt % NR_GET_TIME_CHECK == 0) {
-				sample_get_cnt++;
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				checkit = true;
-			}
-#endif   /* --------------------------------------------------------------------- pmget */
 
 			/*
 			 * Get saved page.
@@ -527,8 +519,17 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				abort = true;
 			}
 
+#if defined(TIME_CHECK)
+			if (checkit) {
+				clock_gettime(CLOCK_MONOTONIC, &end);
+				pmget_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+				sample_succ_get_cnt++;
+			}
+#endif   /* --------------------------------------------------------------------- pmget */
+
 			if(!abort){
 				/* page exists */
+				sample_succ_get_cnt++;
 #ifdef APPDIRECT
 				memcpy(saved_page, addr, PAGE_SIZE);
 				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
@@ -538,32 +539,25 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 					ntohl(hdr->msg_num), (void *)addr, PAGE_SIZE);
 #endif
 
-#if defined(TIME_CHECK)
-				if (checkit) {
-					clock_gettime(CLOCK_MONOTONIC, &end);
-					pmget_exist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-					sample_succ_get_cnt++;
-				}
-#endif   /* --------------------------------------------------------------------- pmget */
-//				printf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
-//				printf("%s ]\n", saved_page);
+
+//				dprintf("[ Retrived (key=%x, index=%x, msg_num=%x) ", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
+//				dprintf("%s ]\n", saved_page);
 			}
 			else{
 				/* page not exists */
-				memset(&reply, 0, PAGE_SIZE);
+				sample_fail_get_cnt++;
 				ret = pmnet_send_message(sc, PMNET_MSG_NOTEXIST, ntohl(hdr->key), ntohl(hdr->index), 
 						ntohl(hdr->msg_num), NULL, 0);
-
-#if defined(TIME_CHECK)
-				if (checkit) {
-					clock_gettime(CLOCK_MONOTONIC, &end);
-					pmget_notexist_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-					sample_fail_get_cnt++;
-				}
-#endif   /* --------------------------------------------------------------------- pmget */
-
 //				printf("PAGE NOT EXIST (key=%x, index=%x, msg_num=%x)\n", ntohl(hdr->key), ntohl(hdr->index), ntohl(hdr->msg_num));
 			}
+
+#if defined(TIME_CHECK)
+			if (checkit) {
+				clock_gettime(CLOCK_MONOTONIC, &start);
+				pmget_send_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+			}
+#endif   /* --------------------------------------------------------------------- pmget_send */
+
 #endif /* PRETEND_GET_FAIL */
 			break;
 		}
