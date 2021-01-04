@@ -1,7 +1,6 @@
 #ifndef _RDMA_OP_H_
 #define _RDMA_OP_H_
 
-#include "rdma_conn.h"
 /*
 static inline int begin_read(struct rdma_queue *q, struct page *page, u64 roffset);
 static int drain_queue(struct rdma_queue *q);

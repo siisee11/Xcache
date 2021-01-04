@@ -3,6 +3,7 @@
 #include <linux/slab.h>
 #include <linux/cpumask.h>
 
+#include "rdma_conn.h"
 #include "rdma_op.h"
 
 extern struct pmdfc_rdma_ctrl *gctrl;
@@ -199,7 +200,7 @@ int pmdfc_rdma_write(struct page *page, u64 roffset)
   int ret;
   struct rdma_queue *q;
 
-  VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+  //VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 
   q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
   ret = write_queue_add(q, page, roffset);
@@ -231,9 +232,9 @@ int pmdfc_rdma_read_sync(struct page *page, u64 roffset)
   struct rdma_queue *q;
   int ret;
 
-  VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-  VM_BUG_ON_PAGE(!PageLocked(page), page);
-  VM_BUG_ON_PAGE(PageUptodate(page), page);
+  //VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+  //VM_BUG_ON_PAGE(!PageLocked(page), page);
+  //VM_BUG_ON_PAGE(PageUptodate(page), page);
 
   q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_SYNC);
   ret = begin_read(q, page, roffset);
@@ -252,7 +253,17 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 					       enum qp_type type)
 {
   BUG_ON(gctrl == NULL);
+ 
+  switch (type) {
+    case QP_READ_SYNC:
+      return &gctrl->queues[0];
+    case QP_WRITE_SYNC:
+      return &gctrl->queues[1];
+    default:
+      BUG();
+  };
 
+  /*
   switch (type) {
     case QP_READ_SYNC:
       return &gctrl->queues[cpuid];
@@ -263,4 +274,5 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
     default:
       BUG();
   };
+  */
 }
