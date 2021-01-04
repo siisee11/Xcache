@@ -1,6 +1,7 @@
 .PHONY: clean all
 
-CFLAGS := -Wall -O2 -g -ggdb -Werror -lrdmacm -libverbs -lpthread
+#CFLAGS := -Wall -O2 -g -ggdb -Werror -lrdmacm -libverbs -lpthread
+CFLAGS := -Wall -O2 -Werror -lrdmacm -libverbs -lpthread
 #CFLAGS := -Wall -O2 -Werror
 #LDLIBS := ${LDLIBS} -lrdmacm -libverbs -lpthread
 CC := g++

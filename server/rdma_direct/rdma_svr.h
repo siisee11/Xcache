@@ -4,11 +4,11 @@
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
-const size_t BUFFER_SIZE = ((1UL << 30) * 10);
-const unsigned int NUM_PROCS = 8;
-const unsigned int NUM_QUEUES_PER_PROC = 3;
+const size_t BUFFER_SIZE = ((1UL << 30) * 16);
+//const unsigned int NUM_PROCS = 8;
+//const unsigned int NUM_QUEUES_PER_PROC = 3;
 //const unsigned int NUM_QUEUES = NUM_PROCS * NUM_QUEUES_PER_PROC;
-const unsigned int NUM_QUEUES = 1;
+const unsigned int NUM_QUEUES = 2;
 
 struct device {
   struct ibv_pd *pd;
