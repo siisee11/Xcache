@@ -23,15 +23,15 @@
 
 #define PMDFC_GET 1
 #define PMDFC_PUT 1
+//#define PMDFC_BF 1
 
 //#define BITS 20 // 2^10: 1024, 2^20: 104857 max coverage: 4 * 2^30 
-#define BITS 21 // 4KB x 2 x 2^20
+#define BITS 21 // 8GB=4KB x 2 x 2^20
 #define NUM_PAGES (1UL << BITS) 
 #define REMOTE_BUF_SIZE (PAGE_SIZE * NUM_PAGES) 
 
 #define SAMPLE_RATE 5000
-unsigned long put_cnt = 0;
-unsigned long get_cnt = 0;
+unsigned long put_cnt = 0, get_cnt = 0;
 
 // Remote buffer address mapping
 atomic_long_t mr_free_start;
@@ -80,7 +80,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
     BUG_ON(oid.oid[1] != 0);
     BUG_ON(oid.oid[2] != 0);
     
-    tmp = (struct ht_data *)kzalloc(sizeof(struct ht_data), GFP_ATOMIC);
+    tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
 
     tmp->longkey = get_longkey((long)oid.oid[0], index);
     tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
@@ -94,14 +94,17 @@ static void pmdfc_cleancache_put_page(int pool_id,
     } 
     put_cnt++;
 
-    hash_add(hash_head, &tmp->h_node, tmp->longkey);
+    hash_add(hash_head, &tmp->h_node, tmp->longkey);  
     memcpy((void *) (dram_buf + tmp->roffset), page_vaddr, PAGE_SIZE);
-    
+
+#ifdef PMDFC_BF 
     ret = bloom_filter_add(bf, data, 24);
     if (ret < 0) {
         pr_warn("[ WARN ] bloom_filter add fail\n");
     }
-#endif
+#endif 
+
+#endif // PMDFC_PUT
 }
 
 static int pmdfc_cleancache_get_page(int pool_id,
@@ -133,11 +136,12 @@ static int pmdfc_cleancache_get_page(int pool_id,
     BUG_ON(oid.oid[2] != 0);
 
     BUG_ON(page == NULL); 
-    
+
+#ifdef PMDFC_BF
     bloom_filter_check(bf, data, 24, &isIn); 
     if (!isIn)
         goto not_exist;
-
+#endif 
     longkey = get_longkey((long)oid.oid[0], index);  
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
         if (cur->longkey == longkey) {
@@ -250,8 +254,10 @@ static int __init pmdfc_init(void)
     pr_info("[ OK ] vzalloc'ed %lu GB for dram backend\n", 
             REMOTE_BUF_SIZE/1024/1024/1024); 
 
+#ifdef PMDFC_BF
     bloom_filter_init();
     pr_info("[ OK ] bloom filter initialized\n");
+#endif
 
     ret = pmdfc_cleancache_register_ops();
 
@@ -290,7 +296,9 @@ static void pmdfc_exit(void)
     }
     
     vfree(dram_buf);
+#ifdef PMDFC_BF
     bloom_filter_unref(bf);
+#endif
     pr_info("[  OK  ] pmdfc_exit\n");
 }
 
