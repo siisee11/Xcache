@@ -1,0 +1,3 @@
+[submodule "pmdfc_kernel"]
+	path = pmdfc_kernel
+	url = git@github.com:daegyu94/pmdfc_kernel.git
