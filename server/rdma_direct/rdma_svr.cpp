@@ -2,12 +2,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <numa.h>
 #include <rdma/rdma_cma.h>
 
 #include "rdma_svr.h"
 
 static struct ctrl *gctrl = NULL;
 static unsigned int queue_ctr = 0;
+
+#ifdef APP_DIRECT
+static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
+#endif
 
 static device *get_device(struct queue *q)
 {
@@ -21,10 +31,64 @@ static device *get_device(struct queue *q)
     dev->pd = ibv_alloc_pd(dev->verbs);
     TEST_Z(dev->pd);
 
-    struct ctrl *ctrl = q->ctrl;
+
+    struct ctrl *ctrl = q->ctrl;    
+#if APP_DIRECT
+    /*
+    if (access(pm_path, 0)) {
+        ctrl->pop = pmemobj_create(pm_path, POBJ_LAYOUT_NAME(PM_MR),
+                BUFFER_SIZE, 0666);
+        if(!ctrl->pop){
+            perror("pmemobj_create");
+            exit(0);
+        }
+    } else {
+        ctrl->pop = pmemobj_open(pm_path, POBJ_LAYOUT_NAME(PM_MR));
+        if(!ctrl->pop){
+            perror("pmemobj_open");
+            exit(0);
+        }
+    }
+    printf("[  OK  ] PM initialized\n");
+    POBJ_ALLOC(ctrl->pop, &ctrl->p_mr, void, BUFFER_SIZE, NULL, NULL);
+    ctrl->buffer = (void *)&ctrl->p_mr;
+    */
+    struct stat sb;
+    int flag = PROT_WRITE | PROT_READ | PROT_EXEC;
+    
+    if ((ctrl->fd = open(pm_path, O_RDWR|O_CREAT, 645)) < 0) {
+        perror("File Open Error");
+        exit(1);
+    }
+
+    if (fstat(ctrl->fd, &sb) < 0) {
+        perror("fstat error");
+        exit(1);
+    }
+    ctrl->buffer = mmap(0, BUFFER_SIZE, flag, MAP_SHARED, ctrl->fd, 0); //XXX
+    //memset(ctrl->buffer, 0x00, BUFFER_SIZE);
+
+    if (ctrl->buffer == MAP_FAILED) {
+        perror("mmap error");
+        exit(1);
+    }
+    
+    TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
+      dev->pd,
+      ctrl->buffer,
+      BUFFER_SIZE,
+      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ)); // XXX
+    printf("[  OK  ] PM MR initialized\n");
+#elif DAX_KMEM
+    int dax_kmem_node = 3;
+    ctrl->buffer = numa_alloc_onnode(BUFFER_SIZE, dax_kmem_node); 
+    TEST_Z(ctrl->buffer);
+    printf("[  OK  ] DAX KMEM MR initialized\n");
+#else
     ctrl->buffer = malloc(BUFFER_SIZE);
     TEST_Z(ctrl->buffer);
-
+    printf("[  OK  ] DRAM MR initialized\n");
+#endif
     TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
       dev->pd,
       ctrl->buffer,
@@ -43,6 +107,10 @@ static void destroy_device(struct ctrl *ctrl)
   TEST_Z(ctrl->dev);
 
   ibv_dereg_mr(ctrl->mr_buffer);
+#ifdef APP_DIRECT
+    munmap(ctrl->buffer, BUFFER_SIZE);
+    close(ctrl->fd);
+#endif
   free(ctrl->buffer);
   ibv_dealloc_pd(ctrl->dev->pd);
   free(ctrl->dev);
@@ -188,7 +256,7 @@ int main(int argc, char **argv)
         printf("Usage ./rdma_direct_svr.out <port>\n");
     die("Need to specify a port number to listen");
   }
-
+  
   addr.sin_family = AF_INET;
   addr.sin_port = htons(atoi(argv[1]));
 
@@ -233,6 +301,7 @@ int main(int argc, char **argv)
   rdma_destroy_event_channel(ec);
   rdma_destroy_id(listener);
   destroy_device(gctrl);
+
   return 0;
 }
 

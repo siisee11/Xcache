@@ -34,7 +34,8 @@ struct dentry *pmdfc_dentry;
 #endif
 
 // Hashtable
-#define BITS 21 // 8GB=4KBx2x2^20
+//#define BITS 21 // 8GB=4KBx2x2^20
+#define BITS 22 // 16GB=4KBx4x2^20
 #define NUM_PAGES (1UL << BITS)
 #define REMOTE_BUF_SIZE (PAGE_SIZE * NUM_PAGES)
 DEFINE_HASHTABLE(hash_head, BITS);
@@ -44,7 +45,7 @@ atomic_long_t mr_free_start;
 extern long mr_free_end;
 
 static int rdma, rdma_direct;
-#define SAMPLE_RATE 1000000; // Per-MB
+#define SAMPLE_RATE 10000 // Per-MB
 static long put_cnt, get_cnt;
 
 /* bloom filter */
@@ -391,6 +392,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
             }
             ret = pmdfc_rdma_read_sync(page, roffset); 
             get_cnt++;
+            pmdfc_rdma_poll_load(smp_processor_id());
             atomic_set(&found, 0);
         } else {
             if (status != 0) {

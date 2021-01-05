@@ -20,12 +20,16 @@ module_param_named(nq, numqueues, int, 0644);
 module_param_string(sip, serverip, INET_ADDRSTRLEN, 0644);
 module_param_string(cip, clientip, INET_ADDRSTRLEN, 0644);
 
+
+#ifdef SINGLE_TEST
+static int SINGLE_QUEUE = 2;
+#endif
 // TODO: destroy ctrl
 
 #define CONNECTION_TIMEOUT_MS 60000
 #define QP_QUEUE_DEPTH 256
 /* we don't really use recv wrs, so any small number should do */
-#define QP_MAX_RECV_WR 4
+#define QP_MAX_RECV_WR 4096
 /* we mainly do send wrs */
 int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
@@ -352,16 +356,17 @@ static void pmdfc_rdma_free_queue(struct rdma_queue *q)
 static int pmdfc_rdma_init_queues(struct pmdfc_rdma_ctrl *ctrl)
 {
   int ret, i;
+#ifdef SINGLE_TEST
   // for test, 0: read_sync, 1: write_sync
-  for (i = 0; i < 2; ++i) {
+  for (i = 0; i < SINGLE_QUEUE; ++i) {
     ret = pmdfc_rdma_init_queue(ctrl, i);
     if (ret) {
       pr_err("[ FAIL ] failed to initialized queue: %d\n", i);
       goto out_free_queues;
     }
   }
-
-  /*
+#else
+  // usually numqueues is same as numcpus
   for (i = 0; i < numqueues; ++i) {
     ret = pmdfc_rdma_init_queue(ctrl, i);
     if (ret) {
@@ -369,7 +374,8 @@ static int pmdfc_rdma_init_queues(struct pmdfc_rdma_ctrl *ctrl)
       goto out_free_queues;
     }
   }
-  */
+#endif
+
   return 0;
 
 out_free_queues:
@@ -565,22 +571,18 @@ out:
 /* idx is absolute id (i.e. > than number of cpus) */
 inline enum qp_type get_queue_type(unsigned int idx)
 {
+#ifdef SINGLE_TEST
   // just for test
   if (idx == 0)
       return QP_READ_SYNC;
   else if (idx == 1)
       return QP_WRITE_SYNC;
-
-  /*
-  // numcpus = 8
-  if (idx < numcpus)
-    return QP_READ_SYNC; // read page, for test
-  else if (idx < numcpus * 2)
-    return QP_READ_ASYNC; // prefetch pages
-  else if (idx < numcpus * 3)
+#else
+  if (idx < numcpus / 2)
+    return QP_READ_SYNC; // read page
+  else if (idx >= numcpus / 2)
     return QP_WRITE_SYNC; // write page
-  */
-
+#endif
   BUG();
   return QP_READ_SYNC;
 }

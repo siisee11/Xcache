@@ -1,6 +1,14 @@
 #ifndef _RDMA_DIRECT_SVR_H_
 #define _RDMA_DIRECT_SVR_H_
 
+#ifdef APP_DIRECT
+#include <libpmemobj.h>
+
+POBJ_LAYOUT_BEGIN(PM_MR);
+POBJ_LAYOUT_TOID(PM_MR, void);
+POBJ_LAYOUT_END(PM_MR);
+#endif
+
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
@@ -8,7 +16,8 @@ const size_t BUFFER_SIZE = ((1UL << 30) * 16);
 //const unsigned int NUM_PROCS = 8;
 //const unsigned int NUM_QUEUES_PER_PROC = 3;
 //const unsigned int NUM_QUEUES = NUM_PROCS * NUM_QUEUES_PER_PROC;
-const unsigned int NUM_QUEUES = 2;
+//const unsigned int NUM_QUEUES = 2;
+const unsigned int NUM_QUEUES = 16;
 
 struct device {
   struct ibv_pd *pd;
@@ -29,6 +38,11 @@ struct queue {
 struct ctrl {
   struct queue *queues;
   struct ibv_mr *mr_buffer;
+#ifdef APP_DIRECT
+  PMEMobjpool *pop;
+  TOID(void) p_mr;
+  int fd;
+#endif
   void *buffer;
   struct device *dev;
 

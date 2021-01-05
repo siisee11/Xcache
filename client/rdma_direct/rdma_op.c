@@ -6,6 +6,8 @@
 #include "rdma_conn.h"
 #include "rdma_op.h"
 
+//#define SINGLE_TEST 1
+
 extern struct pmdfc_rdma_ctrl *gctrl;
 extern int numcpus;
 extern struct kmem_cache *req_cache;
@@ -182,7 +184,8 @@ static inline int begin_read(struct rdma_queue *q, struct page *page,
    * QP_MAX_SEND_WR at a time */
   while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR) {
     BUG_ON(inflight > QP_MAX_SEND_WR); /* only valid case is == */
-    poll_target(q, 8);
+    //poll_target(q, 8);
+    poll_target(q, 2048);
     pr_info_ratelimited("[ WARN ] back pressure happened on reads");
   }
 
@@ -201,8 +204,9 @@ int pmdfc_rdma_write(struct page *page, u64 roffset)
   struct rdma_queue *q;
 
   //VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-
+  
   q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
+ 
   ret = write_queue_add(q, page, roffset);
   BUG_ON(ret);
   drain_queue(q);
@@ -217,11 +221,12 @@ int pmdfc_rdma_read_async(struct page *page, u64 roffset)
   struct rdma_queue *q;
   int ret;
 
-  VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-  VM_BUG_ON_PAGE(!PageLocked(page), page);
-  VM_BUG_ON_PAGE(PageUptodate(page), page);
+  //VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+  //VM_BUG_ON_PAGE(!PageLocked(page), page);
+  //VM_BUG_ON_PAGE(PageUptodate(page), page);
 
   q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_ASYNC);
+
   ret = begin_read(q, page, roffset);
   return ret;
 }
@@ -253,7 +258,8 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 					       enum qp_type type)
 {
   BUG_ON(gctrl == NULL);
- 
+
+#ifdef SINGLE_TEST
   switch (type) {
     case QP_READ_SYNC:
       return &gctrl->queues[0];
@@ -262,17 +268,18 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
     default:
       BUG();
   };
-
-  /*
+#else
   switch (type) {
     case QP_READ_SYNC:
+      if (cpuid >= numcpus / 2)
+          cpuid = cpuid - (numcpus / 2);
       return &gctrl->queues[cpuid];
-    case QP_READ_ASYNC:
-      return &gctrl->queues[cpuid + numcpus];
     case QP_WRITE_SYNC:
-      return &gctrl->queues[cpuid + numcpus * 2];
+      if (cpuid < numcpus / 2)
+          cpuid = cpuid + (numcpus / 2);
+      return &gctrl->queues[cpuid];
     default:
       BUG();
   };
-  */
+#endif
 }
