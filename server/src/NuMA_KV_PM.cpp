@@ -45,8 +45,8 @@ NUMA_KV::NUMA_KV(PMEMobjpool **pop, bool recovery, size_t nThreads, size_t nPoll
 	dprintf("[  OK  ] NUMA_KV \n");
 }
 
-NUMA_KV::NUMA_KV(PMEMobjpool **pop, size_t initCap, size_t nThreads, size_t nPollThreads)
-	: cceh{new CCEH(pop, static_cast<size_t>(initCap))}
+NUMA_KV::NUMA_KV(PMEMobjpool **pop, PMEMobjpool **lpop, size_t initCap, size_t nThreads, size_t nPollThreads)
+	: cceh{new CCEH(pop, lpop, static_cast<size_t>(initCap))}
 {
 	int numable = numa_available();
 	if (numable == 0)
@@ -229,11 +229,7 @@ void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 
 	if( thisNode != node ){ 
 		miss_cnt[thisNode]++;
-#ifdef REQUESTPOOL
-		struct work_request *wr = (struct work_request *)RequestPool::GetInstance()->get_wr();
-#else
 		struct work_request *wr = (struct work_request *)malloc(sizeof(struct work_request));
-#endif /* REQUESTPOOL */
 		wr->unique_id = unique_id;
 		wr->msg_type = MSG_INSERT;
 		wr->value = value;
@@ -266,7 +262,7 @@ void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 #ifdef KV_DEBUG
 	auto node = cceh->GetNodeID(key);
 
-	if( thisNode != node )
+	if( node != -1 && thisNode != node )
 		miss_cnt[thisNode]++;
 
 	struct timespec i_start;
@@ -308,12 +304,7 @@ void NUMA_KV::Get(Key_t& key, int unique_id, int thisNode) {
 #ifdef NUMAQ
 	auto node = cceh->GetNodeID(key);
 
-#ifdef REQUESTPOOL
-	struct work_request *wr = (struct work_request *)RequestPool::GetInstance()->get_wr();
-#else
 	struct work_request *wr = (struct work_request *)malloc(sizeof(struct work_request));
-#endif /* REQUESTPOOL */
-
 
 	wr->unique_id = unique_id;
 	wr->msg_type = MSG_GET;
@@ -331,16 +322,12 @@ void NUMA_KV::Get(Key_t& key, int unique_id, int thisNode) {
 	}
 #else /* NUMAQ */
 
-#ifdef REQUESTPOOL
-	struct work_request *wr = (struct work_request *)RequestPool::GetInstance()->get_wr();
-#else
 	struct work_request *wr = (struct work_request *)malloc(sizeof(struct work_request));
-#endif /* REQUESTPOOL */
 
 #ifdef KV_DEBUG
 	auto node = cceh->GetNodeID(key);
 
-	if( thisNode != node )
+	if( node != -1 && thisNode != node )
 		miss_cnt[thisNode]++;
 
 	struct timespec g_start;

@@ -6,8 +6,8 @@ CC=g++
 LDFLAGS=
 LIBS=-lrt -lm -lpmemobj -lpmem -lpthread -libverbs -lnuma
 #CFLAGS=-O3 -std=c++11 -w 
-#CFLAGS := -std=c++17 -g
-CFLAGS := -std=c++17 -g -O3
+CFLAGS := -std=c++17 -g
+#CFLAGS := -std=c++17 -O3
 INCLUDES=-I./ -I./src/
 
 SOURCES=server.cpp tcp.cpp rdma.cpp CCEH.cpp
@@ -38,12 +38,13 @@ CCEH:
 tcpmem:
 	sudo rm -rf /mnt/pmem0/jy/*
 	sudo rm -rf /mnt/pmem1/jy/*
-	sudo bin/tcp_server -t 5432 --pm_path /jy/1 -W 20 -K 28,38 -P 29,39 --tablesize 32768 --verbose -h
+	sudo bin/tcp_server -t 5432 --pm_path /jy/1 -W 20 -C 0-9,10-19 -K 28,38 -P 29,39 --tablesize 32768 --verbose -h
 
 tcpapp:
 	sudo rm -rf /mnt/pmem0/jy/*
 	sudo rm -rf /mnt/pmem1/jy/*
-	sudo bin/tcp_server_skewed_pm -t 5432 --pm_path /jy/1 -W 20 -K 28,38 -P 29,39 --tablesize 32768 --verbose -h
+	sudo bin/tcp_server_skewed_pm -t 5432 --pm_path /jy/1 -W 20 -C 0-9,10-19 -K 28,38 -P 29,39 --tablesize 32768 --verbose -h
+#	sudo bin/tcp_server_skewed_pm -t 5432 --pm_path /jy/1 -W 20 -C 0-1,10-11 -K 28,38 -P 29,39 --tablesize 16 --verbose -h
 
 rdma:
 	sudo rm -rf /mnt/pmem0/jy/*
@@ -53,11 +54,11 @@ rdma:
 gdb:
 	sudo rm -rf /mnt/pmem0/jy/*
 	sudo rm -rf /mnt/pmem1/jy/*
-	sudo gdb bin/tcp_server
+	sudo gdb bin/tcp_server_skewed_pm
 
 free:
 	sudo rm -rf /mnt/pmem0/jy/*
 	sudo rm -rf /mnt/pmem1/jy/*
 
 clean: 
-	rm -rf src/*.o *.o server
+	rm -rf src/*.o *.o bin/*

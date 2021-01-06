@@ -102,7 +102,7 @@ RETRY:
 class NUMA_KV : public KVStore {
 	public:
 		NUMA_KV(void);
-		NUMA_KV(PMEMobjpool**, size_t, size_t, size_t);
+		NUMA_KV(PMEMobjpool**, PMEMobjpool**, size_t, size_t, size_t);
 		NUMA_KV(PMEMobjpool**, bool, size_t, size_t);
 		~NUMA_KV(void);
 		void Insert(Key_t&, Value_t, int, int);

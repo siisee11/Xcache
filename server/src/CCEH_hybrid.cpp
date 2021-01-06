@@ -113,6 +113,7 @@ RETRY:
 		goto RETRY;
 	}
 
+	/* pattern : MSB 중 해당 세그먼트에서 유효한 bit */
 	auto pattern = (x >> (dir_depth - target->local_depth)); 
 	if(dir_depth != dir->depth){
 		target->unlock();

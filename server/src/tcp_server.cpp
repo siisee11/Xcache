@@ -85,12 +85,14 @@ size_t numData = 0;
 size_t numKVThreads = 0;
 size_t numNetworkThreads = 0;
 size_t numPollThreads = 0;
+size_t numConsumerThreads= 0;
 bool numa_on = false;
 bool verbose_flag = false;
 bool human = false;
 struct bitmask *netcpubuf;
 struct bitmask *kvcpubuf;
 struct bitmask *pollcpubuf;
+struct bitmask *consumercpubuf;
 
 /* Global variables */
 struct server_context* ctx = NULL;
@@ -177,7 +179,7 @@ static void printCpuBuf(size_t nr_cpus, struct bitmask *bm, const char *str) {
 	/* Print User specified cpus */
 	dprintf("[ INFO ] %s\t threads: \t", str);
 	for ( int i = 0; i< nr_cpus; i++) {
-		if (i % 4 == 0)
+		if (i % 5 == 0)
 			dprintf(" ");
 		if (numa_bitmask_isbitset(bm, i))
 			dprintf("1");
@@ -451,21 +453,27 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 #ifdef APPDIRECT
 			/* 
 			 * Insert received page into hash 
-			 * 1. Alloc POBJ and get its address
+			 * Check where segment is stored.
+			 * DRAM if node id < 0 else PMEM
 			 */
-			/* TODO: batch insertion */
-			TOID(char) temp;
-			POBJ_ALLOC(ctx->log_pop[thisNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
-			uint64_t temp_addr = (uint64_t)ctx->log_pop[thisNode] + temp.oid.off;
-			pmemobj_memcpy_persist(ctx->log_pop[thisNode], (void*)temp_addr, from_va, sizeof(char)*PAGE_SIZE); /* TODO: this cause slowdown */
+			if (ctx->kv->GetNodeID(key) < 0) {
+				ctx->kv->Insert(key, (Value_t)from_va, 0, thisNode);
+			} else {
+				/*
+				 * Alloc POBJ and get its address
+				 */
+				/* TODO: batch insertion */
+				TOID(char) temp;
+				POBJ_ALLOC(ctx->log_pop[thisNode], &temp, char, sizeof(char)*PAGE_SIZE, NULL, NULL); 	/* TODO: Prealloc pmem */
+				uint64_t temp_addr = (uint64_t)ctx->log_pop[thisNode] + temp.oid.off;
+				pmemobj_memcpy_persist(ctx->log_pop[thisNode], (void*)temp_addr, from_va, sizeof(char)*PAGE_SIZE); /* TODO: this cause slowdown */
 
-			/*
-			 * 2. Save that address with key
-			 */
-			ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
+				/*
+				 * Save that address with key
+				 */
+				ctx->kv->Insert(key, (Value_t)temp_addr, 0, thisNode);
+			}
 #else /* MEMORY MODE */
-//			uint64_t *temp_addr = (uint64_t *)malloc(sizeof(char) * PAGE_SIZE);
-//			memcpy(temp_addr, from_va, sizeof(char) * PAGE_SIZE);  /* malloc and memcpy overhead is large */
 			ctx->kv->Insert(key, (Value_t)from_va, 0, thisNode);
 #endif
 
@@ -531,9 +539,11 @@ static int pmnet_process_message(struct pmnet_sock_container *sc,
 				/* page exists */
 				sample_succ_get_cnt++;
 #ifdef APPDIRECT
-				memcpy(saved_page, addr, PAGE_SIZE);
-				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
+//				memcpy(saved_page, addr, PAGE_SIZE);
+//				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), \
 					ntohl(hdr->msg_num), saved_page, PAGE_SIZE);
+				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), \
+					ntohl(hdr->msg_num), (void *)addr, PAGE_SIZE);
 #else
 				ret = pmnet_send_message(sc, PMNET_MSG_SENDPAGE, ntohl(hdr->key), ntohl(hdr->index), 
 					ntohl(hdr->msg_num), (void *)addr, PAGE_SIZE);
@@ -707,6 +717,8 @@ static int pmnet_advance_rx(struct pmnet_sock_container *sc,
 		uint64_t key = pmnet_long_key(ntohl(msg_in->hdr->key), ntohl(msg_in->hdr->index));
 #ifdef APPDIRECT
 		int targetNode = ctx->kv->GetNodeID(key);
+		if ( targetNode == -1 )
+			targetNode = rand() % NUM_NUMA;
 #else
 		int targetNode = rand() % NUM_NUMA;
 #endif
@@ -852,24 +864,31 @@ void init_network_server()
 
 		// A mutex ensures orderly access to std::cout from multiple threads.
 		std::mutex iomutex;
-		std::vector<std::thread> threads(nr_cpus/2);
-		for (unsigned i = 0; i < nr_cpus/2; ++i) {   /* XXX */
-			threads[i] = std::thread(consumer, sc);
+		std::vector<std::thread> consumerThreads;
 
-			// Create a cpu_set_t object representing a set of CPUs. Clear it and mark
-			// only CPU i as set.
-			// threads[i] would be assigned to CPU i
-			cpu_set_t cpuset;
-			CPU_ZERO(&cpuset);
-			CPU_SET(i, &cpuset);
-			int rc = pthread_setaffinity_np(threads[i].native_handle(),
-					sizeof(cpu_set_t), &cpuset);
-			if (rc != 0) {
-				std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
+		auto t_id = 0;
+		cpu_id = 0;
+		while(true) {
+			if (numa_bitmask_isbitset(consumercpubuf, cpu_id)) {
+				consumerThreads.emplace_back(std::thread(consumer, sc));
+
+				cpu_set_t cpuset;
+				CPU_ZERO(&cpuset);
+				CPU_SET(cpu_id, &cpuset);
+				int rc = pthread_setaffinity_np(consumerThreads[t_id].native_handle(),
+						sizeof(cpu_set_t), &cpuset);
+				if (rc != 0) {
+					std::cerr << "Error calling pthread_setaffinity_np: " << rc << "\n";
+				}
+				t_id++;
 			}
+			cpu_id++;
+
+			if (t_id == numConsumerThreads)
+				break;
 		}
 
-		for (auto& t : threads) {
+		for (auto& t : consumerThreads) {
 			t.join();
 		}
 
@@ -939,7 +958,7 @@ static struct server_context* server_init_ctx(char *ipath){
 	}
 
 	if(!exists) {
-		ctx->kv = new NUMA_KV(ctx->pop, initialTableSize/Segment::kNumSlot, numKVThreads, numPollThreads);
+		ctx->kv = new NUMA_KV(ctx->pop, ctx->log_pop, initialTableSize/Segment::kNumSlot, numKVThreads, numPollThreads);
 		dprintf("[  OK  ] KVStore Initialized\n");
 	} else {
 		ctx->kv = new NUMA_KV(ctx->pop, true, numKVThreads, numPollThreads);
@@ -988,7 +1007,7 @@ int init_tcp_server(char* path)
 int main(int argc, char* argv[]){
 	char hostname[64];
 
-	const char *short_options = "vs:t:i:n:d:z:hK:P:W:";
+	const char *short_options = "vs:t:i:n:d:z:hK:P:W:C:";
 	static struct option long_options[] =
 	{
 		{"verbose", 0, NULL, 'v'},
@@ -1001,6 +1020,7 @@ int main(int argc, char* argv[]){
 		{"netcpubind", 1, NULL, 'W'},
 		{"kvcpubind", 1, NULL, 'K'},
 		{"pollcpubind", 1, NULL, 'P'},
+		{"consumercpubind", 1, NULL, 'C'},
 		{0, 0, 0, 0} 
 	};
 
@@ -1068,6 +1088,13 @@ int main(int argc, char* argv[]){
 					usage();
 				}
 				break;
+			case 'C':
+				consumercpubuf = numa_parse_cpustring(optarg);
+				if (!consumercpubuf) {
+					printf ("<%s> is invalid\n", optarg);
+					usage();
+				}
+				break;
 			case 'h':
 				human = true;
 				break;
@@ -1102,12 +1129,16 @@ int main(int argc, char* argv[]){
 
 		if (numa_bitmask_isbitset(pollcpubuf, i))
 			numPollThreads++;	
+
+		if (numa_bitmask_isbitset(consumercpubuf, i))
+			numConsumerThreads++;	
 	}
 
 	/* Print User specified cpu binding */
 	printCpuBuf(nr_cpus, netcpubuf, "net");
-	printCpuBuf(nr_cpus, kvcpubuf, "kv");
-	printCpuBuf(nr_cpus, pollcpubuf, "cqpoll");
+	printCpuBuf(nr_cpus, consumercpubuf, "csm");
+//	printCpuBuf(nr_cpus, kvcpubuf, "kv");
+//	printCpuBuf(nr_cpus, pollcpubuf, "cqpoll");
 
 	lfqs = (queue_t**)malloc(NUM_NUMA * sizeof(queue_t*) * 2); /* GET, PUT QUEUE seperation */
 	for (int i = 0; i < NUM_NUMA * 2; i++) {

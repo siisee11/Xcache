@@ -1,15 +1,14 @@
 #include <iostream>
+#include <cmath>
 #include <thread>
 #include <bitset>
 #include <cassert>
 #include <unordered_map>
 #include <stdio.h>
 #include <vector>
-#include <cmath>
 
 #include "src/CCEH_PM_hybrid.h"
 #include "src/hash.h"
-#include "src/util.h"
 #include "src/variables.h"
 
 #define f_seed 0xc70697UL
@@ -17,7 +16,78 @@
 //#define f_seed 0xc70f6907UL
 //#define s_seed 0xc70f6907UL
 
+#define RD_RO DIRECT_RW
+#define RD_RW DIRECT_RW
+
+#undef D_RW
+#undef D_RO
+#define D_RW(o) \
+	( (o).oid.pool_uuid_lo != 0 ? (reinterpret_cast < __typeof__((o)._type) > (pmemobj_direct((o).oid))) : (reinterpret_cast < Segment * > ((o).oid.off) ) )
+
+#define D_RO(o) \
+	( (o).oid.pool_uuid_lo != 0 ? (reinterpret_cast < const __typeof__((o)._type) > (pmemobj_direct((o).oid))) : (reinterpret_cast < const Segment *> ((o).oid.off) ) )
+
 using namespace std;
+
+
+/* --------------------------------------- LRU Implementation -------------------------*/
+// Declare the size
+LRUCache::LRUCache(int n, CCEH *hash)
+{
+    csize = n;
+	cceh = hash;
+}
+ 
+/* Refers key x (address of segment) with in the LRU cache */
+void LRUCache::refer(uint64_t x)
+{
+	m1.lock();
+
+    /* not present in cache */
+    if (ma.find(x) == ma.end()) {
+		/* cache is full */
+		if ( dq.size() == csize ) {
+			// delete least recently used element
+			auto last = dq.back();
+ 
+			// Pops the last elmeent
+			dq.pop_back();
+
+			/* Persist (Segment *)last and save pointer to dir */
+			struct Segment *target = (struct Segment *)last;
+			cceh->PersistSegment(target);
+
+			printf("LRU FULL\n");
+ 
+			// Erase the last
+			ma.erase(last);
+		}
+    } else {
+	/* present in cache */
+        dq.erase(ma[x]);
+	}
+ 
+    // update reference
+    dq.push_front(x);
+    ma[x] = dq.begin();
+	
+	m1.unlock();
+}
+ 
+// Function to display contents of cache
+void LRUCache::display()
+{
+ 
+    // Iterate in the deque and print
+    // all the elements in it
+    for (auto it = dq.begin(); it != dq.end(); it++)
+        cout << (*it) << " ";
+ 
+    cout << endl;
+}
+
+
+/* --------------------------------------- Segment Implementation -------------------------*/
 
 void Segment::execute_path(PMEMobjpool* pop, vector<pair<size_t, size_t>>& path, Key_t& key, Value_t value){
 	for(int i=path.size()-1; i>0; --i){
@@ -100,21 +170,20 @@ bool Segment::Insert4split(Key_t& key, Value_t value, size_t loc){
 	return 0;
 }
 
-TOID(struct Segment)* Segment::Split(PMEMobjpool* pop){
-	TOID(struct Segment)* split = new TOID(struct Segment)[2];
-	split[0] = pmemobj_oid(this);
-	POBJ_ALLOC(pop, &split[1], struct Segment, sizeof(struct Segment), NULL, NULL);
+Segment** Segment::Split(){
+	Segment** split = new Segment*[2];
+	split[0] = this;
+	split[1] = new Segment();
 	size_t depth = (local_depth & DEPTH_MASK);
-	TOID(struct Segment) valid_sibling = sibling[local_depth >> (8*sizeof(size_t)-1)];
-	D_RW(split[1])->initSegment(valid_sibling, depth + 1);
+	split[1]->initSegment(depth + 1);
 
 	auto pattern = ((size_t)1 << (sizeof(Key_t)*8 - depth - 1));
 	for(int i=0; i<kNumSlot; ++i){
 		auto f_hash = hash_funcs[0](&bucket[i].key, sizeof(Key_t), f_seed);
 		if(f_hash & pattern){
-			if(!D_RW(split[1])->Insert4split(bucket[i].key, bucket[i].value, (f_hash & kMask)*kNumPairPerCacheLine)){
+			if(!split[1]->Insert4split(bucket[i].key, bucket[i].value, (f_hash & kMask)*kNumPairPerCacheLine)){
 				auto s_hash = hash_funcs[2](&bucket[i].key, sizeof(Key_t), s_seed);
-				if(!D_RW(split[1])->Insert4split(bucket[i].key, bucket[i].value, (s_hash & kMask)*kNumPairPerCacheLine)){
+				if(!split[1]->Insert4split(bucket[i].key, bucket[i].value, (s_hash & kMask)*kNumPairPerCacheLine)){
 #ifdef CUCKOO
 					auto path1 = find_path((f_hash & kMask)*kNumPairPerCacheLine, pattern);
 					auto path2 = find_path((s_hash & kMask)*kNumPairPerCacheLine, pattern);
@@ -143,9 +212,22 @@ TOID(struct Segment)* Segment::Split(PMEMobjpool* pop){
 		}
 	}
 
-	pmemobj_persist(pop, (char*)D_RO(split[1]), sizeof(struct Segment));
+	clflush((char*)split[1], sizeof(Segment));
+
+
 	return split;
 }
+
+size_t Segment::numElement(void) {
+	size_t sum = 0;
+	for (unsigned i = 0; i < kNumSlot; ++i) {
+		if (bucket[i].key != INVALID) {
+			sum++;
+		}
+	}
+	return sum;
+}
+
 
 CCEH::CCEH(PMEMobjpool** _pop, bool recovery){
 	for(int i=0; i<NUM_NUMA; ++i){
@@ -163,7 +245,7 @@ CCEH::CCEH(PMEMobjpool** _pop, bool recovery){
 }
 
 CCEH::CCEH(PMEMobjpool** _pop)
-	: dir{new Directory()}
+	: dir{new Directory()}, ca{new LRUCache(8192, this)}
 {
 #ifdef RANDOM
 	srand(time(NULL));
@@ -201,18 +283,19 @@ CCEH::CCEH(PMEMobjpool** _pop)
 		else
 			D_RW(dir->segment[i])->initSegment(TOID_NULL(struct Segment));
 	}
-	D_RW(root)->segment = dir->segment[0];
-	pmemobj_persist(pop[0], (char*)&D_RO(root)->segment, sizeof(TOID(struct Segment)));
+	RD_RW(root)->segment = dir->segment[0];
+	pmemobj_persist(pop[0], (char*)&RD_RO(root)->segment, sizeof(TOID(struct Segment)));
 }
 
-CCEH::CCEH(PMEMobjpool** _pop, size_t initCap)
-	: dir{new Directory(static_cast<size_t>(log2(initCap)))}
+CCEH::CCEH(PMEMobjpool** _pop, PMEMobjpool** _lpop, size_t initCap)
+	: dir{new Directory(static_cast<size_t>(log2(initCap)))}, ca{new LRUCache(1024, this)}
 {
 #ifdef RANDOM
 	srand(time(NULL));
 #endif
 	for(int i=0; i<NUM_NUMA; ++i){
 		pop[i] = _pop[i];
+		lpop[i] = _lpop[i];
 		segments_in_node[i] = 0;
 		freq[i] = 0;
 	}
@@ -245,8 +328,8 @@ CCEH::CCEH(PMEMobjpool** _pop, size_t initCap)
 		else
 			D_RW(dir->segment[i])->initSegment(TOID_NULL(struct Segment), static_cast<size_t>(log2(initCap)));
 	}
-	D_RW(root)->segment = dir->segment[0];
-	pmemobj_persist(pop[0], (char*)&D_RO(root)->segment, sizeof(TOID(struct Segment)));
+	RD_RW(root)->segment = dir->segment[0];
+	pmemobj_persist(pop[0], (char*)&RD_RO(root)->segment, sizeof(TOID(struct Segment)));
 }
 
 
@@ -255,6 +338,8 @@ int CCEH::GetNodeID(Key_t& key){
 
 RETRY:
 	auto x = (f_hash >> (8*sizeof(f_hash) - dir->depth));
+
+	if (dir->segment[x].oid.pool_uuid_lo == 0 ) return -1;
 
 	uint64_t target_node = (uint64_t)D_RO(dir->segment[x]) - dir->segment[x].oid.off;
 	for(int i=0; i<NUM_NUMA; ++i){
@@ -266,6 +351,7 @@ RETRY:
 }
 
 int CCEH::GetNodeID(TOID(struct Segment) segment){
+	if (segment.oid.pool_uuid_lo == 0 ) return -1;
 	uint64_t target_node = (uint64_t)D_RO(segment) - segment.oid.off;
 	for(int i=0; i<NUM_NUMA; ++i){
 		if(target_node == (uint64_t)pop[i]){
@@ -274,13 +360,54 @@ int CCEH::GetNodeID(TOID(struct Segment) segment){
 	}
 }
 
+void CCEH::PersistSegment(struct Segment *_target) {
+	auto numElem = _target->numElement();
+	TOID(struct Segment) newSeg;
+	Key_t key = 0;
+
+	/* Alloc Segment on PMEM */
+	POBJ_ALLOC(pop[0], &newSeg, struct Segment, sizeof(struct Segment), NULL, NULL);
+	D_RW(newSeg)->initSegment(TOID_NULL(struct Segment), _target->local_depth);
+
+	/* Alloc PAGE LOG on PMEM */
+	TOID(char) temp;
+	POBJ_ALLOC(lpop[0], &temp, char, sizeof(char)*4096 * numElem, NULL, NULL); /* XXX 0 */
+
+	/* Copy pages from DRAM to PMEM */
+	for (int i = 0; i < Segment::kNumSlot ; i++ ) {
+		if (_target->bucket[i].key != INVALID) {
+			if (key == 0)
+				key = _target->bucket[i].key;
+			uint64_t temp_addr = (uint64_t)lpop[0] + temp.oid.off + 4096 * i;
+			memcpy((void *)temp_addr, (void *)_target->bucket[i].value, sizeof(char)*4096);
+			D_RW(newSeg)->bucket[i].key = _target->bucket[i].key;
+			D_RW(newSeg)->bucket[i].value = (Value_t)temp_addr;
+		}
+	}
+	uint64_t temp_addr = (uint64_t)lpop[0] + temp.oid.off;
+	pmemobj_persist(lpop[0], (void*)temp_addr, sizeof(char)*4096 * numElem); /* TODO: this cause slowdown */
+
+	auto f_hash = hash_funcs[0](&key, sizeof(Key_t), f_seed);
+	auto f_idx = (f_hash & kMask) * kNumPairPerCacheLine;
+	auto x = (f_hash >> (8*sizeof(f_hash) - dir->depth)); /* MSB dir->depth bits*/
+
+	dir->segment[x] = newSeg; 	/* Should be atomic */
+#if 0
+	if(CAS(&dir->segment[x], &target, newSeg)){
+		printf("PersistSegment success\n");
+	} else {
+		printf("PersistSegment success\n");
+	}
+#endif
+}
+
 void CCEH::Insert(Key_t& key, Value_t value){
 
 	auto f_hash = hash_funcs[0](&key, sizeof(Key_t), f_seed);
 	auto f_idx = (f_hash & kMask) * kNumPairPerCacheLine;
 
 RETRY:
-	auto x = (f_hash >> (8*sizeof(f_hash) - dir->depth));
+	auto x = (f_hash >> (8*sizeof(f_hash) - dir->depth)); /* MSB dir->depth bits*/
 	auto target = dir->segment[x];
 
 	if(!D_RO(target)){
@@ -306,12 +433,16 @@ RETRY:
 	gtime++;
 #endif
 	int cur_node_id = GetNodeID(target);
-
+	
 	struct Segment *_target = D_RW(target);
+
+	/* LRU */
+	if (cur_node_id == -1) ca->refer((uint64_t) _target);
 
 	auto target_local_depth = (_target->local_depth & DEPTH_MASK);
 	auto pattern = (f_hash >> (8*sizeof(f_hash) - target_local_depth));
 	for(unsigned i=0; i<kNumPairPerCacheLine * kNumCacheLine; ++i){
+		/* i [0, 32) */
 		auto loc = (f_idx + i) % Segment::kNumSlot;
 		auto _key = _target->bucket[loc].key;
 		/* validity check for entry keys */
@@ -320,32 +451,41 @@ RETRY:
 				_target->bucket[loc].value = value;
 				mfence();
 				_target->bucket[loc].key = key;
-				pmemobj_persist(pop[cur_node_id], (char*)&_target->bucket[loc], sizeof(Pair));
+
+				if (cur_node_id != -1) {
+					/* Target Segment on PMEM */
+					pmemobj_persist(pop[cur_node_id], (char*)&_target->bucket[loc], sizeof(Pair));
+				}
 				/* release segment exclusive lock */
 				_target->unlock();
 
 #ifdef LRFU
-				/* Calculate LRFU */
-				auto crf = lrfu[cur_node_id].crf;
-				auto atime = lrfu[cur_node_id].atime;
-				crf = 1 + crf * pow(0.5, (gtime - atime) * 0.5); 
-				lrfu[cur_node_id].crf = crf;
-				lrfu[cur_node_id].atime = gtime;
-#endif
-
-#ifdef STATISTIC
-				/* statistic */
-				unsigned f = freq[cur_node_id];
-				while(!CAS(&freq[cur_node_id], &f, f+1)){
-					f = freq[cur_node_id];
+				if (cur_node_id != -1) {
+					/* Target Segment on PMEM */
+					/* Calculate LRFU */
+					auto crf = lrfu[cur_node_id].crf;
+					auto atime = lrfu[cur_node_id].atime;
+					crf = 1 + crf * pow(0.5, (gtime - atime) * 0.5); 
+					lrfu[cur_node_id].crf = crf;
+					lrfu[cur_node_id].atime = gtime;
 				}
 #endif
 
+#ifdef STATISTIC
+				if (cur_node_id != -1) {
+					/* statistic */
+					unsigned f = freq[cur_node_id];
+					while(!CAS(&freq[cur_node_id], &f, f+1)){
+						f = freq[cur_node_id];
+					}
+				}
+#endif
 				return;
 			}
 		}
 	}
 
+	/* If can't find location, Second hashing */
 	auto s_hash = hash_funcs[2](&key, sizeof(Key_t), s_seed);
 	auto s_idx = (s_hash & kMask) * kNumPairPerCacheLine;
 
@@ -357,23 +497,29 @@ RETRY:
 				D_RW(target)->bucket[loc].value = value;
 				mfence();
 				D_RW(target)->bucket[loc].key = key;
-				pmemobj_persist(pop[cur_node_id], (char*)&D_RO(target)->bucket[loc], sizeof(Pair));
+				if (cur_node_id != -1) {
+					pmemobj_persist(pop[cur_node_id], (char*)&D_RO(target)->bucket[loc], sizeof(Pair));
+				}
 				D_RW(target)->unlock();
 
 #ifdef LRFU
-				/* Calculate LRFU */
-				auto crf = lrfu[cur_node_id].crf;
-				auto atime = lrfu[cur_node_id].atime;
-				crf = 1 + crf * pow(0.5, (gtime - atime) * 0.5); 
-				lrfu[cur_node_id].crf = crf;
-				lrfu[cur_node_id].atime = gtime;
+				if (cur_node_id != -1) {
+					/* Calculate LRFU */
+					auto crf = lrfu[cur_node_id].crf;
+					auto atime = lrfu[cur_node_id].atime;
+					crf = 1 + crf * pow(0.5, (gtime - atime) * 0.5); 
+					lrfu[cur_node_id].crf = crf;
+					lrfu[cur_node_id].atime = gtime;
+				}
 #endif
 
 #ifdef STATISTIC
-				/* statistic */
-				unsigned f = freq[cur_node_id];
-				while(!CAS(&freq[cur_node_id], &f, f+1)){
-					f = freq[cur_node_id];
+				if (cur_node_id != -1) {
+					/* statistic */
+					unsigned f = freq[cur_node_id];
+					while(!CAS(&freq[cur_node_id], &f, f+1)){
+						f = freq[cur_node_id];
+					}
 				}
 #endif
 
@@ -461,6 +607,7 @@ RETRY:
 #endif
 
 	auto s = D_RW(target)->Split(pop[target_node_id]);
+
 #else /* SKEWED */
 
 #ifdef STATISTIC
@@ -469,8 +616,12 @@ RETRY:
 		load = segments_in_node[0];
 	}
 #endif
-	auto s = D_RW(target)->Split(pop[0]);
+	auto s = D_RW(target)->Split();
 #endif
+
+	/* LRU */
+	ca->refer((uint64_t)s[0]);
+	ca->refer((uint64_t)s[1]);
 
 DIR_RETRY:
 	/* need to double the directory */
@@ -486,8 +637,11 @@ DIR_RETRY:
 		auto _dir = new Directory(dir->depth+1);
 		for(int i=0; i<dir->capacity; ++i){
 			if(i == x){
-				_dir->segment[2*i] = s[0];
-				_dir->segment[2*i+1] = s[1];
+				_dir->segment[2*i].oid.off = (uint64_t)s[0]; 		/* Store segment pointer to oid.off */
+				_dir->segment[2*i].oid.pool_uuid_lo = 0; 			/* set oid.pool_uuid_lo to identify DRAM segment */
+				_dir->segment[2*i+1].oid.off = (uint64_t)s[1];
+				_dir->segment[2*i+1].oid.pool_uuid_lo = 0; 		
+
 			}
 			else{
 				_dir->segment[2*i] = d[i];
@@ -495,23 +649,22 @@ DIR_RETRY:
 			}
 		}
 		dir = _dir;
-		if(D_RO(s[0])->local_depth >> (8*sizeof(size_t)-1)){
-			D_RW(s[0])->sibling[0] = s[1];
-			D_RW(s[0])->local_depth = (D_RO(s[0])->local_depth & DEPTH_MASK) + 1;
-			pmemobj_persist(pop[cur_node_id], (char*)&D_RO(s[0])->local_depth, sizeof(size_t) + sizeof(TOID(struct Segment)));
+		if(s[0]->local_depth >> (8*sizeof(size_t)-1)){
+//			s[0]->sibling[0] = s[1];
+			s[0]->local_depth = (s[0]->local_depth & DEPTH_MASK) + 1;
 		}
 		else{
-			D_RW(s[0])->sibling[1] = s[1];
-			D_RW(s[0])->local_depth = (D_RO(s[0])->local_depth | SIBLING_MASK) + 1;
-			pmemobj_persist(pop[cur_node_id], (char*)&D_RO(s[0])->local_depth, sizeof(size_t) + sizeof(TOID(struct Segment))*2);
+//			s[0]->sibling[1] = s[1];
+			s[0]->local_depth = (s[0]->local_depth | SIBLING_MASK) + 1;
 		}
 		/* release segment exclusive lock */
-		D_RW(s[0])->sema = 0;
+		s[0]->sema = 0;
 		/* TBD */
 		// delete dir_old;
 
 	}
-	else{ // normal split
+	else{ 
+		/* normal split */
 		while(!dir->lock()){
 			asm("nop");
 		}
@@ -519,51 +672,48 @@ DIR_RETRY:
 		x = (f_hash >> (8*sizeof(f_hash) - dir->depth));
 		if(dir->depth == target_local_depth + 1){
 			if(x%2 == 0){
-				//dir->segment[x+1].oid.pool_uuid_lo = s[1].oid.pool_uuid_lo;
-				//dir->segment[x+1].oid.off = s[1].oid.off;
-				dir->segment[x+1] = s[1];
+				dir->segment[x].oid.off = (uint64_t)s[0]; 	/* XXX */
+				dir->segment[x].oid.pool_uuid_lo = 0;
+				dir->segment[x+1].oid.off = (uint64_t)s[1];
+				dir->segment[x+1].oid.pool_uuid_lo = 0;
 			}
 			else{
-				//dir->segment[x].oid.pool_uuid_lo = s[1].oid.pool_uuid_lo;
-				//dir->segment[x].oid.off = s[1].oid.off;
-				dir->segment[x] = s[1];
+				dir->segment[x].oid.off = (uint64_t)s[1];
+				dir->segment[x].oid.pool_uuid_lo = 0;
+				dir->segment[x-1].oid.off = (uint64_t)s[0];   /* XXX */
+				dir->segment[x-1].oid.pool_uuid_lo = 0;
 			}
 			dir->unlock();
 
-			if(D_RO(s[0])->local_depth >> (8*sizeof(size_t)-1)){
-				D_RW(s[0])->sibling[0] = s[1];
-				D_RW(s[0])->local_depth = (D_RO(s[0])->local_depth & DEPTH_MASK) + 1;
-				pmemobj_persist(pop[cur_node_id], (char*)&D_RO(s[0])->local_depth, sizeof(size_t) + sizeof(TOID(struct Segment)));
+			if(s[0]->local_depth >> (8*sizeof(size_t)-1)){
+//				s[0]->sibling[0] = s[1];
+				s[0]->local_depth = (s[0]->local_depth & DEPTH_MASK) + 1;
 			}
 			else{
-				D_RW(s[0])->sibling[1] = s[1];
-				D_RW(s[0])->local_depth = (D_RO(s[0])->local_depth | SIBLING_MASK) + 1;
-				pmemobj_persist(pop[cur_node_id], (char*)&D_RO(s[0])->local_depth, sizeof(size_t) + sizeof(TOID(struct Segment))*2);
+//				s[0]->sibling[1] = s[1];
+				s[0]->local_depth = (s[0]->local_depth | SIBLING_MASK) + 1;
 			}
 			/* release target segment exclusive lock */
-			D_RW(s[0])->sema = 0;
+			s[0]->sema = 0;
 		}
 		else{
 			int stride = pow(2, dir->depth - target_local_depth);
 			auto loc = x - (x%stride);
 			for(int i=0; i<stride/2; ++i){
-				//dir->segment[loc+stride/2+i].oid.pool_uuid_lo = s[1].oid.pool_uuid_lo;
-				//dir->segment[loc+stride/2+i].oid.off = s[1].oid.off;
-				dir->segment[loc+stride/2+i] = s[1];
+				dir->segment[loc+stride/2+i].oid.off = (uint64_t)s[1];
+				dir->segment[loc+stride/2+i].oid.pool_uuid_lo = 0;
 			}
 			dir->unlock();
-			if(D_RO(s[0])->local_depth >> (8*sizeof(size_t)-1)){
-				D_RW(s[0])->sibling[0] = s[1];
-				D_RW(s[0])->local_depth = (D_RO(s[0])->local_depth & DEPTH_MASK) + 1;
-				pmemobj_persist(pop[cur_node_id], (char*)&D_RO(s[0])->local_depth, sizeof(size_t) + sizeof(TOID(struct Segment)));
+			if(s[0]->local_depth >> (8*sizeof(size_t)-1)){
+//				s[0]->sibling[0] = s[1];
+				s[0]->local_depth = (s[0]->local_depth & DEPTH_MASK) + 1;
 			}
 			else{
-				D_RW(s[0])->sibling[1] = s[1];
-				D_RW(s[0])->local_depth = (D_RO(s[0])->local_depth | SIBLING_MASK) + 1;
-				pmemobj_persist(pop[cur_node_id], (char*)&D_RO(s[0])->local_depth, sizeof(size_t) + sizeof(TOID(struct Segment))*2);
+//				D_RW(s[0])->sibling[1] = s[1];
+				s[0]->local_depth = (s[0]->local_depth | SIBLING_MASK) + 1;
 			}
 			/* release target segment exclusive lock */
-			D_RW(s[0])->sema = 0;
+			s[0]->sema = 0;
 		}
 	}
 	std::this_thread::yield();
@@ -585,6 +735,7 @@ RETRY:
 
 	auto x = (f_hash >> (8*sizeof(f_hash) - dir->depth));
 	auto target = dir->segment[x];
+	auto isDRAM = target.oid.pool_uuid_lo == 0  ?  true : false;
 
 	if(!D_RO(target)){
 		std::this_thread::yield();
@@ -604,12 +755,18 @@ RETRY:
 		goto RETRY;
 	}
 
+	struct Segment *_target = D_RW(target); 	/* XXX: Change below with this value?? */
+
 	for(int i=0; i<kNumPairPerCacheLine*kNumCacheLine; ++i){
 		auto loc = (f_idx+i) % Segment::kNumSlot;
 		if(D_RO(target)->bucket[loc].key == key){
 			Value_t v = D_RO(target)->bucket[loc].value;
 			/* key found, release segment shared lock */
 			D_RW(target)->unlock();
+
+			/* LRU */
+			ca->refer( (uint64_t) _target );
+
 			return v;
 		}
 	}
@@ -622,6 +779,10 @@ RETRY:
 		if(D_RO(target)->bucket[loc].key == key){
 			Value_t v = D_RO(target)->bucket[loc].value;
 			D_RW(target)->unlock();
+
+			/* LRU */
+			ca->refer( (uint64_t) _target );
+
 			return v;
 		}
 	}
@@ -640,7 +801,7 @@ bool CCEH::Recovery(void){
 	std::vector<std::pair<TOID(struct Segment), size_t>> segments_info;
 
 	TOID(struct Segment_root) root = POBJ_ROOT(pop[0], struct Segment_root);
-	TOID(struct Segment) cur = D_RW(root)->segment;
+	TOID(struct Segment) cur = RD_RW(root)->segment;
 	size_t cur_depth = D_RO(cur)->local_depth & DEPTH_MASK;
 	size_t dir_depth = cur_depth; 
 

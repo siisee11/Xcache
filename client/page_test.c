@@ -9,8 +9,8 @@
 #include <linux/kthread.h>
 #include "tcp.h"
 
-#define THREAD_NUM 4
-#define TOTAL_CAPACITY (PAGE_SIZE * 100000)
+#define THREAD_NUM 1
+#define TOTAL_CAPACITY (PAGE_SIZE * 1000000)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 void*** vpages;
@@ -244,7 +244,7 @@ int init_pages(void){
 		goto ALLOC_ERR;
 	}
 	for(i=0; i<THREAD_NUM; i++){
-		keys[i] = (uint64_t*)kmalloc(sizeof(uint64_t)*ITERATIONS, GFP_KERNEL);
+		keys[i] = (uint64_t*)vmalloc(sizeof(uint64_t)*ITERATIONS);
 		for(j=0; j<ITERATIONS; j++){
 			keys[i][j] = key++;
 		}

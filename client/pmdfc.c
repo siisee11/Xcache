@@ -25,7 +25,7 @@
 #define PMDFC_REMOTIFY 1
 #define PMDFC_NETWORK 1
 
-#define PMDFC_DEBUG 1
+//#define PMDFC_DEBUG 1
 
 /* Allocation flags */
 #define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
