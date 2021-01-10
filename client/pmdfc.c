@@ -19,22 +19,36 @@
 #include "pmdfc.h"
 #include "rdpma/rdpma.h"
 
+#include "rdma_op.h"
+#include "rdma_conn.h"
+
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
-#define PMDFC_BLOOM_FILTER 1 
+//#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
+//#define PMDFC_BUFFERING 1
 #define PMDFC_NETWORK 1
 
 //#define PMDFC_DEBUG 1
-
-/* Allocation flags */
-#define PMDFC_GFP_MASK  (GFP_ATOMIC | __GFP_NORETRY | __GFP_NOWARN)
 
 #ifdef CONFIG_DEBUG_FS
 struct dentry *pmdfc_dentry; 
 #endif
 
-static int rdma;
+// Hashtable
+//#define BITS 21 // 8GB=4KBx2x2^20
+#define BITS 22 // 16GB=4KBx4x2^20
+#define NUM_PAGES (1UL << BITS)
+#define REMOTE_BUF_SIZE (PAGE_SIZE * NUM_PAGES)
+DEFINE_HASHTABLE(hash_head, BITS);
+
+// Remote buffer address mapping
+atomic_long_t mr_free_start;
+extern long mr_free_end;
+
+static int rdma, rdma_direct;
+#define SAMPLE_RATE 10000 // Per-MB
+static long put_cnt, get_cnt;
 
 /* bloom filter */
 /* TODO: is it thread safe? */
@@ -65,20 +79,28 @@ static u64 pmdfc_miss_gets;
 static u64 pmdfc_hit_gets;
 static u64 pmdfc_drop_puts;
 
+static long get_longkey(long key, long index)
+{
+	long longkey;
+	longkey = key << 32;
+	longkey |= index;
+	return longkey;
+}
+
 /* worker function for workqueue */
 static void pmdfc_remotify_fn(struct work_struct *work)
 {
 	struct pmdfc_storage *storage = NULL;
-	pgoff_t *indexes;
 	long key;
 	unsigned int index;
+	long roffset;
 	int i;
 
 	int status, ret = 0;
-//	int cpu = -1;
+	//	int cpu = -1;
 
-//	cpu = smp_processor_id();
-//	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
+	//	cpu = smp_processor_id();
+	//	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
 
 	/* It must sleepable */
 	BUG_ON(irqs_disabled());
@@ -115,17 +137,20 @@ retry:
 		if ( bit < PMDFC_STORAGE_SIZE ) {
 			key = storage->key_storage[bit];
 			index = storage->index_storage[bit];
+			roffset = storage->roffset_storage[bit];
 			if (!rdma) {
-				/* TCP networking */
-#ifdef PMDFC_NETWORK
-				ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
-					storage->page_storage[bit], PAGE_SIZE, 0, &status);
-#endif
 				clear_bit(bit, storage->bitmap);
 			} else {
 				/* RDMA networking */
-				ret = rdpma_write_message(MSG_WRITE_REQUEST, key, index, bit,
-						storage->page_storage[bit], PAGE_SIZE, 0, &status);
+				if (rdma_direct) {
+					ret = pmdfc_rdma_write(storage->page_storage[bit], roffset); // TODO: roffset
+					if (put_cnt % SAMPLE_RATE == 0) {
+						pr_info("pmdfc: PUT PAGE: longkey=%lld, roffset=%lld\n",
+								key, roffset);
+					}
+					put_cnt++;
+
+				}
 				clear_bit(bit, storage->bitmap);
 			}
 		} else {
@@ -152,6 +177,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
 	int status = 0;
 	int ret = -1;
+	struct ht_data *tmp;
 
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
@@ -175,7 +201,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 #if defined(PMDFC_DEBUG)
 	/* Send page to server */
 	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
-		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
@@ -183,6 +209,15 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	/* get page virtual address */
 	pg_from = page_address(page);
 
+	tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
+	tmp->longkey = get_longkey((long)oid.oid[0], index);
+	tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
+	if(tmp->roffset >= mr_free_end) {
+		pr_warn("[ WARN ] Remote memory is full..\n");
+	}
+	hash_add(hash_head, &tmp->h_node, tmp->longkey);
+
+#ifdef PMDFC_BUFFERING
 	/* 
 	 * 1. Find empty slot.
 	 * If exist, then copy page content to it.
@@ -223,10 +258,11 @@ retry:
 	bit = find_first_zero_bit(storage->bitmap, PMDFC_STORAGE_SIZE);
 	if ( bit < PMDFC_STORAGE_SIZE) {
 		if (!test_and_set_bit(bit, storage->bitmap)) {
-//			pr_info("PMDFC_PREALLOC: put page to storage[%u]\n", bit);
+			//			pr_info("PMDFC_PREALLOC: put page to storage[%u]\n", bit);
 			memcpy(storage->page_storage[bit], pg_from, PAGE_SIZE);	
 			storage->key_storage[bit] = (long)oid.oid[0];
 			storage->index_storage[bit] = index;
+			storage->roffset_storage[bit] = tmp->roffset;
 			set_bit(bit, storage->bitmap);
 		} else 
 			goto retry;
@@ -239,12 +275,24 @@ retry:
 		queue_work(pmdfc_wq, &pmdfc_remotify_work);
 		goto out;
 	}
-
+#endif
 
 #if defined(PMDFC_BLOOM_FILTER)
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
+#endif
+
+#ifndef PMDFC_BUFFERING
+	if (rdma && rdma_direct) { 
+		ret = pmdfc_rdma_write(page, tmp->roffset);
+	}
+
+	if (put_cnt % SAMPLE_RATE == 0) {
+		pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%lld, roffset=%lld\n",
+				(long)oid.oid[0], index, tmp->longkey, tmp->roffset);
+	}
+	put_cnt++;
 #endif
 
 #if defined(PMDFC_DEBUG)
@@ -268,6 +316,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 	int status;
 	bool isIn = false;
+
+	long longkey = 0, roffset = 0;
+	struct ht_data *cur;
+	atomic_t found = ATOMIC_INIT(0);
 
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
@@ -300,15 +352,32 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #if defined(PMDFC_DEBUG)
 	/* Send get request and receive page */
 	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
-		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 #endif
 
-	if (!rdma) {
+	longkey = get_longkey((long)oid.oid[0], index);
+	hash_for_each_possible(hash_head, cur, h_node, longkey) {
+		if (cur->longkey == longkey) {
+			atomic_set(&found, 1);
+			roffset = cur->roffset;
+		}
+	}
 
+	if (!atomic_read(&found)) {
+		if (get_cnt % SAMPLE_RATE == 0) {
+			pr_info("pmdfc: GET PAGE FAILED: not allocated...\n");
+		}
+		get_cnt++;
+		goto not_exists;
+	}
+
+	if (!rdma) {
 #ifdef PMDFC_NETWORK
+#if 0
 		/* TCP networking */
 		pmnet_send_recv_message(PMNET_MSG_GETPAGE, (long)oid.oid[0], index, 
 				page_address(page), PAGE_SIZE, 0, &status);
+#endif
 
 		if (status != 0) {
 			/* get page failed */
@@ -323,15 +392,29 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	} 
 	else {
 		/* RDMA networking */
-		ret = rdpma_read_message(MSG_READ_REQUEST, (long)oid.oid[0], index,
-				page_address(page), PAGE_SIZE, 0, &status);
+		if (rdma_direct) {
+			if (get_cnt % SAMPLE_RATE == 0) {
+				pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld, roffset=%ld\n",
+						(long)oid.oid[0], index, longkey, roffset);
 
-		if (status != 0) {
-			/* get page failed */
-			pmdfc_miss_gets++;
-			goto not_exists;
+			}
+			ret = pmdfc_rdma_read_sync(page, roffset); 
+			get_cnt++;
+			pmdfc_rdma_poll_load(smp_processor_id());
+			atomic_set(&found, 0);
 		} else {
-			pmdfc_hit_gets++;
+#if 0
+			/* RDMA networking */
+			ret = rdpma_read_message(MSG_READ_REQUEST, (long)oid.oid[0], index,
+					page_address(page), PAGE_SIZE, 0, &status);
+#endif
+			if (status != 0) {
+				/* get page failed */
+				pmdfc_miss_gets++;
+				goto not_exists;
+			} else {
+				pmdfc_hit_gets++;
+			}
 		}
 	}
 
@@ -359,7 +442,7 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
 	data[0] += index;
-	
+
 	bloom_filter_check(bf, data, 8, &isIn);
 
 #if defined(PMDFC_DEBUG)
@@ -372,7 +455,7 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 	}
 
 	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, 0, 0,
-		   0, &status);
+			0, &status);
 out:
 	return;
 #endif
@@ -384,7 +467,7 @@ static void pmdfc_cleancache_flush_inode(int pool_id,
 #if defined(PMDFC_FLUSH)
 #if defined(PMDFC_DEBUG)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
- 
+
 	printk(KERN_INFO "pmdfc: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2]);
 #endif
@@ -437,7 +520,7 @@ static int pmdfc_cleancache_register_ops(void)
 
 static int bloom_filter_init(void)
 {
-//	bf = bloom_filter_new(12364167);
+	//	bf = bloom_filter_new(12364167);
 	bf = bloom_filter_new(10000000);
 	bloom_filter_add_hash_alg(bf, "md5");
 	bloom_filter_add_hash_alg(bf, "sha1");
@@ -464,7 +547,7 @@ static int init_ps_cluster(void){
 	struct pmdfc_storage *storage = NULL;
 	int i, j;
 
-//	pr_info("pmdfc: init_ps_cluster\n");
+	//	pr_info("pmdfc: init_ps_cluster\n");
 
 	cluster = kzalloc(sizeof(struct pmdfc_storage_cluster), GFP_KERNEL);
 	if (cluster == NULL) {
@@ -476,10 +559,11 @@ static int init_ps_cluster(void){
 		storage = kzalloc(sizeof(struct pmdfc_storage), GFP_KERNEL);
 
 		/* TODO: NUMA awareness */
-//		int numa = i < 2 ? 0 : 1;
+		//		int numa = i < 2 ? 0 : 1;
 		unsigned long bitmap_size = BITS_TO_LONGS(PMDFC_STORAGE_SIZE) * sizeof(unsigned long);
 		long *key_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(long), GFP_KERNEL);
 		unsigned int *index_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(unsigned int), GFP_KERNEL);
+		long *roffset_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(long), GFP_KERNEL);
 		unsigned long *bitmap = kzalloc(bitmap_size, GFP_KERNEL);
 		void **page_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(void*), GFP_KERNEL);
 		if (!page_storage){
@@ -490,18 +574,19 @@ static int init_ps_cluster(void){
 			page_storage[j] = kzalloc(PAGE_SIZE, GFP_KERNEL);
 		}
 
-//		mutex_init(&pmdfc_storages[i].lock);
+		//		mutex_init(&pmdfc_storages[i].lock);
 		storage->bitmap_size = PMDFC_STORAGE_SIZE;
 		storage->flags = 0;
 		set_bit(PS_empty, &storage->flags);
 		storage->page_storage = page_storage;
 		storage->key_storage = key_storage;
 		storage->index_storage = index_storage;
+		storage->roffset_storage = roffset_storage;
 		storage->bitmap = bitmap;
 		bitmap_zero(storage->bitmap, storage->bitmap_size);
-		
+
 		cluster->cl_storages[i] = storage;
-//		pr_info("pmdfc: cluster->cl_storages[%d]=%p\n", i, cluster->cl_storages[i]);
+		//		pr_info("pmdfc: cluster->cl_storages[%d]=%p\n", i, cluster->cl_storages[i]);
 	}
 
 	ps_cluster = cluster;
@@ -527,8 +612,7 @@ void pmdfc_debugfs_init(void)
 static int __init pmdfc_init(void)
 {
 	int ret;
-	unsigned int cpu;
-	int i;
+	//unsigned int cpu;
 
 #ifdef CONFIG_DEBUG_FS
 	pmdfc_debugfs_init();
@@ -551,20 +635,24 @@ static int __init pmdfc_init(void)
 	pr_info("[  OK  ] ps_cluster initialized\n");
 
 	/* TODO: why we use singlethread here?? */
-//	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
-//	pmdfc_wq = alloc_ordered_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM);
+	//	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
+	//	pmdfc_wq = alloc_ordered_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM);
 	pmdfc_wq = alloc_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
 	if (pmdfc_wq == NULL) {
 		printk(KERN_ERR "unable to launch pmdfc thread\n");
 		return -ENOMEM;
 	}
-//	queue_work(pmdfc_wq, &pmdfc_remotify_work);
+	//	queue_work(pmdfc_wq, &pmdfc_remotify_work);
 
 #if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
 	bloom_filter_init();
 	pr_info("[  OK  ] bloom filter initialized\n");
 #endif
+
+	hash_init(hash_head);
+	pr_info("[ OK ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
+			BITS, NUM_PAGES);
 
 	ret = pmdfc_cleancache_register_ops();
 
@@ -607,9 +695,12 @@ static void pmdfc_exit(void)
 }
 
 module_param(rdma, int, 0);
+module_param(rdma_direct, int, 0);
 
 module_init(pmdfc_init);
 module_exit(pmdfc_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("NAM JAEYOUN");
+MODULE_AUTHOR("NAM JAEYOUN & Daegyu");
+MODULE_DESCRIPTION("Cleancache backend driver");
+

@@ -22,7 +22,7 @@ all: CCEH $(EXECUTABLE)
 $(EXECUTABLE):
 	$(CC) $(CFLAGS) -o bin/tcp_server src/tcp_server.cpp src/lfcq.o src/CCEH.o src/NuMA_KV.o $(INCLUDES) $(LIBS)
 	$(CC) $(CFLAGS) -o bin/tcp_server_skewed_pm src/tcp_server.cpp src/lfcq.o src/CCEH_skewed.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS) -DAPPDIRECT
-#	$(CC) $(CFLAGS) -o bin/rdma_server_skewed src/rdma_server.cpp src/lfcq.o src/CCEH_skewed.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS)
+	$(CC) $(CFLAGS) -o bin/rdma_server_skewed src/rdma_server.cpp src/lfcq.o src/CCEH_skewed.o src/NuMA_KV_PM.o $(INCLUDES) $(LIBS)
 
 CCEH: 
 	$(CXX) $(CFLAGS) -c -o src/CCEH_skewed.o src/CCEH_PM_hybrid.cpp $(INCLUDES) $(LIBS)

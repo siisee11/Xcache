@@ -17,6 +17,7 @@ struct pmdfc_storage {
 	void **page_storage;
 	long *key_storage;
 	unsigned int *index_storage;
+	long *roffset_storage;
 	struct mutex 	lock;
 	unsigned int 	bitmap_size;
 	unsigned long 	*bitmap;
@@ -25,9 +26,16 @@ struct pmdfc_storage {
 struct pmdfc_storage_cluster{
 	struct pmdfc_storage *cl_storages[PMDFC_MAX_STORAGE];
 	/* this bitmap is part of a hack for disk bitmap.. will go eventually. - zab */
-//	unsigned long	cl_nodes_bitmap[BITS_TO_LONGS(PMDFC_MAX_STORAGE)];
+	//	unsigned long	cl_nodes_bitmap[BITS_TO_LONGS(PMDFC_MAX_STORAGE)];
 };
 
 extern struct pmdfc_storage_cluster *ps_cluster;
+
+struct ht_data {
+	u64 longkey;
+	u64 roffset;
+	struct hlist_node h_node;
+};
+
 
 #endif

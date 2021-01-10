@@ -8,7 +8,6 @@
 #include <linux/random.h>
 #include <linux/kthread.h>
 
-#include "tcp.h"
 #include "rdma_op.h"
 #include "rdma_conn.h"
 
@@ -42,42 +41,24 @@ static long get_longkey(long key, long index)
 	return longkey;
 }
 
-int single_write_message_test(void* arg){
+int rdpma_single_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
 	uint32_t key, index;
 	char *test_string;
+	struct page *test_page= alloc_pages(GFP_KERNEL, 0);
 
 	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
-	key = 4000;
-	index = 1;
+	memcpy(page_address(test_page), test_string, PAGE_SIZE);
 
-	ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
-		test_string, PAGE_SIZE, 0, &status);
+	long longkey = get_longkey(4400, 1);
 
-	complete(my_data->comp);
-
-	printk("[ PASS ] %s succeeds \n", __func__);
-
-	return 0;
-}
-
-int write_message_test(void* arg){
-	struct thread_data* my_data = (struct thread_data*)arg;
-	int tid = my_data->tid;
-	int i, ret;
-	int status;
-	uint32_t index = 0;
-	uint32_t key;
-
-	for(i = 0; i < ITERATIONS; i++){
-		key = (uint32_t)keys[tid][i];
-//		pr_info("write_message: %u\n", key);
-		ret = pmnet_send_message(PMNET_MSG_PUTPAGE, key, index, 
-			(char *)vpages[tid][i], PAGE_SIZE, 0, &status);
-	}
+//	roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
+	uint64_t roffset = 0;
+	
+	ret = pmdfc_rdma_write(test_page, roffset);
 
 	complete(my_data->comp);
 
@@ -86,21 +67,26 @@ int write_message_test(void* arg){
 	return 0;
 }
 
-
-int single_read_message_test(void* arg){
+int rdpma_single_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
+	uint32_t key, index;
+	char *test_string;
 	int result = 0;
-	uint32_t key = 4000, index = 1;
-	char test_string[PAGE_SIZE] = "hi, dicl";
-	void *result_page;
+	struct page *test_page= alloc_pages(GFP_KERNEL, 0);
 
-	result_page = (void*)kmalloc(PAGE_SIZE, GFP_KERNEL);
+	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	strcpy(test_string, "hi, dicl");
 
-	ret = pmnet_send_recv_message(PMNET_MSG_GETPAGE, key, index, 
-			result_page, PAGE_SIZE, 0, &status);
+	long longkey = get_longkey(4400, 1);
 
-	if(memcmp(result_page, test_string, PAGE_SIZE) != 0){
+//	roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
+	uint64_t roffset = 0;
+	
+	ret = pmdfc_rdma_read_sync(test_page, roffset); 
+	pmdfc_rdma_poll_load(smp_processor_id());
+
+	if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){
 		printk("[ FAIL ] Searching for key %x\n", key);
 		result++;
 	}
@@ -109,33 +95,9 @@ int single_read_message_test(void* arg){
 		printk("[ PASS ] %s succeeds\n", __func__);
 
 	complete(my_data->comp);
-	return 0;
-}
 
-int read_message_test(void* arg){
-	struct thread_data* my_data = (struct thread_data*)arg;
-	int ret, i, status;
-	uint32_t key, index = 0;
-	int tid = my_data->tid;
-	int nfailed = 0;
+	printk("[ PASS ] %s succeeds \n", __func__);
 
-	for(i = 0; i < ITERATIONS; i++){
-		key = keys[tid][i];
-		ret = pmnet_send_recv_message(PMNET_MSG_GETPAGE, key, index, 
-				return_page[tid], PAGE_SIZE, 0, &status);
-
-		if(memcmp(return_page[tid], (char *)vpages[tid][i], PAGE_SIZE) != 0){
-//			printk("failed Searching for key %x\n return: %s\nexpect: %s", key, (char *)return_page[tid], (char *)vpages[tid][i]);
-			nfailed++;
-		}
-	}
-
-	if (nfailed == 0)
-		printk("[ PASS ] %s succeeds\n", __func__);
-	else
-		printk("failedSearch: %d\n", nfailed);
-
-	complete(my_data->comp);
 	return 0;
 }
 
@@ -155,8 +117,7 @@ int main(void){
 	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){
-//		write_threads[i] = kthread_create((void*)&write_message_test, (void*)args[i], "page_writer");
-		write_threads[i] = kthread_create((void*)&single_write_message_test, (void*)args[i], "page_writer");
+		write_threads[i] = kthread_create((void*)&rdpma_single_write_message_test, (void*)args[i], "page_writer");
 		wake_up_process(write_threads[i]);
 	}
 
@@ -178,8 +139,7 @@ int main(void){
 	start = ktime_get();
 
 	for(i=0; i<THREAD_NUM; i++){
-//		read_threads[i] = kthread_create((void*)&read_message_test, (void*)args[i], "page_reader");
-		read_threads[i] = kthread_create((void*)&single_read_message_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&rdpma_single_read_message_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
 
