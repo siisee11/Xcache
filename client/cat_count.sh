@@ -1,6 +1,5 @@
 #bin/bash!
 
-: '
 echo "succ_gets : ";
 cat /sys/kernel/debug/cleancache/succ_gets;
 echo "failed_gets : ";
@@ -20,9 +19,9 @@ echo "hit_get: ";
 cat /sys/kernel/debug/pmdfc/hit_gets;
 echo "dropped_puts: ";
 cat /sys/kernel/debug/pmdfc/drop_puts;
-'
 
-watch -n 1 '
-cat /sys/kernel/debug/pmnet/*;
-'
+
+#watch -n 1 '
+#cat /sys/kernel/debug/pmnet/*;
+#'
 

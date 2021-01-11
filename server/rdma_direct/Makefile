@@ -4,7 +4,7 @@
 CFLAGS := -Wall -O2 -lrdmacm -libverbs -lpthread 
 CFLAGS += -lpmemobj
 #CFLAGS += -DAPP_DIRECT
-CFLAGS += -lnuma -DDAX_KMEM
+#CFLAGS += -lnuma -DDAX_KMEM
 #LDLIBS := ${LDLIBS} -lrdmacm -libverbs -lpthread
 CC := g++
 

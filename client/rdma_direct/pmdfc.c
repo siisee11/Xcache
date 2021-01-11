@@ -52,15 +52,8 @@ static long put_cnt, get_cnt;
 /* TODO: is it thread safe? */
 struct bloom_filter *bf;
 
-/* work queue */
-static void pmdfc_remotify_fn(struct work_struct *work);
-static struct workqueue_struct *pmdfc_wq;
-static DECLARE_WORK(pmdfc_remotify_work, pmdfc_remotify_fn);
-
 /* list, lock and condition variables */
 static LIST_HEAD(page_list_head);
-DECLARE_WAIT_QUEUE_HEAD(pmdfc_worker_wq);
-static int done = 0;
 
 /* Global page storage */
 struct pmdfc_storage_cluster *ps_cluster = NULL;
@@ -85,84 +78,6 @@ static long get_longkey(long key, long index)
     return longkey;
 }
 
-/* worker function for workqueue */
-static void pmdfc_remotify_fn(struct work_struct *work)
-{
-	struct pmdfc_storage *storage = NULL;
-	long key;
-	unsigned int index;
-    long roffset;
-	int i;
-
-	int status, ret = 0;
-//	int cpu = -1;
-
-//	cpu = smp_processor_id();
-//	pr_info("pmdfc-remotify: workqueue worker running on CPU %u...\n", cpu);
-
-	/* It must sleepable */
-	BUG_ON(irqs_disabled());
-
-	/* TODO: DEADLOCK AGAIN? */
-	/*
-	 * 1. Find full storage 
-	 * If exist, send whole pages in storage with corresponding key and index.
-	 * If not, just return.
-	 */
-	unsigned int bit = 0;
-
-	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
-		if (test_bit(PS_full, &ps_cluster->cl_storages[i]->flags))
-			break;
-	}
-
-	if ( i > PMDFC_MAX_STORAGE - 1 )
-		goto not_found;
-
-	storage = ps_cluster->cl_storages[i];
-
-	/* Don't stop it now~ */
-	while(1) {
-retry:
-		/* TODO: BUT it may need lock or something? */
-		bit = find_next_bit(storage->bitmap, PMDFC_STORAGE_SIZE, bit);
-		if ( bit >= PMDFC_STORAGE_SIZE ) {
-			/* No page, wait for next round */
-			goto out;
-		}
-
-		/* XXX: after find bit and sleep and wake up after occupied_bit free would cause error */
-		if ( bit < PMDFC_STORAGE_SIZE ) {
-			key = storage->key_storage[bit];
-			index = storage->index_storage[bit];
-			roffset = storage->roffset_storage[bit];
-			if (!rdma) {
-				clear_bit(bit, storage->bitmap);
-			} else {
-				/* RDMA networking */
-                if (rdma_direct) {
-                    ret = pmdfc_rdma_write(storage->page_storage[bit], roffset); // TODO: roffset
-                    if (put_cnt % SAMPLE_RATE == 0) {
-                        pr_info("pmdfc: PUT PAGE: longkey=%lld, roffset=%lld\n",
-                                key, roffset);
-                    }
-                    put_cnt++;
-
-                }
-				clear_bit(bit, storage->bitmap);
-			}
-		} else {
-			goto out;
-		}
-	}
-out:
-	clear_bit(PS_full, &storage->flags);
-	set_bit(PS_empty, &storage->flags);
-not_found:
-	return;
-}
-
-
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
 		struct cleancache_filekey key,
@@ -171,12 +86,11 @@ static void pmdfc_cleancache_put_page(int pool_id,
 #if defined(PMDFC_PUT)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	void *pg_from;
-	int i;
 
-	int status = 0;
 	int ret = -1;
     struct ht_data *tmp;
 
+#if defined(PMDFC_BLOOM_FILTER)
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
 
@@ -196,6 +110,13 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	BUG_ON(oid.oid[1] != 0);
 	BUG_ON(oid.oid[2] != 0);
 
+
+	ret = bloom_filter_add(bf, data, 24);
+	if ( ret < 0 )
+		pr_info("bloom_filter add fail\n");
+#endif
+
+
 #if defined(PMDFC_DEBUG)
 	/* Send page to server */
 	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
@@ -214,74 +135,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
         pr_warn("[ WARN ] Remote memory is full..\n");
     }
     hash_add(hash_head, &tmp->h_node, tmp->longkey);
-
-#ifdef PMDFC_BUFFERING
-	/* 
-	 * 1. Find empty slot.
-	 * If exist, then copy page content to it.
-	 * If not, then just drop that page and return.
-	 */
-	unsigned int bit;
-	struct pmdfc_storage *storage;
-	i = 0;
-
-	BUG_ON(ps_cluster == NULL);
-	BUG_ON(ps_cluster->cl_storages[0] == NULL);
-
-	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
-		if (test_bit(PS_put, &ps_cluster->cl_storages[i]->flags))
-			break;
-	}
-
-	if ( i > PMDFC_MAX_STORAGE - 1 ) {
-		/* Cannot find PS_put, So make PS_empty buffer PS_put */
-		for ( i = 0 ; i < 4 ; i++) {
-			if (test_bit(PS_empty, &ps_cluster->cl_storages[i]->flags)) {
-				set_bit(PS_put, &ps_cluster->cl_storages[i]->flags);
-				clear_bit(PS_empty, &ps_cluster->cl_storages[i]->flags);
-				break;
-			}
-		}
-	}
-
-	/* Cannot find PS_put and also PS_empty doesn't exist */
-	if ( i > PMDFC_MAX_STORAGE - 1 ) {
-		pmdfc_drop_puts++;
-		goto out;
-	}
-
-	storage = ps_cluster->cl_storages[i];
-	/* TODO: It may need lock */
-retry:
-	bit = find_first_zero_bit(storage->bitmap, PMDFC_STORAGE_SIZE);
-	if ( bit < PMDFC_STORAGE_SIZE) {
-		if (!test_and_set_bit(bit, storage->bitmap)) {
-//			pr_info("PMDFC_PREALLOC: put page to storage[%u]\n", bit);
-			memcpy(storage->page_storage[bit], pg_from, PAGE_SIZE);	
-			storage->key_storage[bit] = (long)oid.oid[0];
-			storage->index_storage[bit] = index;
-			storage->roffset_storage[bit] = tmp->roffset;
-			set_bit(bit, storage->bitmap);
-		} else 
-			goto retry;
-	} else {
-		/*
-		 * 2. Queue work to workqueue when it full.
-		 */
-		clear_bit(PS_put, &storage->flags);
-		set_bit(PS_full, &storage->flags);
-		queue_work(pmdfc_wq, &pmdfc_remotify_work);
-		goto out;
-	}
-#endif
-
-#if defined(PMDFC_BLOOM_FILTER)
-	ret = bloom_filter_add(bf, data, 24);
-	if ( ret < 0 )
-		pr_info("bloom_filter add fail\n");
-#endif
     
-#ifndef PMDFC_BUFFERING
     if (rdma && rdma_direct) { 
         ret = pmdfc_rdma_write(page, tmp->roffset);
     }
@@ -291,12 +145,10 @@ retry:
                 (long)oid.oid[0], index, tmp->longkey, tmp->roffset);
     }
     put_cnt++;
-#endif
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
 #endif
-out:
 
 #endif /* PMDFC_PUT */
 	return;
@@ -308,16 +160,14 @@ static int pmdfc_cleancache_get_page(int pool_id,
 {
 #if defined(PMDFC_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-	char *to_va;
-	char response[4096];
 	int ret;
-
-	int status;
-	bool isIn = false;
 
     long longkey = 0, roffset = 0;
     struct ht_data *cur;
     atomic_t found = ATOMIC_INIT(0);
+
+#if defined(PMDFC_BLOOM_FILTER)
+	bool isIn = false;
 
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
@@ -334,7 +184,6 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 	BUG_ON(page == NULL);
 
-#if defined(PMDFC_BLOOM_FILTER)
 	/* page is in or not? */
 	bloom_filter_check(bf, data, 24, &isIn);
 
@@ -369,40 +218,17 @@ static int pmdfc_cleancache_get_page(int pool_id,
         goto not_exists;
     }
 
-	if (!rdma) {
-#ifdef PMDFC_NETWORK
-		if (status != 0) {
-			/* get page failed */
-			pmdfc_miss_gets++;
-			goto not_exists;
-		} else {
-			pmdfc_hit_gets++;
-		}
-#else
-		goto not_exists;
-#endif
-	} 
-	else {
-        /* RDMA networking */
-        if (rdma_direct) {
-            if (get_cnt % SAMPLE_RATE == 0) {
-                pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld, roffset=%ld\n",
-                        (long)oid.oid[0], index, longkey, roffset);
+	/* RDMA networking */
+	if (rdma_direct) {
+		if (get_cnt % SAMPLE_RATE == 0) {
+			pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld, roffset=%ld\n",
+					(long)oid.oid[0], index, longkey, roffset);
 
-            }
-            ret = pmdfc_rdma_read_sync(page, roffset); 
-            get_cnt++;
-            pmdfc_rdma_poll_load(smp_processor_id());
-            atomic_set(&found, 0);
-        } else {
-            if (status != 0) {
-                /* get page failed */
-                pmdfc_miss_gets++;
-                goto not_exists;
-            } else {
-                pmdfc_hit_gets++;
-            }
-        }
+		}
+		ret = pmdfc_rdma_read_sync(page, roffset); 
+		get_cnt++;
+		pmdfc_rdma_poll_load(smp_processor_id());
+		atomic_set(&found, 0);
 	}
 
 #if defined(PMDFC_DEBUG)
@@ -505,6 +331,7 @@ static int pmdfc_cleancache_register_ops(void)
 	return ret;
 }
 
+#if defined(PMDFC_BLOOM_FILTER)
 static int bloom_filter_init(void)
 {
 //	bf = bloom_filter_new(12364167);
@@ -523,63 +350,7 @@ static int bloom_filter_init(void)
 
 	return 0;
 }
-
-/**
- * init_ps_cluster - Initialize storage cluster
- *
- * ps_cluster will store page content, key and index
- */
-static int init_ps_cluster(void){
-	struct pmdfc_storage_cluster *cluster = NULL;
-	struct pmdfc_storage *storage = NULL;
-	int i, j;
-
-//	pr_info("pmdfc: init_ps_cluster\n");
-
-	cluster = kzalloc(sizeof(struct pmdfc_storage_cluster), GFP_KERNEL);
-	if (cluster == NULL) {
-		pr_err("pmdfc: cannot allocate cluster\n");
-		return -ENOMEM;
-	}
-
-	for ( i = 0 ; i < PMDFC_MAX_STORAGE ; i++) {
-		storage = kzalloc(sizeof(struct pmdfc_storage), GFP_KERNEL);
-
-		/* TODO: NUMA awareness */
-//		int numa = i < 2 ? 0 : 1;
-		unsigned long bitmap_size = BITS_TO_LONGS(PMDFC_STORAGE_SIZE) * sizeof(unsigned long);
-		long *key_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(long), GFP_KERNEL);
-		unsigned int *index_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(unsigned int), GFP_KERNEL);
-		long *roffset_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(long), GFP_KERNEL);
-		unsigned long *bitmap = kzalloc(bitmap_size, GFP_KERNEL);
-		void **page_storage = kzalloc(PMDFC_STORAGE_SIZE * sizeof(void*), GFP_KERNEL);
-		if (!page_storage){
-			pr_err("pmdfc: cannot allocate page_storage\n");
-			return -ENOMEM;
-		}
-		for ( j = 0 ; j < PMDFC_STORAGE_SIZE; j++) {
-			page_storage[j] = kzalloc(PAGE_SIZE, GFP_KERNEL);
-		}
-
-//		mutex_init(&pmdfc_storages[i].lock);
-		storage->bitmap_size = PMDFC_STORAGE_SIZE;
-		storage->flags = 0;
-		set_bit(PS_empty, &storage->flags);
-		storage->page_storage = page_storage;
-		storage->key_storage = key_storage;
-		storage->index_storage = index_storage;
-		storage->roffset_storage = roffset_storage;
-		storage->bitmap = bitmap;
-		bitmap_zero(storage->bitmap, storage->bitmap_size);
-		
-		cluster->cl_storages[i] = storage;
-//		pr_info("pmdfc: cluster->cl_storages[%d]=%p\n", i, cluster->cl_storages[i]);
-	}
-
-	ps_cluster = cluster;
-
-	return 0;
-}
+#endif
 
 void pmdfc_debugfs_exit(void)
 {
@@ -607,29 +378,6 @@ static int __init pmdfc_init(void)
 
 	pr_info("Hostname: \tapache1\n");
 	pr_info("Transport: \t%s\n", rdma ? "rdma" : "tcp");
-
-	/*
-	 * PREALLOC - make free spaces while load module 
-	 * Two buffers for a one CPU node
-	 * Since our testbed has two CPU node, we would create 4 buffers.
-	 */
-	ret = init_ps_cluster();
-	if (ret != 0) {
-		printk(KERN_ERR "unable to init ps_cluster\n");
-		return ret;
-	}
-	BUG_ON(ps_cluster == NULL);
-	pr_info("[  OK  ] ps_cluster initialized\n");
-
-	/* TODO: why we use singlethread here?? */
-//	pmdfc_wq = create_singlethread_workqueue("pmdfc-remotify");
-//	pmdfc_wq = alloc_ordered_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM);
-	pmdfc_wq = alloc_workqueue("pmdfc-remotify", WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
-	if (pmdfc_wq == NULL) {
-		printk(KERN_ERR "unable to launch pmdfc thread\n");
-		return -ENOMEM;
-	}
-//	queue_work(pmdfc_wq, &pmdfc_remotify_work);
 
 #if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
@@ -669,12 +417,6 @@ static void pmdfc_exit(void)
 #if defined(PMDFC_DEBUG_FS)
 	pmdfc_debugfs_exit();
 #endif
-
-	done = 1;
-	wake_up_interruptible(&pmdfc_worker_wq);
-	/* cancle in_process works and destory workqueue */
-	cancel_work_sync(&pmdfc_remotify_work);
-	destroy_workqueue(pmdfc_wq);
 
 #if defined(PMDFC_BLOOM_FILTER)
 	bloom_filter_unref(bf);

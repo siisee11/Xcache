@@ -17,7 +17,7 @@ const size_t BUFFER_SIZE = ((1UL << 30) * 16);
 //const unsigned int NUM_QUEUES_PER_PROC = 3;
 //const unsigned int NUM_QUEUES = NUM_PROCS * NUM_QUEUES_PER_PROC;
 //const unsigned int NUM_QUEUES = 2;
-const unsigned int NUM_QUEUES = 16;
+const unsigned int NUM_QUEUES = 40; /* XXX */
 
 struct device {
   struct ibv_pd *pd;

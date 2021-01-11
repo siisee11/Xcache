@@ -105,6 +105,14 @@ static inline int get_req_for_page(struct rdma_req **req, struct ib_device *dev,
   (*req)->page = page;
   init_completion(&(*req)->done);
 
+/**
+ * ib_dma_map_page - Map a physical page to DMA address
+ * @dev: The device for which the dma_addr is to be created
+ * @page: The page to be mapped
+ * @offset: The offset within the page
+ * @size: The size of the region in bytes
+ * @direction: The direction of the DMA
+ */
   (*req)->dma = ib_dma_map_page(dev, page, 0, PAGE_SIZE, dir);
   if (unlikely(ib_dma_mapping_error(dev, (*req)->dma))) {
     pr_err("[ FAIL ] ib_dma_mapping_error\n");
@@ -113,6 +121,14 @@ static inline int get_req_for_page(struct rdma_req **req, struct ib_device *dev,
     goto out;
   }
 
+
+/**
+ * ib_dma_sync_single_for_device - Prepare DMA region to be accessed by device
+ * @dev: The device for which the DMA address was created
+ * @addr: The DMA address
+ * @size: The size of the region in bytes
+ * @dir: The direction of the DMA
+ */
   ib_dma_sync_single_for_device(dev, (*req)->dma, PAGE_SIZE, dir);
 out:
   return ret;
