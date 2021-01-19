@@ -83,6 +83,30 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
       goto out_free_pd;
     }
 
+	/* XXX: allocate memory region here */
+	rdev->mr = rdev->pd->device->ops.get_dma_mr(rdev->pd, IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_WRITE | IB_ACCESS_REMOTE_READ);
+	rdev->mr->pd = rdev->pd;
+	rdev->mr_size = LOCAL_META_REGION_SIZE;
+	rdev->local_mm = (uint64_t)kmalloc(rdev->mr_size, GFP_KERNEL);
+//	rdev->local_dma_addr = ib_reg_mr_addr((void*)rdev->local_mm, rdev->mr_size);
+	rdev->local_dma_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_mm, rdev->mr_size, DMA_BIDIRECTIONAL);
+	if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_addr))) {
+		ib_dma_unmap_single(rdev->dev,
+				rdev->local_dma_addr, rdev->mr_size, DMA_BIDIRECTIONAL);
+		return -ENOMEM;
+	}
+
+
+	q->ctrl->clientmr.key = rdev->pd->local_dma_lkey;
+//	q->ctrl->clientmr->key = rdev->mr.rkey;
+	q->ctrl->clientmr.baseaddr = rdev->local_dma_addr;
+	q->ctrl->clientmr.mr_size = rdev->mr_size;
+
+	pr_info("[ INFO ] local mr: key(%u), baseaddr(%llx), mr_size(%llu)\n", 
+			q->ctrl->clientmr.key,
+			q->ctrl->clientmr.baseaddr,
+			q->ctrl->clientmr.mr_size);
+
     q->ctrl->rdev = rdev;
   }
 
@@ -113,9 +137,10 @@ static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
   init_attr.event_handler = pmdfc_rdma_qp_event;
   init_attr.cap.max_send_wr = QP_MAX_SEND_WR;
   init_attr.cap.max_recv_wr = QP_MAX_RECV_WR;
-  init_attr.cap.max_recv_sge = 1;
-  init_attr.cap.max_send_sge = 1;
+  init_attr.cap.max_recv_sge = 2; /* XXX */
+  init_attr.cap.max_send_sge = 2; /* XXX */
   init_attr.sq_sig_type = IB_SIGNAL_REQ_WR;
+//  init_attr.qp_type = IB_QPT_UD; /* XXX: RC->UC */
   init_attr.qp_type = IB_QPT_RC;
   init_attr.send_cq = queue->cq;
   init_attr.recv_cq = queue->cq;
@@ -153,12 +178,24 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 
   pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
+/**
+ * __ib_alloc_cq        allocate a completion queue
+ * @dev:		device to allocate the CQ for
+ * @private:		driver private data, accessible from cq->cq_context
+ * @nr_cqe:		number of CQEs to allocate
+ * @comp_vector:	HCA completion vectors for this CQ
+ * @poll_ctx:		context to poll the CQ from.
+ *
+ * This is the proper interface to allocate a CQ for in-kernel users. A
+ * CQ allocated with this interface will automatically be polled from the
+ * specified context. The ULP must use wr->wr_cqe instead of wr->wr_id
+ * to use this CQ abstraction.
+ */
   if (q->qp_type == QP_READ_ASYNC)
-    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES,
-      comp_vector, IB_POLL_SOFTIRQ);
+    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
   else
-    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES,
-      comp_vector, IB_POLL_DIRECT);
+    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
+//    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
 
   if (IS_ERR(q->cq)) {
     ret = PTR_ERR(q->cq);
@@ -469,8 +506,30 @@ static void pmdfc_rdma_recv_remotemr_done(struct ib_cq *cq, struct ib_wc *wc)
 		      DMA_FROM_DEVICE); 
   mr_free_end = ctrl->servermr.mr_size;
 
-  pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (GB)\n", ctrl->servermr.baseaddr,
+  pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (GB) *******************************************\n", ctrl->servermr.baseaddr,
 	  ctrl->servermr.key, ctrl->servermr.mr_size/1024/1024/1024);
+  complete_all(&qe->done);
+}
+
+/* XXX */
+static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
+{
+  struct rdma_req *qe =
+    container_of(wc->wr_cqe, struct rdma_req, cqe);
+  struct rdma_queue *q = cq->cq_context;
+  struct pmdfc_rdma_ctrl *ctrl = q->ctrl;
+  struct ib_device *ibdev = q->ctrl->rdev->dev;
+
+  if (unlikely(wc->status != IB_WC_SUCCESS)) {
+    pr_err("[ FAIL ] pmdfc_rdma_recv_done status is not success\n");
+    return;
+  }
+  ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct pmdfc_rdma_memregion),
+		      DMA_FROM_DEVICE); 
+  mr_free_end = ctrl->servermr.mr_size;
+
+  pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (GB)\n", ctrl->clientmr.baseaddr,
+	  ctrl->clientmr.key, ctrl->clientmr.mr_size/1024/1024/1024);
   complete_all(&qe->done);
 }
 
@@ -492,6 +551,33 @@ static int pmdfc_rdma_post_recv(struct rdma_queue *q, struct rdma_req *qe,
   wr.num_sge = 1;
 
   ret = ib_post_recv(q->qp, &wr, &bad_wr);
+  if (ret) {
+    pr_err("[ FAIL ] ib_post_recv failed: %d\n", ret);
+  }
+  return ret;
+}
+
+/* XXX */
+static int pmdfc_rdma_post_send(struct rdma_queue *q, struct rdma_req *qe,
+  size_t bufsize)
+{
+  const struct ib_send_wr *bad_wr;
+  struct ib_send_wr wr = {};
+  struct ib_sge sge;
+  int ret;
+
+  sge.addr = qe->dma;
+  sge.length = bufsize;
+  sge.lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+  wr.next    = NULL;
+  wr.wr_cqe  = &qe->cqe;
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode     = IB_WR_SEND;
+  wr.send_flags = IB_SEND_SIGNALED;
+
+  ret = ib_post_send(q->qp, &wr, &bad_wr);
   if (ret) {
     pr_err("[ FAIL ] ib_post_recv failed: %d\n", ret);
   }
@@ -534,6 +620,18 @@ inline static void pmdfc_rdma_wait_completion(struct ib_cq *cq,
   ndelay(1000);
   while (!completion_done(&qe->done)) {
     ndelay(250);
+	/**
+	 * ib_process_direct_cq - process a CQ in caller context
+	 * @cq:		CQ to process
+	 * @budget:	number of CQEs to poll for
+	 *
+	 * This function is used to process all outstanding CQ entries on a
+	 * %IB_POLL_DIRECT CQ.  It does not offload CQ processing to a different
+	 * context and does not ask for completion interrupts from the HCA.
+	 *
+	 * Note: for compatibility reasons -1 can be passed in %budget for unlimited
+	 * polling.  Do not use this feature in new code, it will be removed soon.
+	 */
     ib_process_cq_direct(cq, 1);
   }
 }
@@ -567,6 +665,37 @@ out_free_qe:
 out:
   return ret;
 }
+
+static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
+{
+  struct rdma_req *qe;
+  int ret;
+  struct ib_device *dev;
+
+  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  dev = ctrl->rdev->dev;
+
+  ret = get_req_for_buf(&qe, dev, &(ctrl->clientmr), sizeof(ctrl->clientmr),
+			DMA_TO_DEVICE);
+  if (unlikely(ret))
+    goto out;
+
+  qe->cqe.done = pmdfc_rdma_send_localmr_done;
+
+  ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe, sizeof(struct pmdfc_rdma_memregion));
+
+  if (unlikely(ret))
+    goto out_free_qe;
+
+  /* this delay doesn't really matter, only happens once */
+  pmdfc_rdma_wait_completion(ctrl->queues[0].cq, qe);
+
+out_free_qe:
+  kmem_cache_free(req_cache, qe);
+out:
+  return ret;
+}
+
 
 /* idx is absolute id (i.e. > than number of cpus) */
 inline enum qp_type get_queue_type(unsigned int idx)
@@ -616,6 +745,13 @@ static int __init rdma_connection_init_module(void)
   ret = pmdfc_rdma_recv_remotemr(gctrl);
   if (ret) {
     pr_err("[ FAIL ] could not setup remote memory region\n");
+    ib_unregister_client(&pmdfc_rdma_ib_client);
+    return -ENODEV;
+  }
+
+  ret = pmdfc_rdma_send_localmr(gctrl);
+  if (ret) {
+    pr_err("[ FAIL ] could not send local memory region\n");
     ib_unregister_client(&pmdfc_rdma_ib_client);
     return -ENODEV;
   }
