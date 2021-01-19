@@ -1,1 +1,0 @@
-cmd_/mnt/dg_nas/git/pmdfc/client/dram-backend/pmdfc_dram.o := ld -m elf_x86_64  -z max-page-size=0x200000    -r -o /mnt/dg_nas/git/pmdfc/client/dram-backend/pmdfc_dram.o /mnt/dg_nas/git/pmdfc/client/dram-backend/pmdfc.o /mnt/dg_nas/git/pmdfc/client/dram-backend/bloom_filter.o

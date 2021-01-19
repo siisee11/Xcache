@@ -21,7 +21,7 @@
 #include "rdma_conn.h"
 
 #define PMDFC_PUT 1
-#define PMDFC_GET 1
+//#define PMDFC_GET 1
 //#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
 //#define PMDFC_BUFFERING 1
@@ -45,7 +45,8 @@ atomic_long_t mr_free_start;
 extern long mr_free_end;
 
 static int rdma, rdma_direct;
-#define SAMPLE_RATE 10000 // Per-MB
+//#define SAMPLE_RATE 10000 // Per-MB
+#define SAMPLE_RATE 1
 static long put_cnt, get_cnt;
 
 /* bloom filter */
@@ -54,9 +55,6 @@ struct bloom_filter *bf;
 
 /* list, lock and condition variables */
 static LIST_HEAD(page_list_head);
-
-/* Global page storage */
-struct pmdfc_storage_cluster *ps_cluster = NULL;
 
 /*
  * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
@@ -78,6 +76,19 @@ static long get_longkey(long key, long index)
     return longkey;
 }
 
+static inline uint32_t bit_mask(int node_id, int msg_num, int type, int state, uint32_t num){
+	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
+	return target;
+}
+
+static void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* state, uint32_t* num){
+	*num = (uint32_t)(target & 0x000000ff);
+	*state = (int)((target >> 8) & 0x0000000f);
+	*type = (int)((target >> 12) & 0x0000000f);
+	*msg_num = (int)((target >> 16) & 0x00000fff);
+	*node_id = (int)((target >> 28) & 0x0000000f);
+}
+
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
 		struct cleancache_filekey key,
@@ -89,6 +100,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
 	int ret = -1;
     struct ht_data *tmp;
+	uint32_t imm;
 
 #if defined(PMDFC_BLOOM_FILTER)
 	unsigned char *data = (unsigned char*)&key;
@@ -136,13 +148,16 @@ static void pmdfc_cleancache_put_page(int pool_id,
     }
     hash_add(hash_head, &tmp->h_node, tmp->longkey);
     
+	/* imm data */
+	imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
+
     if (rdma && rdma_direct) { 
-        ret = pmdfc_rdma_write(page, tmp->roffset);
+        ret = rdpma_put(page, tmp->longkey, imm);
     }
     
     if (put_cnt % SAMPLE_RATE == 0) {
-        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%lld, roffset=%lld\n",
-                (long)oid.oid[0], index, tmp->longkey, tmp->roffset);
+        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx, roffset=%lld, imm=%u\n",
+                (long)oid.oid[0], index, tmp->longkey, tmp->roffset, imm);
     }
     put_cnt++;
 
@@ -210,6 +225,9 @@ static int pmdfc_cleancache_get_page(int pool_id,
         }
     }
 
+	/* imm data */
+	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
+
     if (!atomic_read(&found)) {
         if (get_cnt % SAMPLE_RATE == 0) {
             pr_info("pmdfc: GET PAGE FAILED: not allocated...\n");
@@ -223,11 +241,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		if (get_cnt % SAMPLE_RATE == 0) {
 			pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld, roffset=%ld\n",
 					(long)oid.oid[0], index, longkey, roffset);
-
 		}
-		ret = pmdfc_rdma_read_sync(page, roffset); 
+		/* send Address of page */
+        ret = rdpma_get(page, longkey, imm);
 		get_cnt++;
-		pmdfc_rdma_poll_load(smp_processor_id());
 		atomic_set(&found, 0);
 	}
 

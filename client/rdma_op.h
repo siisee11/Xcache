@@ -18,6 +18,7 @@ int pmdfc_rdma_read_async(struct page *page, u64 roffset);
 int pmdfc_rdma_read_sync(struct page *page, u64 roffset);
 
 int pmdfc_rdma_write(struct page *page, u64 roffset);
+int pmdfc_rdma_write_with_imm(struct page *page, u64 roffset, uint32_t);
 //static void pmdfc_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc);
 
 //static inline int poll_target(struct rdma_queue *q, int target);

@@ -1,21 +1,24 @@
 .PHONY: clean all
 
 #CFLAGS := -Wall -O2 -g -ggdb -Werror -lrdmacm -libverbs -lpthread
-CFLAGS := -Wall -O2 -lrdmacm -libverbs -lpthread 
-CFLAGS += -lpmemobj
-#CFLAGS += -DAPP_DIRECT
-#CFLAGS += -lnuma -DDAX_KMEM
+CFLAGS := -std=c++17 -g -Wall -O2 
+LIBS := -lrdmacm -libverbs -lpthread -lpmemobj -lnuma  -lpmem
+
 #LDLIBS := ${LDLIBS} -lrdmacm -libverbs -lpthread
-CC := g++
+CXX := g++
+INCLUDES=-I./
 
 APPS := rdma_svr
 
 all:
-	$(CC) rdma_svr.cpp -o rdma_svr.out $(CFLAGS)
+	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
+	$(CXX) $(CFLAGS) -c -o NuMA_KV.o NuMA_KV.cpp $(INCLUDES) $(LIBS)
+	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
+	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS)
 
 rdma_dram:
 	#numactl -N 0,1 ./rdma_svr.out 7777
-	numactl -N 0,1 -m 0,1 ./rdma_svr.out 7777
+	numactl -N 0,1 -m 0,1 ./rdma_svr 7777
 
 rdma_app_direct:
 	#rm -f /mnt/pmem0/pmdfc/pm_mr
@@ -25,6 +28,9 @@ rdma_app_direct:
 rdma_dax_kmem:
 	numactl -N 0,1 -m 0,1 ./rdma_svr.out 7777
 	#./rdma_svr.out 7777
+
+gdb:
+	gdb ./rdma_svr
 
 clean:
 	rm -f *.o *.out
