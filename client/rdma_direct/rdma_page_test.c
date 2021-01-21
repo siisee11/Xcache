@@ -13,7 +13,7 @@
 #include "rdma_conn.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 32)
+#define TOTAL_CAPACITY (PAGE_SIZE * 8)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -177,7 +177,6 @@ int main(void){
 		args[i]->tid = i;
 		args[i]->comp = &comp[i];
 	}
-
 	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
 	for(i=0; i<THREAD_NUM; i++){

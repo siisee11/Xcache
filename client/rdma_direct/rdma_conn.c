@@ -96,7 +96,6 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		return -ENOMEM;
 	}
 
-
 	q->ctrl->clientmr.key = rdev->pd->local_dma_lkey;
 //	q->ctrl->clientmr->key = rdev->mr.rkey;
 	q->ctrl->clientmr.baseaddr = rdev->local_dma_addr;
@@ -749,12 +748,14 @@ static int __init rdma_connection_init_module(void)
     return -ENODEV;
   }
 
+#if 0
   ret = pmdfc_rdma_send_localmr(gctrl);
   if (ret) {
     pr_err("[ FAIL ] could not send local memory region\n");
     ib_unregister_client(&pmdfc_rdma_ib_client);
     return -ENODEV;
   }
+#endif
 
   pr_info("[ PASS ] ctrl is ready for reqs\n");
   return 0;

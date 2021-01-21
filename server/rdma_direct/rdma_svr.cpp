@@ -106,6 +106,7 @@ int post_recv(int queue_id){
 
 /* post recv [ key ] */
 int pmdfc_rdma_post_recv_key(int queue_id){
+	dprintf("[ INFO ] pmdfc_rdma_post_recv_key RR called\n");
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
 	struct ibv_sge sge;
@@ -126,17 +127,20 @@ int pmdfc_rdma_post_recv_key(int queue_id){
 		fprintf(stderr, "[%s] ibv_post_recv to node %d failed\n", __func__, queue_id);
 		return 1;
 	}
+
+	dprintf("[ INFO ] pmdfc_rdma_post_recv_key RR posted\n");
 	return 0;
 }
 
 /* post recv [ page, key ] */
 int pmdfc_rdma_post_recv(int queue_id){
+	dprintf("[ INFO ] pmdfc_rdma_post_recv RR called\n");
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
 	struct ibv_sge sge[2];
 
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
-	memset(&sge, 0, sizeof(struct ibv_sge));
+	memset(&sge, 0, sizeof(struct ibv_sge) * 2);
 
 	/* XXX: malloc new page for every RR */
 	gctrl->queues[queue_id].page = malloc(PAGE_SIZE);
@@ -206,9 +210,11 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				uint32_t num;
 				uint64_t key;
 				void *page;
+				struct ibv_send_wr wr = {};
+				struct ibv_send_wr *bad_wr = NULL;
+				struct ibv_sge sge = {};
 
 				bit_unmask(ntohl(wc.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
-
 				printf("[ INFO ] On Q[%d]: wr_id(%lx) node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,node_id, msg_num, type, tx_state, num);
 
 				if(type == MSG_WRITE){
@@ -216,10 +222,39 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					key = q->key;
 					page = q->page;
 					pmdfc_rdma_post_recv(queue_id);
+//					pmdfc_rdma_post_recv_key(queue_id);
 
 					gctrl->kv->Insert(key, (Value_t)page, 0, 0);
 					printf("[ INFO ] page %lx, key %lx Inserted\n", (uint64_t)page, key);
 					printf("[ INFO ] page %s\n", (char *)page);
+
+
+					sge.addr = (uint64_t)q->empty_page;
+					sge.length = PAGE_SIZE;
+					sge.lkey = gctrl->mr_buffer->lkey;
+
+					wr.opcode = IBV_WR_SEND_WITH_IMM;
+					wr.sg_list = &sge;
+					wr.num_sge = 1;
+					wr.send_flags = IBV_SEND_SIGNALED;
+					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_ABORTED, 0));
+
+					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+
+#if 0
+					sge.addr = (uint64_t)q->empty_page;
+					sge.length = 16;
+					sge.lkey = gctrl->mr_buffer->lkey;
+
+					wr.opcode = IBV_WR_SEND_WITH_IMM;
+					wr.sg_list = &sge;
+					wr.num_sge = 0;
+					wr.send_flags = IBV_SEND_SIGNALED;
+					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_WRITE_COMMITTED, 0));
+
+					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+#endif
+
 				}
 
 				if(type == MSG_READ) {
@@ -230,33 +265,47 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					/* 1. Get page address -> value */
 					void* value;
 					bool abort = false;
-					struct ibv_send_wr wr = {};
-					struct ibv_send_wr *bad_wr = NULL;
-					struct ibv_sge sge = {};
+
 					value = (void*)gctrl->kv->Get(key, 0); /* XXX */
 					if(!value){
 						dprintf("Value for key[%lx] not found\n", key);
 						abort = true;
 					}
-					printf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
-					printf("[ INFO ] page %s\n", (char *)value);
+
+					if( !abort ) {
+						printf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
+						printf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send value to client mr (page) */	
-					sge.addr = (uint64_t)value;
-					sge.length = PAGE_SIZE;
-					sge.lkey = gctrl->mr_buffer->lkey;
+						sge.addr = (uint64_t)value;
+						sge.length = PAGE_SIZE;
+						sge.lkey = gctrl->mr_buffer->lkey;
 
-					wr.opcode = IBV_WR_SEND;
-//					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-					wr.sg_list = &sge;
-					wr.num_sge = 1;
-					wr.send_flags = IBV_SEND_SIGNALED;
-//					wr.wr.rdma.remote_addr = (uint64_t)page;
-//					wr.wr.rdma.rkey        = gctrl->mr_buffer->rkey;
-					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
+						wr.opcode = IBV_WR_SEND_WITH_IMM;
+	//					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+						wr.sg_list = &sge;
+						wr.num_sge = 1;
+						wr.send_flags = IBV_SEND_SIGNALED;
+	//					wr.wr.rdma.remote_addr = (uint64_t)page;
+	//					wr.wr.rdma.rkey        = gctrl->mr_buffer->rkey;
+						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-					printf("[ INFO ] post send to qp %d (page %lx, key %lx) \n", queue_id, (uint64_t)value, key);
+						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+						printf("[ INFO ] post send to qp %d (page %lx, key %lx) \n", queue_id, (uint64_t)value, key);
+
+					} else {
+						sge.addr = (uint64_t)q->empty_page;
+						sge.length = PAGE_SIZE;
+						sge.lkey = gctrl->mr_buffer->lkey;
+
+						wr.opcode = IBV_WR_SEND_WITH_IMM;
+						wr.sg_list = &sge;
+						wr.num_sge = 1;
+						wr.send_flags = IBV_SEND_SIGNALED;
+						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_ABORTED, 0));
+
+						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+					}
 
 					struct ibv_wc wc;
 					int ne;
@@ -513,8 +562,7 @@ int on_connection(struct queue *q)
 
 		// TODO: poll here XXX Where?????
 
-
-		
+#if 0
 		/* XXX: GET CLIENT MR REGION */
 		sge.addr = (uint64_t) &ctrl->clientmr;
 		sge.length = sizeof(struct memregion);
@@ -524,6 +572,7 @@ int on_connection(struct queue *q)
 		rwr.num_sge = 1;
 
 		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
+#endif
 	}
 
 
@@ -583,7 +632,7 @@ int alloc_control()
 		gctrl->queues[i].ctrl = gctrl;
 		gctrl->queues[i].state = queue::INIT;
 		/* XXX */
-		gctrl->queues[i].page = malloc(4096 + 65);
+		gctrl->queues[i].empty_page = malloc(4096);
 	}
 
 	gctrl->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
@@ -644,6 +693,7 @@ int main(int argc, char **argv)
 	}
 
 	/* XXX: After all connection done. */
+#if 0
 	/* servermr post send qp need polling */
 	struct ibv_wc wc;
 	int ne;
@@ -659,6 +709,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
 		return 1;
 	}
+#endif
 
 	printf("done connecting all queues\n");
 

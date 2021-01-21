@@ -73,6 +73,7 @@ struct queue {
 	/* XXX */
 	void *page; 		/* 4096 byte */
 	uint64_t key; 	/* 64 byte */
+	void *empty_page; 
 };
 
 struct memregion {
