@@ -3,6 +3,7 @@
 #include <linux/slab.h>
 #include <linux/cpumask.h>
 
+#include "pmdfc.h"
 #include "rdma_conn.h"
 #include "rdma_op.h"
 
@@ -51,7 +52,7 @@ static void pmdfc_rdma_send_done(struct ib_cq *cq, struct ib_wc *wc)
 	struct rdma_queue *q = cq->cq_context;
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
 
-	pr_info("[ PASS ] wc.wr_id(%llx) send_done\n", wc->wr_id);
+//	pr_info("[ PASS ] wc.wr_id(%llx) send_done\n", wc->wr_id);
 	if (unlikely(wc->status != IB_WC_SUCCESS)) {
 		pr_err("[ FAIL ] pmdfc_rdma_send_done status is not success, it is=%d\n", wc->status);
 		//q->write_error = wc->status;
@@ -94,10 +95,7 @@ static void pmdfc_rdma_recv_empty_done(struct ib_cq *cq, struct ib_wc *wc)
 		pr_err("[ FAIL ] pmdfc_rdma_recv_empty_done status is not success, it is=%d\n", wc->status);
 	
 	bit_unmask(ntohl(wc->ex.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
-	pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
-
-	if(type == TX_WRITE_COMMITTED) 
-		pr_info("TX_WRITE_COMMITTED\n");
+//	pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 
 	complete(&req->done);
 	atomic_dec(&q->pending);
@@ -536,7 +534,7 @@ int pmdfc_rdma_send(struct page *page, uint64_t longkey, uint32_t imm)
 
 	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
 
-	pr_info("[ INFO ] pid : %d\n", smp_processor_id());
+//	pr_info("[ INFO ] pid : %d\n", smp_processor_id());
 
 	ret = send_queue_add(q, page, longkey, imm);
 	BUG_ON(ret);
@@ -565,7 +563,7 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev; 
 
-	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
+//	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
 
 
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
@@ -737,7 +735,7 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 
 	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 
-	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
+//	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
 	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_SYNC);
 
 	/* 1. post send key */

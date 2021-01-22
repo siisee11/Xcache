@@ -12,8 +12,8 @@
 #include "rdma_op.h"
 #include "rdma_conn.h"
 
-#define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 8)
+#define THREAD_NUM 4
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -51,7 +51,7 @@ static inline uint32_t bit_mask(int node_id, int msg_num, int type, int state, u
 int rdpma_single_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
-	uint32_t key, index;
+	uint32_t key=4400, index=1;
 	char *test_string;
 	uint64_t roffset = 0;
 	struct page *test_page;
@@ -63,7 +63,7 @@ int rdpma_single_write_message_test(void* arg){
 
 	memcpy(page_address(test_page), test_string, PAGE_SIZE);
 
-	long longkey = get_longkey(4400, 1);
+	long longkey = get_longkey(key, index);
 	imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
 	
 	ret = rdpma_put(test_page, longkey, imm);
@@ -86,7 +86,7 @@ int rdpma_write_message_test(void* arg){
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
-		pr_info("write_message: %u\n", key);
+//		pr_info("write_message: %u\n", key);
 
 		long longkey = get_longkey(key, index);
 		imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
@@ -103,7 +103,7 @@ int rdpma_write_message_test(void* arg){
 int rdpma_single_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
-	uint32_t key, index;
+	uint32_t key=4400, index = 1;
 	char *test_string;
 	int result = 0;
 	struct page *test_page;
@@ -113,7 +113,7 @@ int rdpma_single_read_message_test(void* arg){
 	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
-	long longkey = get_longkey(4400, 1);
+	long longkey = get_longkey(key, index);
 	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
 	
 	ret = rdpma_get(test_page, longkey, imm);
@@ -151,7 +151,7 @@ int rdpma_read_message_test(void* arg){
 		ret = rdpma_get(return_page[tid], longkey, imm);
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
-			printk("failed Searching for key %lx\n return: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+			printk("failed Searching for key %x\n return: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
