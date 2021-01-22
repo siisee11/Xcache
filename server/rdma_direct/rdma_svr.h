@@ -71,6 +71,7 @@ struct queue {
 	} state;
 
 	/* XXX */
+	void *page_key; 	/* 4096 + 64 byte */
 	void *page; 		/* 4096 byte */
 	uint64_t key; 	/* 64 byte */
 	void *empty_page; 

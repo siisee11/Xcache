@@ -105,8 +105,7 @@ int post_recv(int queue_id){
 }
 
 /* post recv [ key ] */
-int pmdfc_rdma_post_recv_key(int queue_id){
-	dprintf("[ INFO ] pmdfc_rdma_post_recv_key RR called\n");
+int pmdfc_rdma_post_recv_page_key(int queue_id){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
 	struct ibv_sge sge;
@@ -114,8 +113,8 @@ int pmdfc_rdma_post_recv_key(int queue_id){
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
 	memset(&sge, 0, sizeof(struct ibv_sge));
 
-	sge.addr = (uint64_t)&gctrl->queues[queue_id].key;
-	sge.length = sizeof(uint64_t);
+	sge.addr = (uint64_t)&gctrl->queues[queue_id].page_key;
+	sge.length = PAGE_SIZE + sizeof(uint64_t);
 	sge.lkey = gctrl->mr_buffer->lkey;
 
 	wr.wr_id = 0;
@@ -128,22 +127,17 @@ int pmdfc_rdma_post_recv_key(int queue_id){
 		return 1;
 	}
 
-	dprintf("[ INFO ] pmdfc_rdma_post_recv_key RR posted\n");
 	return 0;
 }
 
 /* post recv [ page, key ] */
 int pmdfc_rdma_post_recv(int queue_id){
-	dprintf("[ INFO ] pmdfc_rdma_post_recv RR called\n");
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
 	struct ibv_sge sge[2];
 
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
 	memset(&sge, 0, sizeof(struct ibv_sge) * 2);
-
-	/* XXX: malloc new page for every RR */
-	gctrl->queues[queue_id].page = malloc(PAGE_SIZE);
 
 	sge[0].addr = (uint64_t)gctrl->queues[queue_id].page;
 	sge[0].length = PAGE_SIZE;
@@ -162,8 +156,6 @@ int pmdfc_rdma_post_recv(int queue_id){
 		fprintf(stderr, "[%s] ibv_post_recv to node %d failed\n", __func__, queue_id);
 		return 1;
 	}
-
-	dprintf("[ INFO ] pmdfc_rdma_post_recv RR posted\n");
 	return 0;
 }
 
@@ -215,35 +207,22 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				struct ibv_sge sge = {};
 
 				bit_unmask(ntohl(wc.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
-				printf("[ INFO ] On Q[%d]: wr_id(%lx) node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,node_id, msg_num, type, tx_state, num);
+//				printf("[ INFO ] On Q[%d]: wr_id(%lx) node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,node_id, msg_num, type, tx_state, num);
 
 				if(type == MSG_WRITE){
-					printf("[ INFO ] received MSG_WRITE\n");
+//					printf("[ INFO ] received MSG_WRITE\n");
 					key = q->key;
-					page = q->page;
+					page = malloc(PAGE_SIZE);
+					memcpy(page, q->page, PAGE_SIZE);
 					pmdfc_rdma_post_recv(queue_id);
-//					pmdfc_rdma_post_recv_key(queue_id);
 
 					gctrl->kv->Insert(key, (Value_t)page, 0, 0);
 					printf("[ INFO ] page %lx, key %lx Inserted\n", (uint64_t)page, key);
-					printf("[ INFO ] page %s\n", (char *)page);
+//					printf("[ INFO ] page %s\n", (char *)page);
 
 
-					sge.addr = (uint64_t)q->empty_page;
-					sge.length = PAGE_SIZE;
-					sge.lkey = gctrl->mr_buffer->lkey;
-
-					wr.opcode = IBV_WR_SEND_WITH_IMM;
-					wr.sg_list = &sge;
-					wr.num_sge = 1;
-					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_ABORTED, 0));
-
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-
-#if 0
-					sge.addr = (uint64_t)q->empty_page;
-					sge.length = 16;
+					sge.addr = 0;
+					sge.length = 0;
 					sge.lkey = gctrl->mr_buffer->lkey;
 
 					wr.opcode = IBV_WR_SEND_WITH_IMM;
@@ -253,12 +232,10 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_WRITE_COMMITTED, 0));
 
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-#endif
-
 				}
 
 				if(type == MSG_READ) {
-					printf("[ INFO ] received MSG_READ\n");
+//					printf("[ INFO ] received MSG_READ\n");
 					key = q->key;
 					pmdfc_rdma_post_recv_key(queue_id);
 
@@ -274,7 +251,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 					if( !abort ) {
 						printf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
-						printf("[ INFO ] page %s\n", (char *)value);
+//						printf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send value to client mr (page) */	
 						sge.addr = (uint64_t)value;
@@ -291,7 +268,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
 						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-						printf("[ INFO ] post send to qp %d (page %lx, key %lx) \n", queue_id, (uint64_t)value, key);
+//						printf("[ INFO ] post send to qp %d (page %lx, key %lx) \n", queue_id, (uint64_t)value, key);
 
 					} else {
 						sge.addr = (uint64_t)q->empty_page;
@@ -632,7 +609,9 @@ int alloc_control()
 		gctrl->queues[i].ctrl = gctrl;
 		gctrl->queues[i].state = queue::INIT;
 		/* XXX */
-		gctrl->queues[i].empty_page = malloc(4096);
+		gctrl->queues[i].page_key = malloc(PAGE_SIZE + sizeof(uint64_t));
+		gctrl->queues[i].page = malloc(PAGE_SIZE);
+		gctrl->queues[i].empty_page = malloc(PAGE_SIZE);
 	}
 
 	gctrl->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);

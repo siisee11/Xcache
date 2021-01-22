@@ -96,6 +96,9 @@ static void pmdfc_rdma_recv_empty_done(struct ib_cq *cq, struct ib_wc *wc)
 	bit_unmask(ntohl(wc->ex.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
 	pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 
+	if(type == TX_WRITE_COMMITTED) 
+		pr_info("TX_WRITE_COMMITTED\n");
+
 	complete(&req->done);
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
@@ -678,8 +681,8 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 
 	/* 2. post recv */
 
-//	begin_recv_empty(q);
-	ret = begin_recv(q, page);
+	ret = begin_recv_empty(q);
+//	ret = begin_recv(q, page);
 	BUG_ON(ret);
 	drain_queue(q);
 
