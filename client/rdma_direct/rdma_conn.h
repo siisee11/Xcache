@@ -63,6 +63,9 @@ struct rdma_queue {
 	struct completion cm_done;
 
 	atomic_t pending;
+
+	/* XXX*/
+	int success;
 };
 
 struct pmdfc_rdma_memregion {

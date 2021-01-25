@@ -13,7 +13,7 @@
 #include "rdma_conn.h"
 
 #define THREAD_NUM 4
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024)
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 1024)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -118,7 +118,11 @@ int rdpma_single_read_message_test(void* arg){
 	
 	ret = rdpma_get(test_page, longkey, imm);
 
-	if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){
+	if (ret == -1){
+		printk("[ FAIL ] Searching for key(ret -1)\n");
+		result++;
+	}
+	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){
 		printk("[ FAIL ] Searching for key\n");
 		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
 		result++;
@@ -214,6 +218,29 @@ int main(void){
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
 	pr_info("[ PASS ] complete read thread functions: time( %llu ) usec", elapsed);
+
+
+	ssleep(3);
+
+	for(i=0; i<THREAD_NUM; i++){
+		reinit_completion(&comp[i]);
+		args[i]->comp = &comp[i];
+	}
+	pr_info("Start running fail read thread functions...\n");
+	start = ktime_get();
+
+	for(i=0; i<THREAD_NUM; i++){
+		read_threads[i] = kthread_create((void*)&rdpma_single_read_message_test, (void*)args[i], "page_reader");
+		wake_up_process(read_threads[i]);
+	}
+
+	for(i=0; i<THREAD_NUM; i++){
+		wait_for_completion(&comp[i]);
+	}
+
+	end = ktime_get();
+	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
+	pr_info("[ PASS ] complete fail read thread functions: time( %llu ) usec", elapsed);
 
 	for(i=0; i<THREAD_NUM; i++){
 		kfree(args[i]);

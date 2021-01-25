@@ -28,22 +28,6 @@ void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* sta
 	*node_id = (int)((target >> 28) & 0x0000000f);
 }
 
-static void pmdfc_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
-{
-	struct rdma_req *req =
-		container_of(wc->wr_cqe, struct rdma_req, cqe);
-	struct rdma_queue *q = cq->cq_context;
-	struct ib_device *ibdev = q->ctrl->rdev->dev;
-
-	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("[ FAIL ] pmdfc_rdma_write_done status is not success, it is=%d\n", wc->status);
-		//q->write_error = wc->status;
-	}
-	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
-
-	atomic_dec(&q->pending);
-	kmem_cache_free(req_cache, req);
-}
 
 static void pmdfc_rdma_send_done(struct ib_cq *cq, struct ib_wc *wc)
 {
@@ -69,14 +53,25 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 		container_of(wc->wr_cqe, struct rdma_req, cqe);
 	struct rdma_queue *q = cq->cq_context;
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
+	int node_id, msg_num, type, tx_state;
+	uint32_t num;
 
 	if (unlikely(wc->status != IB_WC_SUCCESS))
 		pr_err("[ FAIL ] pmdfc_rdma_read_done status is not success, it is=%d\n", wc->status);
 
+	bit_unmask(ntohl(wc->ex.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
+//	pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
+
 	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_FROM_DEVICE);
 
-	SetPageUptodate(req->page);
-	unlock_page(req->page);
+	if ( tx_state == TX_READ_ABORTED ) {
+		q->success = -1;
+	} 
+//	else {
+//		SetPageUptodate(req->page);
+//		unlock_page(req->page);
+//	}
+
 	complete(&req->done);
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
@@ -338,75 +333,6 @@ static inline int drain_queue(struct rdma_queue *q)
 	return 1;
 }
 
-static inline int write_queue_add(struct rdma_queue *q, struct page *page,
-		u64 roffset)
-{
-	struct rdma_req *req;
-	struct ib_device *dev = q->ctrl->rdev->dev;
-	struct ib_sge sge = {};
-	int ret, inflight;
-
-	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
-		BUG_ON(inflight > QP_MAX_SEND_WR);
-		poll_target(q, 2048);
-		pr_info_ratelimited("[ WARN ] back pressure writes");
-	}
-
-	ret = get_req_for_page(&req, dev, page, DMA_TO_DEVICE);
-	if (unlikely(ret))
-		return ret;
-
-	req->cqe.done = pmdfc_rdma_write_done;
-	ret = pmdfc_rdma_post_rdma(q, req, &sge, roffset, IB_WR_RDMA_WRITE);
-
-	return ret;
-}
-
-/* XXX */
-/* send page dma and key dma */
-static inline int send_queue_add(struct rdma_queue *q, struct page *page,
-		uint64_t longkey, uint32_t imm)
-{
-	struct rdma_req *req[2];
-	struct ib_device *dev = q->ctrl->rdev->dev;
-	struct ib_sge sge[2];
-	void *send_info;
-	int ret, inflight;
-	u64 *key_ptr;
-
-	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
-		BUG_ON(inflight > QP_MAX_SEND_WR);
-		poll_target(q, 2048);
-		pr_info_ratelimited("[ WARN ] back pressure writes");
-	}
-
-	memset(sge, 0, sizeof(struct ib_sge) * 2);
-	key_ptr = kzalloc(sizeof(u64), GFP_ATOMIC);
-	*key_ptr = longkey;
-
-	/* DMA PAGE */
-	ret = get_req_for_page(&req[0], dev, page, DMA_TO_DEVICE);
-	if (unlikely(ret))
-		return ret;
-
-	sge[0].addr = req[0]->dma;
-	sge[0].length = PAGE_SIZE;
-	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
-
-	/* DMA KEY */
-	ret = get_req_for_buf(&req[1], dev, key_ptr, sizeof(uint64_t), DMA_TO_DEVICE);
-	if (unlikely(ret))
-		return ret;
-
-	sge[1].addr = req[1]->dma;
-	sge[1].length = sizeof(uint64_t);
-	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
-
-	req[0]->cqe.done = pmdfc_rdma_send_done;
-	ret = pmdfc_rdma_post_send(q, req[0], &sge[0], IB_WR_SEND_WITH_IMM, imm);
-	return ret;
-}
-
 static inline int begin_read(struct rdma_queue *q, struct page *page,
 		u64 roffset)
 {
@@ -421,7 +347,7 @@ static inline int begin_read(struct rdma_queue *q, struct page *page,
 		BUG_ON(inflight > QP_MAX_SEND_WR); /* only valid case is == */
 		//poll_target(q, 8);
 		poll_target(q, 2048);
-		pr_info_ratelimited("[ WARN ] back pressure happened on reads");
+		pr_info_ratelimited("[ warn ] back pressure happened on reads");
 	}
 
 	ret = get_req_for_page(&req, dev, page, DMA_TO_DEVICE);
@@ -440,6 +366,8 @@ static inline int begin_recv(struct rdma_queue *q, struct page *page)
 	struct ib_device *dev = q->ctrl->rdev->dev;
 	struct ib_sge sge = {};
 	int ret, inflight;
+	const struct ib_recv_wr *bad_wr;
+	struct ib_recv_wr wr = {};
 
 	/* back pressure in-flight reads, can't send more than
 	 * QP_MAX_SEND_WR at a time */
@@ -450,12 +378,30 @@ static inline int begin_recv(struct rdma_queue *q, struct page *page)
 		pr_info_ratelimited("[ WARN ] back pressure happened on reads");
 	}
 
-	ret = get_req_for_page(&req, dev, page, DMA_FROM_DEVICE);
+	ret = get_req_for_page(&req, dev, page, DMA_TO_DEVICE); /* XXX DMA_FROM_DEVICE or DMA_TO_DEVICE */
 	if (unlikely(ret))
 		return ret;
 
 	req->cqe.done = pmdfc_rdma_read_done;
-	ret = pmdfc_rdma_post_recv(q, req, &sge);
+//	ret = pmdfc_rdma_post_recv(q, req, &sge);
+
+	sge.addr = req->dma;
+	sge.length = PAGE_SIZE;
+	sge.lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+	/* TODO: add a chain of WR, we already have a list so should be easy
+	 * to just post requests in batches */
+	wr.next    = NULL;
+	wr.wr_cqe  = &req->cqe;
+	wr.sg_list = &sge;
+	wr.num_sge = 1;
+
+	atomic_inc(&q->pending);
+	ret = ib_post_recv(q->qp, &wr, &bad_wr);
+	if (unlikely(ret)) {
+		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+	}
+
 	return ret;
 }
 
@@ -508,47 +454,12 @@ static inline int begin_recv_empty(struct rdma_queue *q)
 	return ret;
 }
 
-int pmdfc_rdma_write(struct page *page, u64 roffset)
-{
-	int ret;
-	struct rdma_queue *q;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
-
-	ret = write_queue_add(q, page, roffset);
-	BUG_ON(ret);
-	drain_queue(q);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmdfc_rdma_write);
-
-
-int pmdfc_rdma_send(struct page *page, uint64_t longkey, uint32_t imm)
-{
-	int ret;
-	struct rdma_queue *q;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
-
-//	pr_info("[ INFO ] pid : %d\n", smp_processor_id());
-
-	ret = send_queue_add(q, page, longkey, imm);
-	BUG_ON(ret);
-	drain_queue(q);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmdfc_rdma_send);
 
 /** rdpma_put - put page into server
  *
  */
 int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 {
-#if 1
 	struct rdma_queue *q;
 	struct rdma_req *req[2];
 	struct ib_device *dev;
@@ -564,7 +475,6 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	dev = q->ctrl->rdev->dev; 
 
 //	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
-
 
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
 		BUG_ON(inflight > QP_MAX_SEND_WR);
@@ -618,108 +528,16 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	}
 
 	BUG_ON(ret);
-#endif
-
-#if 0
-	struct rdma_queue *q;
-	struct rdma_req *req;
-	struct ib_device *dev;
-	struct ib_sge sge = { };
-	struct ib_rdma_wr rdma_wr = {};
-	const struct ib_send_wr *bad_wr;
-	int ret, inflight;
-	u64 *key_ptr;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-
-	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
-
-	/* 1. post send key */
-	dev = q->ctrl->rdev->dev;
-
-	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
-		BUG_ON(inflight > QP_MAX_SEND_WR);
-		poll_target(q, 2048);
-		pr_info_ratelimited("[ WARN ] back pressure writes");
-	}
-
-	key_ptr = kzalloc(sizeof(u64), GFP_ATOMIC);
-	*key_ptr = key;
-
-	/* DMA KEY */
-	ret = get_req_for_buf(&req, dev, key_ptr, sizeof(uint64_t), DMA_TO_DEVICE);
-	if (unlikely(ret))
-		return ret;
-
-	req->cqe.done = pmdfc_rdma_send_done;
-
-	BUG_ON(req->dma == 0);
-
-	sge.addr = req->dma;
-	sge.length = sizeof(uint64_t);
-	sge.lkey = q->ctrl->rdev->pd->local_dma_lkey;
-
-	/* TODO: add a chain of WR, we already have a list so should be easy
-	 * to just post requests in batches */
-	rdma_wr.wr.next    = NULL;
-	rdma_wr.wr.wr_cqe  = &req->cqe;
-	rdma_wr.wr.sg_list = &sge;
-	rdma_wr.wr.num_sge = 1;
-	rdma_wr.wr.opcode  = IB_WR_SEND_WITH_IMM;
-	rdma_wr.wr.send_flags = IB_SEND_SIGNALED;
-	rdma_wr.wr.ex.imm_data = imm;
-
-	atomic_inc(&q->pending);
-	ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
-	if (unlikely(ret)) {
-		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
-	}
-#endif
 
 	/* 2. post recv */
 
 	ret = begin_recv_empty(q);
-//	ret = begin_recv(q, page);
 	BUG_ON(ret);
 	drain_queue(q);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rdpma_put);
-
-/* page is unlocked when the wr is done.
- * posts an RDMA read on this cpu's qp */
-int pmdfc_rdma_read_async(struct page *page, u64 roffset)
-{
-	struct rdma_queue *q;
-	int ret;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-	//VM_BUG_ON_PAGE(!PageLocked(page), page);
-	//VM_BUG_ON_PAGE(PageUptodate(page), page);
-
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_ASYNC);
-
-	ret = begin_read(q, page, roffset);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmdfc_rdma_read_async);
-
-int pmdfc_rdma_read_sync(struct page *page, u64 roffset)
-{
-	struct rdma_queue *q;
-	int ret;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-	//VM_BUG_ON_PAGE(!PageLocked(page), page);
-	//VM_BUG_ON_PAGE(PageUptodate(page), page);
-
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_SYNC);
-	ret = begin_read(q, page, roffset);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmdfc_rdma_read_sync);
 
 /* XXX */
 int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
@@ -780,23 +598,56 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 	}
 
 	BUG_ON(ret);
-	drain_queue(q);
 
 	/* 2. post recv page */
 	ret = begin_recv(q, page);
 	BUG_ON(ret);
 	drain_queue(q);
+
+	/* page not found */
+	if (q->success == -1) {
+		q->success = 1;
+		return -1;
+	}
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rdpma_get);
 
 
-int pmdfc_rdma_poll_load(int cpu)
+/* page is unlocked when the wr is done.
+ * posts an RDMA read on this cpu's qp */
+int pmdfc_rdma_read_async(struct page *page, u64 roffset)
 {
-	struct rdma_queue *q = pmdfc_rdma_get_queue(cpu, QP_READ_SYNC);
-	return drain_queue(q);
+	struct rdma_queue *q;
+	int ret;
+
+	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+	//VM_BUG_ON_PAGE(!PageLocked(page), page);
+	//VM_BUG_ON_PAGE(PageUptodate(page), page);
+
+	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_ASYNC);
+
+	ret = begin_read(q, page, roffset);
+	return ret;
 }
-EXPORT_SYMBOL(pmdfc_rdma_poll_load);
+EXPORT_SYMBOL_GPL(pmdfc_rdma_read_async);
+
+int pmdfc_rdma_read_sync(struct page *page, u64 roffset)
+{
+	struct rdma_queue *q;
+	int ret;
+
+	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+	//VM_BUG_ON_PAGE(!PageLocked(page), page);
+	//VM_BUG_ON_PAGE(PageUptodate(page), page);
+
+	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_SYNC);
+	ret = begin_read(q, page, roffset);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(pmdfc_rdma_read_sync);
+
 
 inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 		enum qp_type type)

@@ -21,10 +21,11 @@
 #include "rdma_conn.h"
 
 #define PMDFC_PUT 1
-//#define PMDFC_GET 1
-//#define PMDFC_BLOOM_FILTER 1 
+#define PMDFC_GET 1
+#define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
 //#define PMDFC_BUFFERING 1
+//#define PMDFC_ONESIDE 1
 #define PMDFC_NETWORK 1
 
 //#define PMDFC_DEBUG 1
@@ -46,7 +47,7 @@ extern long mr_free_end;
 
 static int rdma, rdma_direct;
 //#define SAMPLE_RATE 10000 // Per-MB
-#define SAMPLE_RATE 1
+#define SAMPLE_RATE 10000
 static long put_cnt, get_cnt;
 
 /* bloom filter */
@@ -101,6 +102,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	int ret = -1;
     struct ht_data *tmp;
 	uint32_t imm;
+	uint64_t longkey;
 
 #if defined(PMDFC_BLOOM_FILTER)
 	unsigned char *data = (unsigned char*)&key;
@@ -137,6 +139,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
 
+#ifdef PMDFC_ONESIDE
 	/* get page virtual address */
 	pg_from = page_address(page);
     
@@ -147,17 +150,16 @@ static void pmdfc_cleancache_put_page(int pool_id,
         pr_warn("[ WARN ] Remote memory is full..\n");
     }
     hash_add(hash_head, &tmp->h_node, tmp->longkey);
+#endif
     
 	/* imm data */
+	longkey = get_longkey((long)oid.oid[0], index);
 	imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
-
-    if (rdma && rdma_direct) { 
-        ret = rdpma_put(page, tmp->longkey, imm);
-    }
+	ret = rdpma_put(page, longkey, imm);
     
     if (put_cnt % SAMPLE_RATE == 0) {
-        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx, roffset=%lld, imm=%u\n",
-                (long)oid.oid[0], index, tmp->longkey, tmp->roffset, imm);
+        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx, imm=%u\n",
+                (long)oid.oid[0], index, longkey, imm);
     }
     put_cnt++;
 
@@ -179,6 +181,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
     long longkey = 0, roffset = 0;
     struct ht_data *cur;
+	uint32_t imm;
     atomic_t found = ATOMIC_INIT(0);
 
 #if defined(PMDFC_BLOOM_FILTER)
@@ -218,15 +221,13 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif
     
     longkey = get_longkey((long)oid.oid[0], index);
+#ifdef PMDFC_ONESIDE 
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
         if (cur->longkey == longkey) {
             atomic_set(&found, 1);
             roffset = cur->roffset;
         }
     }
-
-	/* imm data */
-	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
 
     if (!atomic_read(&found)) {
         if (get_cnt % SAMPLE_RATE == 0) {
@@ -235,18 +236,21 @@ static int pmdfc_cleancache_get_page(int pool_id,
         get_cnt++;
         goto not_exists;
     }
+#endif
+
+	/* imm data */
+	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
 
 	/* RDMA networking */
-	if (rdma_direct) {
-		if (get_cnt % SAMPLE_RATE == 0) {
-			pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld, roffset=%ld\n",
-					(long)oid.oid[0], index, longkey, roffset);
-		}
-		/* send Address of page */
-        ret = rdpma_get(page, longkey, imm);
-		get_cnt++;
-		atomic_set(&found, 0);
+	if (get_cnt % SAMPLE_RATE == 0) {
+		pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
+				(long)oid.oid[0], index, longkey);
 	}
+	/* send Address of page */
+	ret = rdpma_get(page, longkey, imm);
+	get_cnt++;
+	if (ret == -1)
+		goto not_exists;
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: GET PAGE success\n");

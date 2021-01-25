@@ -1,3 +1,4 @@
+#include <atomic>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include <infiniband/verbs.h>
 
 #include "rdma_svr.h"
+#include "variables.h"
 
 
 /* option values */
@@ -38,6 +40,18 @@ struct bitmask *pollcpubuf;
 static struct ctrl *gctrl = NULL;
 static unsigned int queue_ctr = 0;
 unsigned int nr_cpus;
+std::atomic<bool> done(false);
+
+/* counting values */
+int putcnt = 0;
+int getcnt = 0;
+int found_cnt = 0;
+int notfound_cnt = 0;
+
+
+/* performance timer */
+uint64_t rdpma_handle_write_elapsed=0;
+uint64_t rdpma_handle_read_elapsed=0;
 
 #ifdef APP_DIRECT
 static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
@@ -74,6 +88,38 @@ inline enum qp_type get_queue_type(unsigned int idx)
 		return QP_WRITE_SYNC;
 
 	return QP_READ_SYNC;
+}
+
+static void rdpma_print_stats() {
+	printf("\n--------------------REPORT---------------------\n");
+//	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
+	printf("# of puts : %d , # of gets : %d ( %d / %d )\n",
+			putcnt, getcnt, found_cnt, notfound_cnt);
+
+	if (putcnt == 0)
+		putcnt++;
+	if (getcnt == 0)
+		getcnt++;
+
+	printf("\n--------------------SUMMARY--------------------\n");
+	printf("Average (divided by number of ops)\n");
+	printf("Write: %.3f (us), Read: %.3f (us)\n",
+			rdpma_handle_write_elapsed/putcnt/1000.0,
+			rdpma_handle_read_elapsed/getcnt/1000.0);
+
+	gctrl->kv->PrintStats();
+
+	printf("--------------------FIN------------------------\n");
+}
+
+/**
+ * indicator - Show stats periodically
+ */
+void rdpma_indicator() {
+	while (!done) {
+		sleep(10);
+		rdpma_print_stats();
+	}
 }
 
 
@@ -166,10 +212,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 	int ne;
 #if defined(TIME_CHECK)
 	struct timespec start, end;
-	bool checkit = false;
 #endif
-
-//	printf("[ INFO ] CQ poller woke on cpu %d|%d for Q[%d]\n", cpu, thisNode, queue_id); 
 
 	while(1) {
 		ne = 0;
@@ -209,6 +252,10 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				dprintf("[ INFO ] On Q[%d]: wr_id(%lx) node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,node_id, msg_num, type, tx_state, num);
 
 				if(type == MSG_WRITE){
+					putcnt++;
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
 //					printf("[ INFO ] received MSG_WRITE\n");
 					key = q->key;
 					page = malloc(PAGE_SIZE);
@@ -235,9 +282,18 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					if(ret){
 						fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 					}
+
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &end);
+					rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
 				}
 
 				if(type == MSG_READ) {
+					getcnt++;
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
 //					printf("[ INFO ] received MSG_READ\n");
 					key = q->key;
 					pmdfc_rdma_post_recv_key(queue_id);
@@ -253,6 +309,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					}
 
 					if( !abort ) {
+						found_cnt++;
 						dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
 //						printf("[ INFO ] page %s\n", (char *)value);
 
@@ -262,18 +319,14 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 						sge.lkey = gctrl->mr_buffer->lkey;
 
 						wr.opcode = IBV_WR_SEND_WITH_IMM;
-	//					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
 						wr.sg_list = &sge;
 						wr.num_sge = 1;
 						wr.send_flags = IBV_SEND_SIGNALED;
-	//					wr.wr.rdma.remote_addr = (uint64_t)page;
-	//					wr.wr.rdma.rkey        = gctrl->mr_buffer->rkey;
 						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
 						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-//						dprintf("[ INFO ] post send to qp %d (page %lx, key %lx) \n", queue_id, (uint64_t)value, key);
-
 					} else {
+						notfound_cnt++;
 						sge.addr = (uint64_t)q->empty_page;
 						sge.length = PAGE_SIZE;
 						sge.lkey = gctrl->mr_buffer->lkey;
@@ -286,6 +339,11 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 					}
+
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &end);
+					rdpma_handle_read_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
 
 				}
 
@@ -692,6 +750,8 @@ int main(int argc, char **argv)
 
 	dprintf("done connecting all queues\n");
 
+	std::thread i = std::thread( rdpma_indicator );
+
 	// handle disconnects, etc.
 	while (rdma_get_cm_event(ec, &event) == 0) {
 		struct rdma_cm_event event_copy;
@@ -702,6 +762,8 @@ int main(int argc, char **argv)
 		if (on_event(&event_copy))
 			break;
 	}
+
+	i.join();
 
 	rdma_destroy_event_channel(ec);
 	rdma_destroy_id(listener);
