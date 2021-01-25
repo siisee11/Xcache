@@ -96,6 +96,7 @@ struct ctrl {
 	struct device *dev;
 
 	/* XXX */
+	struct memregion servermr;
 	struct memregion clientmr;
 
 	NUMA_KV* kv;

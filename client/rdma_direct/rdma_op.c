@@ -2,12 +2,15 @@
 
 #include <linux/slab.h>
 #include <linux/cpumask.h>
+#include <linux/jiffies.h>
 
 #include "pmdfc.h"
 #include "rdma_conn.h"
 #include "rdma_op.h"
+#include "timeperf.h"
 
 //#define SINGLE_TEST 1
+//#define KTIME_CHECK 1
 
 extern struct pmdfc_rdma_ctrl *gctrl;
 extern int numcpus;
@@ -28,6 +31,20 @@ void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* sta
 	*node_id = (int)((target >> 28) & 0x0000000f);
 }
 
+#ifdef KTIME_CHECK
+void pmdfc_rdma_print_stat() {
+	fperf_print("begin_recv");
+	fperf_print("post_send");
+	fperf_print("drain_queue");
+	fperf_print("pmdfc_rdma_read_done"); 
+}
+EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
+#else
+void pmdfc_rdma_print_stat() {
+	return;
+}
+EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
+#endif
 
 static void pmdfc_rdma_send_done(struct ib_cq *cq, struct ib_wc *wc)
 {
@@ -56,6 +73,10 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 	int node_id, msg_num, type, tx_state;
 	uint32_t num;
 
+#ifdef KTIME_CHECK
+	fperf_start(__func__);
+#endif
+
 	if (unlikely(wc->status != IB_WC_SUCCESS))
 		pr_err("[ FAIL ] pmdfc_rdma_read_done status is not success, it is=%d\n", wc->status);
 
@@ -67,6 +88,7 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 	if ( tx_state == TX_READ_ABORTED ) {
 		q->success = -1;
 	} 
+	q->success = 1;
 //	else {
 //		SetPageUptodate(req->page);
 //		unlock_page(req->page);
@@ -75,6 +97,9 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 	complete(&req->done);
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
+#ifdef KTIME_CHECK
+	fperf_end(__func__);
+#endif
 }
 
 static void pmdfc_rdma_recv_empty_done(struct ib_cq *cq, struct ib_wc *wc)
@@ -378,7 +403,7 @@ static inline int begin_recv(struct rdma_queue *q, struct page *page)
 		pr_info_ratelimited("[ WARN ] back pressure happened on reads");
 	}
 
-	ret = get_req_for_page(&req, dev, page, DMA_TO_DEVICE); /* XXX DMA_FROM_DEVICE or DMA_TO_DEVICE */
+	ret = get_req_for_page(&req, dev, page, DMA_FROM_DEVICE); /* XXX DMA_FROM_DEVICE or DMA_TO_DEVICE no effect*/
 	if (unlikely(ret))
 		return ret;
 
@@ -474,6 +499,10 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev; 
 
+	/* 2. post recv */
+	ret = begin_recv_empty(q);
+	BUG_ON(ret);
+
 //	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
 
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
@@ -529,10 +558,7 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 
 	BUG_ON(ret);
 
-	/* 2. post recv */
 
-	ret = begin_recv_empty(q);
-	BUG_ON(ret);
 	drain_queue(q);
 
 	return ret;
@@ -555,9 +581,21 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 
 //	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
 	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_SYNC);
-
-	/* 1. post send key */
 	dev = q->ctrl->rdev->dev;
+
+#ifdef KTIME_CHECK
+	fperf_start("begin_recv");
+#endif
+	/* 1. post recv page first to reduce RNR */
+//	ret = begin_recv(q, page);
+	ret = begin_recv_empty(q);
+	BUG_ON(ret);
+
+#ifdef KTIME_CHECK
+	fperf_end("begin_recv");
+#endif
+
+	/* 2. post send key */
 
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
 		BUG_ON(inflight > QP_MAX_SEND_WR);
@@ -565,6 +603,9 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 		pr_info_ratelimited("[ WARN ] back pressure writes");
 	}
 
+#ifdef KTIME_CHECK
+	fperf_start("post_send");
+#endif
 	key_ptr = kzalloc(sizeof(u64), GFP_ATOMIC);
 	*key_ptr = key;
 
@@ -596,14 +637,18 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
-
+#ifdef KTIME_CHECK
+	fperf_end("post_send");
+#endif
 	BUG_ON(ret);
 
-	/* 2. post recv page */
-	ret = begin_recv(q, page);
-	BUG_ON(ret);
+#ifdef KTIME_CHECK
+	fperf_start("drain_queue");
+#endif
 	drain_queue(q);
-
+#ifdef KTIME_CHECK
+	fperf_end("drain_queue");
+#endif
 	/* page not found */
 	if (q->success == -1) {
 		q->success = 1;

@@ -54,7 +54,6 @@ typedef __uint64_t DWORD;
 static inline
 unsigned int FAA(volatile unsigned long *mem, unsigned long add)
 {
-	unsigned long __tmp = add;
 	__asm__ __volatile__("lock " XADDx " %0,%1"
 			:"+r" (add),
 			"+m" (*mem)

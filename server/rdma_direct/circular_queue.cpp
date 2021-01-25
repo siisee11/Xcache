@@ -70,7 +70,6 @@ void* dequeue(struct queue_t* q){
 void enqueue(struct queue_t* q, void* value){
 	unsigned long rear = 0;
 	struct node_t *cur, *buf = q->buffer;
-	bool succ = 0;
 
 	rear = FAA(&q->rear,1); //fetch and add
 	rear = rear%QUEUE_SIZE;
@@ -83,7 +82,7 @@ void enqueue(struct queue_t* q, void* value){
 //dequeue value version
 void* dequeue(struct queue_t* q){
 	void* value;
-	unsigned long front = 0, next = 0;
+	unsigned long front = 0;
 	struct node_t *cur, *buf = q->buffer;
 	
 	front = FAA(&q->front, 1);

@@ -11,8 +11,9 @@
 #include "pmdfc.h"
 #include "rdma_op.h"
 #include "rdma_conn.h"
+#include "timeperf.h"
 
-#define THREAD_NUM 4
+#define THREAD_NUM 1
 #define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 1024)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
@@ -219,6 +220,7 @@ int main(void){
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
 	pr_info("[ PASS ] complete read thread functions: time( %llu ) usec", elapsed);
 
+	pmdfc_rdma_print_stat();
 
 	ssleep(3);
 
@@ -404,11 +406,11 @@ static void __exit exit_test_module(void){
 		kfree(write_threads);
 		pr_info("[%s]: freed write threads", __func__);
 	}
-
 	if(comp){
 		kfree(comp);
 		pr_info("[%s]: freed completion", __func__);
 	}
+#if 0
 	if(vpages){
 		for(i=0; i<THREAD_NUM; i++){
 			for(j=0; j<ITERATIONS; j++)
@@ -424,6 +426,7 @@ static void __exit exit_test_module(void){
 		kfree(return_page);
 		pr_info("[%s]: freed return pages", __func__);
 	}
+#endif
 
 	pr_info("[%s]: exiting test module", __func__);
 }

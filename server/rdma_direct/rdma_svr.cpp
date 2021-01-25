@@ -51,7 +51,11 @@ int notfound_cnt = 0;
 
 /* performance timer */
 uint64_t rdpma_handle_write_elapsed=0;
+uint64_t rdpma_handle_write_poll_elapsed=0;
 uint64_t rdpma_handle_read_elapsed=0;
+uint64_t rdpma_handle_read_poll_elapsed=0;
+uint64_t rdpma_handle_read_poll_notfound_elapsed=0;
+uint64_t rdpma_handle_read_poll_found_elapsed=0;
 
 #ifdef APP_DIRECT
 static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
@@ -106,6 +110,11 @@ static void rdpma_print_stats() {
 	printf("Write: %.3f (us), Read: %.3f (us)\n",
 			rdpma_handle_write_elapsed/putcnt/1000.0,
 			rdpma_handle_read_elapsed/getcnt/1000.0);
+	printf("(Poll) Write: %.3f (us), Read: %.3f [%.3f / %.3f](us)\n",
+			rdpma_handle_write_poll_elapsed/putcnt/1000.0,
+			(rdpma_handle_read_poll_found_elapsed + rdpma_handle_read_poll_notfound_elapsed)/getcnt/1000.0,
+			rdpma_handle_read_poll_found_elapsed/getcnt/1000.0,
+			rdpma_handle_read_poll_notfound_elapsed/getcnt/1000.0);
 
 	gctrl->kv->PrintStats();
 
@@ -206,7 +215,7 @@ int pmdfc_rdma_post_recv(int queue_id){
 
 static void server_recv_poll_cq(struct queue *q, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	int cpu = sched_getcpu();
+//	int cpu = sched_getcpu();
 //	int thisNode = numa_node_of_cpu(cpu);
 	struct ibv_wc wc;
 	int ne;
@@ -266,12 +275,12 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					dprintf("[ INFO ] page %lx, key %lx Inserted\n", (uint64_t)page, key);
 					dprintf("[ INFO ] page %s\n", (char *)page);
 
-
+#if 1 /* if this block is commented, Client polling get slow down */
 					sge.addr = 0;
 					sge.length = 0;
 					sge.lkey = gctrl->mr_buffer->lkey;
 
-					wr.opcode = IBV_WR_SEND_WITH_IMM;
+					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
 					wr.sg_list = &sge;
 					wr.num_sge = 0;
 					wr.send_flags = IBV_SEND_SIGNALED;
@@ -287,7 +296,28 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					clock_gettime(CLOCK_MONOTONIC, &end);
 					rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
+
+					struct ibv_wc wc2;
+					int ne;
+					do{
+						ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+						if(ne < 0){
+							fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+							return;
+						}
+					}while(ne < 1);
+
+					if(wc2.status != IBV_WC_SUCCESS){
+						fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+						return;
+					}
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &start);
+					rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+#endif
+#endif 
 				}
+
 
 				if(type == MSG_READ) {
 					getcnt++;
@@ -314,6 +344,22 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 //						printf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send value to client mr (page) */	
+						sge.addr = 0;
+						sge.length = 0;
+						sge.lkey = gctrl->mr_buffer->lkey;
+
+						wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
+						wr.sg_list = &sge;
+						wr.num_sge = 0;
+						wr.send_flags = IBV_SEND_SIGNALED;
+						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_WRITE_COMMITTED, 0));
+
+						ret = ibv_post_send(q->qp, &wr, &bad_wr);
+						if(ret){
+							fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
+						}
+
+#if 0
 						sge.addr = (uint64_t)value;
 						sge.length = PAGE_SIZE;
 						sge.lkey = gctrl->mr_buffer->lkey;
@@ -325,6 +371,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
 						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+#endif
 					} else {
 						notfound_cnt++;
 						sge.addr = (uint64_t)q->empty_page;
@@ -342,26 +389,32 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 #if defined(TIME_CHECK)
 					clock_gettime(CLOCK_MONOTONIC, &end);
-					rdpma_handle_read_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+					rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-				}
+					struct ibv_wc wc2;
+					int ne;
+					do{
+						ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+						if(ne < 0){
+							fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+							return;
+						}
+					}while(ne < 1);
 
-				struct ibv_wc wc2;
-				int ne;
-				do{
-					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
-					if(ne < 0){
-						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+					if(wc2.status != IBV_WC_SUCCESS){
+						fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
 						return;
 					}
-				}while(ne < 1);
 
-				if(wc2.status != IBV_WC_SUCCESS){
-					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
-					return;
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &start);
+					if (abort)
+						rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+					else
+						rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+#endif
 				}
-
 
 			} else {
 				/* only for first connection */
@@ -445,8 +498,10 @@ static device *get_device(struct queue *q)
 		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
 		 * addr should be 0 and length should be SIZE_MAX.
 		 */
-//		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, ctrl->buffer, BUFFER_SIZE, \
+		/*
+		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, ctrl->buffer, BUFFER_SIZE, 
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+					*/
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
 
@@ -494,7 +549,7 @@ static void create_qp(struct queue *q)
 	qp_attr.send_cq = q->cq;
 	qp_attr.recv_cq = q->cq;
 #endif
-	qp_attr.qp_type = IBV_QPT_RC; 
+	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 10;
 	qp_attr.cap.max_recv_wr = 10;
 	qp_attr.cap.max_send_sge = 2; /* XXX */

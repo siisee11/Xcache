@@ -196,8 +196,8 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 	if (q->qp_type == QP_READ_ASYNC)
 		q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
 	else
-		q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
-	//    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
+	    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
+//		q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
 
 	if (IS_ERR(q->cq)) {
 		ret = PTR_ERR(q->cq);
@@ -254,7 +254,7 @@ static int pmdfc_rdma_route_resolved(struct rdma_queue *q,
 	param.responder_resources = 16;
 	param.initiator_depth = 16;
 	param.retry_count = 7;
-	param.rnr_retry_count = 7;
+	param.rnr_retry_count = 7; /* XXX: 7 -> 0 */
 	param.private_data = NULL;
 	param.private_data_len = 0;
 
@@ -349,7 +349,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	queue->qp_type = get_queue_type(idx);
 
 	queue->cm_id = rdma_create_id(&init_net, pmdfc_rdma_cm_handler, queue,
-			RDMA_PS_TCP, IB_QPT_RC); // start rdma_cm
+			RDMA_PS_TCP, IB_QPT_RC); // start rdma_cm XXX
 	if (IS_ERR(queue->cm_id)) {
 		pr_err("[ FAIL ] failed to create cm id: %ld\n", PTR_ERR(queue->cm_id));
 		return -ENODEV;
