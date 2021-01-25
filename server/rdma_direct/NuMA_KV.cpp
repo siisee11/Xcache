@@ -63,14 +63,14 @@ NUMA_KV::~NUMA_KV(void)
 
 void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 #ifdef KV_DEBUG
-		struct timespec i_start;
-		clock_gettime(CLOCK_MONOTONIC, &i_start);
+	struct timespec i_start;
+	struct timespec i_end;
+	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
 	cceh->Insert(key, value);
 #ifdef KV_DEBUG
-		struct timespec i_end;
-		clock_gettime(CLOCK_MONOTONIC, &i_end);
-		insertTime += i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000;
+	clock_gettime(CLOCK_MONOTONIC, &i_end);
+	insertTime += i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000;
 #endif
 
 	return;

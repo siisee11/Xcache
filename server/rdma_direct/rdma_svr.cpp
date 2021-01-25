@@ -1,3 +1,4 @@
+#include <atomic>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,12 +15,12 @@
 #include <infiniband/verbs.h>
 
 #include "rdma_svr.h"
+#include "variables.h"
 
 
 /* option values */
 int tcp_port = -1;
 int ib_port = 1;
-static int rdma_flag= 0;
 char *path;
 char *data_path;
 char *pm_path;
@@ -29,7 +30,7 @@ size_t numKVThreads = 0;
 size_t numNetworkThreads = 0;
 size_t numPollThreads = 0;
 bool numa_on = false;
-bool verbose_flag = true;
+bool verbose_flag = false;
 bool human = false;
 struct bitmask *netcpubuf;
 struct bitmask *kvcpubuf;
@@ -39,6 +40,18 @@ struct bitmask *pollcpubuf;
 static struct ctrl *gctrl = NULL;
 static unsigned int queue_ctr = 0;
 unsigned int nr_cpus;
+std::atomic<bool> done(false);
+
+/* counting values */
+int putcnt = 0;
+int getcnt = 0;
+int found_cnt = 0;
+int notfound_cnt = 0;
+
+
+/* performance timer */
+uint64_t rdpma_handle_write_elapsed=0;
+uint64_t rdpma_handle_read_elapsed=0;
 
 #ifdef APP_DIRECT
 static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
@@ -75,6 +88,38 @@ inline enum qp_type get_queue_type(unsigned int idx)
 		return QP_WRITE_SYNC;
 
 	return QP_READ_SYNC;
+}
+
+static void rdpma_print_stats() {
+	printf("\n--------------------REPORT---------------------\n");
+//	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
+	printf("# of puts : %d , # of gets : %d ( %d / %d )\n",
+			putcnt, getcnt, found_cnt, notfound_cnt);
+
+	if (putcnt == 0)
+		putcnt++;
+	if (getcnt == 0)
+		getcnt++;
+
+	printf("\n--------------------SUMMARY--------------------\n");
+	printf("Average (divided by number of ops)\n");
+	printf("Write: %.3f (us), Read: %.3f (us)\n",
+			rdpma_handle_write_elapsed/putcnt/1000.0,
+			rdpma_handle_read_elapsed/getcnt/1000.0);
+
+	gctrl->kv->PrintStats();
+
+	printf("--------------------FIN------------------------\n");
+}
+
+/**
+ * indicator - Show stats periodically
+ */
+void rdpma_indicator() {
+	while (!done) {
+		sleep(10);
+		rdpma_print_stats();
+	}
 }
 
 
@@ -126,6 +171,7 @@ int pmdfc_rdma_post_recv_key(int queue_id){
 		fprintf(stderr, "[%s] ibv_post_recv to node %d failed\n", __func__, queue_id);
 		return 1;
 	}
+
 	return 0;
 }
 
@@ -136,10 +182,7 @@ int pmdfc_rdma_post_recv(int queue_id){
 	struct ibv_sge sge[2];
 
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
-	memset(&sge, 0, sizeof(struct ibv_sge));
-
-	/* XXX: malloc new page for every RR */
-	gctrl->queues[queue_id].page = malloc(PAGE_SIZE);
+	memset(&sge, 0, sizeof(struct ibv_sge) * 2);
 
 	sge[0].addr = (uint64_t)gctrl->queues[queue_id].page;
 	sge[0].length = PAGE_SIZE;
@@ -158,23 +201,18 @@ int pmdfc_rdma_post_recv(int queue_id){
 		fprintf(stderr, "[%s] ibv_post_recv to node %d failed\n", __func__, queue_id);
 		return 1;
 	}
-
-	dprintf("[ INFO ] pmdfc_rdma_post_recv RR posted\n");
 	return 0;
 }
 
 static void server_recv_poll_cq(struct queue *q, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	int cpu = sched_getcpu();
-	int thisNode = numa_node_of_cpu(cpu);
+//	int thisNode = numa_node_of_cpu(cpu);
 	struct ibv_wc wc;
 	int ne;
 #if defined(TIME_CHECK)
 	struct timespec start, end;
-	bool checkit = false;
 #endif
-
-//	printf("[ INFO ] CQ poller woke on cpu %d|%d for Q[%d]\n", cpu, thisNode, queue_id); 
 
 	while(1) {
 		ne = 0;
@@ -193,91 +231,142 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 		int ret;
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
-			printf("[%s]: received WC_RECV_RDMA_WITH_IMM\n", __func__);
+			dprintf("[%s]: received WC_RECV_RDMA_WITH_IMM\n", __func__);
 		}
 		else if((int)wc.opcode == IBV_WC_RDMA_READ){
-			printf("[%s]: received WC_RDMA_READ\n", __func__);
+			dprintf("[%s]: received WC_RDMA_READ\n", __func__);
 			/* the client is reading data from read region*/
 		}
 		else if ( (int)wc.opcode == IBV_WC_RECV ){
-			printf("[%s] received IBV_WC_RECV\n", __func__);
+			dprintf("[%s] received IBV_WC_RECV\n", __func__);
 			if ((int)wc.wc_flags == IBV_WC_WITH_IMM ) {
 				int node_id, msg_num, type, tx_state;
 				uint32_t num;
 				uint64_t key;
 				void *page;
+				struct ibv_send_wr wr = {};
+				struct ibv_send_wr *bad_wr = NULL;
+				struct ibv_sge sge = {};
 
 				bit_unmask(ntohl(wc.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
-
-				printf("[ INFO ] On Q[%d]: wr_id(%lx) node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,node_id, msg_num, type, tx_state, num);
+				dprintf("[ INFO ] On Q[%d]: wr_id(%lx) node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,node_id, msg_num, type, tx_state, num);
 
 				if(type == MSG_WRITE){
-					printf("[ INFO ] received MSG_WRITE\n");
+					putcnt++;
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+//					printf("[ INFO ] received MSG_WRITE\n");
 					key = q->key;
-					page = q->page;
+					page = malloc(PAGE_SIZE);
+					memcpy(page, q->page, PAGE_SIZE);
 					pmdfc_rdma_post_recv(queue_id);
 
 					gctrl->kv->Insert(key, (Value_t)page, 0, 0);
-					printf("[ INFO ] page %lx, key %lx Inserted\n", (uint64_t)page, key);
-					printf("[ INFO ] page %s\n", (char *)page);
+					dprintf("[ INFO ] page %lx, key %lx Inserted\n", (uint64_t)page, key);
+					dprintf("[ INFO ] page %s\n", (char *)page);
+
+
+					sge.addr = 0;
+					sge.length = 0;
+					sge.lkey = gctrl->mr_buffer->lkey;
+
+					wr.opcode = IBV_WR_SEND_WITH_IMM;
+					wr.sg_list = &sge;
+					wr.num_sge = 0;
+					wr.send_flags = IBV_SEND_SIGNALED;
+					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_WRITE_COMMITTED, 0));
+
+//					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+					ret = ibv_post_send(q->qp, &wr, &bad_wr);
+					if(ret){
+						fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
+					}
+
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &end);
+					rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
 				}
 
 				if(type == MSG_READ) {
-					printf("[ INFO ] received MSG_READ\n");
+					getcnt++;
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+//					printf("[ INFO ] received MSG_READ\n");
 					key = q->key;
 					pmdfc_rdma_post_recv_key(queue_id);
 
 					/* 1. Get page address -> value */
 					void* value;
 					bool abort = false;
-					struct ibv_send_wr wr = {};
-					struct ibv_send_wr *bad_wr = NULL;
-					struct ibv_sge sge = {};
+
 					value = (void*)gctrl->kv->Get(key, 0); /* XXX */
 					if(!value){
 						dprintf("Value for key[%lx] not found\n", key);
 						abort = true;
 					}
-					printf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
-					printf("[ INFO ] page %s\n", (char *)value);
+
+					if( !abort ) {
+						found_cnt++;
+						dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
+//						printf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send value to client mr (page) */	
-					sge.addr = (uint64_t)value;
-					sge.length = PAGE_SIZE;
-					sge.lkey = gctrl->mr_buffer->lkey;
+						sge.addr = (uint64_t)value;
+						sge.length = PAGE_SIZE;
+						sge.lkey = gctrl->mr_buffer->lkey;
 
-					wr.opcode = IBV_WR_SEND;
-//					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-					wr.sg_list = &sge;
-					wr.num_sge = 1;
-					wr.send_flags = IBV_SEND_SIGNALED;
-//					wr.wr.rdma.remote_addr = (uint64_t)page;
-//					wr.wr.rdma.rkey        = gctrl->mr_buffer->rkey;
-					wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
+						wr.opcode = IBV_WR_SEND_WITH_IMM;
+						wr.sg_list = &sge;
+						wr.num_sge = 1;
+						wr.send_flags = IBV_SEND_SIGNALED;
+						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-					printf("[ INFO ] post send to qp %d (page %lx, key %lx) \n", queue_id, (uint64_t)value, key);
+						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+					} else {
+						notfound_cnt++;
+						sge.addr = (uint64_t)q->empty_page;
+						sge.length = PAGE_SIZE;
+						sge.lkey = gctrl->mr_buffer->lkey;
 
-					struct ibv_wc wc;
-					int ne;
-					do{
-						ne = ibv_poll_cq(q->qp->send_cq, 1, &wc);
-						if(ne < 0){
-							fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-							return;
-						}
-					}while(ne < 1);
+						wr.opcode = IBV_WR_SEND_WITH_IMM;
+						wr.sg_list = &sge;
+						wr.num_sge = 1;
+						wr.send_flags = IBV_SEND_SIGNALED;
+						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_ABORTED, 0));
 
-					if(wc.status != IBV_WC_SUCCESS){
-						fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
+						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+					}
+
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &end);
+					rdpma_handle_read_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+
+				}
+
+				struct ibv_wc wc2;
+				int ne;
+				do{
+					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+					if(ne < 0){
+						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
 						return;
 					}
+				}while(ne < 1);
+
+				if(wc2.status != IBV_WC_SUCCESS){
+					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+					return;
 				}
+
 
 			} else {
 				/* only for first connection */
-				printf("[ INFO ] connected. receiving memory region info.\n");
-				printf("[ INFO ] Client MR key=%u base vaddr=%p\n", gctrl->clientmr.key, (void *)gctrl->clientmr.baseaddr);
+				dprintf("[ INFO ] connected. receiving memory region info.\n");
+				dprintf("[ INFO ] Client MR key=%u base vaddr=%p\n", gctrl->clientmr.key, (void *)gctrl->clientmr.baseaddr);
 			}
 
 		}else{
@@ -405,7 +494,6 @@ static void create_qp(struct queue *q)
 	qp_attr.send_cq = q->cq;
 	qp_attr.recv_cq = q->cq;
 #endif
-//	qp_attr.qp_type = IBV_QPT_UD; /* XXX RC->UC */
 	qp_attr.qp_type = IBV_QPT_RC; 
 	qp_attr.cap.max_send_wr = 10;
 	qp_attr.cap.max_recv_wr = 10;
@@ -425,7 +513,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	struct queue *q = &gctrl->queues[queue_number];
 
 	TEST_Z(q->state == queue::INIT);
-	printf("[ INFO ] %s\n", __FUNCTION__);
+//	printf("[ INFO ] %s\n", __FUNCTION__);
 
 	id->context = q;
 	q->cm_id = id;
@@ -488,13 +576,11 @@ int on_connection(struct queue *q)
 	if (q == &ctrl->queues[0]) {
 		struct ibv_send_wr wr = {};
 		struct ibv_send_wr *bad_wr = NULL;
-		struct ibv_recv_wr rwr = {};
-		struct ibv_recv_wr *bad_rwr = NULL;
 		struct ibv_sge sge = {};
 		struct memregion servermr = {};
 
 		printf("[ INFO ] connected. sending memory region info.\n");
-		printf("[ INFO ] Server MR key=%u base vaddr=%p\n", ctrl->mr_buffer->rkey, ctrl->mr_buffer->addr);
+		dprintf("[ INFO ] Server MR key=%u base vaddr=%p\n", ctrl->mr_buffer->rkey, ctrl->mr_buffer->addr);
 		/* XXX: base vaddr: (nil) why??  -> because of ODP */
 
 		servermr.baseaddr = (uint64_t) ctrl->mr_buffer->addr;
@@ -513,8 +599,7 @@ int on_connection(struct queue *q)
 
 		// TODO: poll here XXX Where?????
 
-
-		
+#if 0
 		/* XXX: GET CLIENT MR REGION */
 		sge.addr = (uint64_t) &ctrl->clientmr;
 		sge.length = sizeof(struct memregion);
@@ -524,6 +609,7 @@ int on_connection(struct queue *q)
 		rwr.num_sge = 1;
 
 		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
+#endif
 	}
 
 
@@ -583,7 +669,9 @@ int alloc_control()
 		gctrl->queues[i].ctrl = gctrl;
 		gctrl->queues[i].state = queue::INIT;
 		/* XXX */
-		gctrl->queues[i].page = malloc(4096 + 65);
+		gctrl->queues[i].page_key = malloc(PAGE_SIZE + sizeof(uint64_t));
+		gctrl->queues[i].page = malloc(PAGE_SIZE);
+		gctrl->queues[i].empty_page = malloc(PAGE_SIZE);
 	}
 
 	gctrl->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
@@ -622,7 +710,7 @@ int main(int argc, char **argv)
 	printf("[ INFO ] listening on port %d\n", port);
 
 	for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
-		printf("[ INFO ] waiting for queue connection: %d\n", i);
+//		printf("[ INFO ] waiting for queue connection: %d\n", i);
 		struct queue *q = &gctrl->queues[i];
 
 		// handle connection requests
@@ -660,7 +748,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	printf("done connecting all queues\n");
+	dprintf("done connecting all queues\n");
+
+	std::thread i = std::thread( rdpma_indicator );
 
 	// handle disconnects, etc.
 	while (rdma_get_cm_event(ec, &event) == 0) {
@@ -672,6 +762,8 @@ int main(int argc, char **argv)
 		if (on_event(&event_copy))
 			break;
 	}
+
+	i.join();
 
 	rdma_destroy_event_channel(ec);
 	rdma_destroy_id(listener);
