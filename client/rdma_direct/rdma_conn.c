@@ -343,6 +343,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 
 	queue = &ctrl->queues[idx];
 	queue->ctrl = ctrl; // point each other (queue, ctrl)
+	queue->page = alloc_pages(GFP_KERNEL, 0); /* XXX */
 	init_completion(&queue->cm_done);
 	atomic_set(&queue->pending, 0);
 	spin_lock_init(&queue->cq_lock);
@@ -706,9 +707,10 @@ inline enum qp_type get_queue_type(unsigned int idx)
 	else if (idx == 1)
 		return QP_WRITE_SYNC;
 #else
-	if (idx < numcpus / 2)
+	/* XXX */
+	if (idx < (numcpus % numqueues) / 2)
 		return QP_READ_SYNC; // read page
-	else if (idx >= numcpus / 2)
+	else if (idx >= (numcpus % numqueues) / 2)
 		return QP_WRITE_SYNC; // write page
 #endif
 	BUG();

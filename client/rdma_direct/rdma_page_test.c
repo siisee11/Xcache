@@ -14,7 +14,7 @@
 #include "timeperf.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 1024)
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -104,7 +104,7 @@ int rdpma_write_message_test(void* arg){
 int rdpma_single_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
-	uint32_t key=4400, index = 1;
+	uint32_t key=4400, index = 11111;
 	char *test_string;
 	int result = 0;
 	struct page *test_page;
@@ -120,7 +120,7 @@ int rdpma_single_read_message_test(void* arg){
 	ret = rdpma_get(test_page, longkey, imm);
 
 	if (ret == -1){
-		printk("[ FAIL ] Searching for key(ret -1)\n");
+		printk("[ FAIL ] Searching for key (ret -1)\n");
 		result++;
 	}
 	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){

@@ -86,9 +86,9 @@ static void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, i
 
 inline enum qp_type get_queue_type(unsigned int idx)
 {
-	if (idx < nr_cpus/2)
+	if (idx < (nr_cpus % NUM_QUEUES) /2)
 		return QP_READ_SYNC;
-	else if (idx >= nr_cpus/2)
+	else if (idx >= (nr_cpus % NUM_QUEUES)/2)
 		return QP_WRITE_SYNC;
 
 	return QP_READ_SYNC;
@@ -100,10 +100,10 @@ static void rdpma_print_stats() {
 	printf("# of puts : %d , # of gets : %d ( %d / %d )\n",
 			putcnt, getcnt, found_cnt, notfound_cnt);
 
-	if (putcnt == 0)
-		putcnt++;
-	if (getcnt == 0)
-		getcnt++;
+	if (putcnt == 0) putcnt++;
+	if (getcnt == 0) getcnt++;
+	if (found_cnt == 0) found_cnt++;
+	if (notfound_cnt == 0) notfound_cnt++;
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
@@ -113,10 +113,10 @@ static void rdpma_print_stats() {
 	printf("(Poll) Write: %.3f (us), Read: %.3f [%.3f / %.3f](us)\n",
 			rdpma_handle_write_poll_elapsed/putcnt/1000.0,
 			(rdpma_handle_read_poll_found_elapsed + rdpma_handle_read_poll_notfound_elapsed)/getcnt/1000.0,
-			rdpma_handle_read_poll_found_elapsed/getcnt/1000.0,
-			rdpma_handle_read_poll_notfound_elapsed/getcnt/1000.0);
+			rdpma_handle_read_poll_found_elapsed/found_cnt/1000.0,
+			rdpma_handle_read_poll_notfound_elapsed/notfound_cnt/1000.0);
 
-	gctrl->kv->PrintStats();
+//	gctrl->kv->PrintStats();
 
 	printf("--------------------FIN------------------------\n");
 }
@@ -133,7 +133,6 @@ void rdpma_indicator() {
 
 
 /* FROM RDMA_SERVER.CPP */
-
 int post_recv(int queue_id){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
@@ -332,7 +331,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					void* value;
 					bool abort = false;
 
-					value = (void*)gctrl->kv->Get(key, 0); /* XXX */
+					value = (void*)gctrl->kv->Get(key, 0); 
 					if(!value){
 						dprintf("Value for key[%lx] not found\n", key);
 						abort = true;
@@ -343,23 +342,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 						dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, key);
 //						printf("[ INFO ] page %s\n", (char *)value);
 
-					/* 2. Send value to client mr (page) */	
-						sge.addr = 0;
-						sge.length = 0;
-						sge.lkey = gctrl->mr_buffer->lkey;
-
-						wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
-						wr.sg_list = &sge;
-						wr.num_sge = 0;
-						wr.send_flags = IBV_SEND_SIGNALED;
-						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_WRITE_COMMITTED, 0));
-
-						ret = ibv_post_send(q->qp, &wr, &bad_wr);
-						if(ret){
-							fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
-						}
-
-#if 0
+						/* 2. Send value to client mr (page) */	
 						sge.addr = (uint64_t)value;
 						sge.length = PAGE_SIZE;
 						sge.lkey = gctrl->mr_buffer->lkey;
@@ -371,7 +354,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 						wr.imm_data = htonl(bit_mask(0, 0, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
 						TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-#endif
+
 					} else {
 						notfound_cnt++;
 						sge.addr = (uint64_t)q->empty_page;
@@ -409,10 +392,11 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 #if defined(TIME_CHECK)
 					clock_gettime(CLOCK_MONOTONIC, &start);
-					if (abort)
+					if (abort) {
 						rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-					else
+					} else {
 						rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+					}
 #endif
 				}
 
@@ -494,19 +478,19 @@ static device *get_device(struct queue *q)
 		TEST_Z(ctrl->buffer);
 		printf("[  OK  ] DRAM MR initialized\n");
 #endif
-		/* 
-		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
-		 * addr should be 0 and length should be SIZE_MAX.
-		 */
 		/*
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, ctrl->buffer, BUFFER_SIZE, 
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 					*/
+		/* 
+		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
+		 * addr should be 0 and length should be SIZE_MAX.
+		 */
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
 
 //		printf("[ INFO ] registered memory region of %zu GB\n", BUFFER_SIZE/1024/1024/1024);
-		printf("[ INFO ] registered memory region key=%u base vaddr=%p\n", ctrl->mr_buffer->rkey, ctrl->mr_buffer->addr);
+		dprintf("[ INFO ] registered memory region key=%u base vaddr=%p\n", ctrl->mr_buffer->rkey, ctrl->mr_buffer->addr);
 		q->ctrl->dev = dev;
 	}
 
@@ -597,13 +581,16 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 	TEST_NZ(ibv_query_device(dev->verbs, &attrs));
 
-//	printf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d max_cqe=%d \
-			max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", attrs.max_qp, \
-			attrs.max_qp_wr, attrs.max_cq, attrs.max_cqe, \
-			attrs.max_qp_rd_atom, attrs.max_qp_init_rd_atom);
+	if (queue_number == 0 ) {
+		dprintf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d max_cqe=%d  \
+				max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", attrs.max_qp, 
+				attrs.max_qp_wr, attrs.max_cq, attrs.max_cqe, 
+				attrs.max_qp_rd_atom, attrs.max_qp_init_rd_atom);
 
-//	printf("[ INFO ] ctrl attrs: initiator_depth=%d responder_resources=%d\n", \
-			param->initiator_depth, param->responder_resources);
+		dprintf("[ INFO ] ctrl attrs: initiator_depth=%d responder_resources=%d\n", 
+				param->initiator_depth, param->responder_resources);
+	}
+
 
 	// the following should hold for initiator_depth:
 	// initiator_depth <= max_qp_init_rd_atom, and
@@ -786,7 +773,7 @@ int main(int argc, char **argv)
 			pmdfc_rdma_post_recv(i);
 	}
 
-	/* XXX: After all connection done. */
+	/* XXX: After all connection done. It is needed? */
 	/* servermr post send qp need polling */
 	struct ibv_wc wc;
 	int ne;

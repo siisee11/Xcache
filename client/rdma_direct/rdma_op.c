@@ -10,7 +10,7 @@
 #include "timeperf.h"
 
 //#define SINGLE_TEST 1
-//#define KTIME_CHECK 1
+#define KTIME_CHECK 1
 
 extern struct pmdfc_rdma_ctrl *gctrl;
 extern int numcpus;
@@ -36,7 +36,7 @@ void pmdfc_rdma_print_stat() {
 	fperf_print("begin_recv");
 	fperf_print("post_send");
 	fperf_print("drain_queue");
-	fperf_print("pmdfc_rdma_read_done"); 
+	fperf_print("pmdfc_rdma_recv_done"); 
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #else
@@ -64,7 +64,10 @@ static void pmdfc_rdma_send_done(struct ib_cq *cq, struct ib_wc *wc)
 	kmem_cache_free(req_cache, req);
 }
 
-static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
+/**
+ * pmdfc_rdma_recv_done - Called when consume CQE
+ */
+static void pmdfc_rdma_recv_done(struct ib_cq *cq, struct ib_wc *wc)
 {
 	struct rdma_req *req =
 		container_of(wc->wr_cqe, struct rdma_req, cqe);
@@ -78,7 +81,7 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 #endif
 
 	if (unlikely(wc->status != IB_WC_SUCCESS))
-		pr_err("[ FAIL ] pmdfc_rdma_read_done status is not success, it is=%d\n", wc->status);
+		pr_err("[ FAIL ] pmdfc_rdma_recv_done status is not success, it is=%d\n", wc->status);
 
 	bit_unmask(ntohl(wc->ex.imm_data), &node_id, &msg_num, &type, &tx_state, &num);
 //	pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
@@ -86,14 +89,16 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_FROM_DEVICE);
 
 	if ( tx_state == TX_READ_ABORTED ) {
+		pr_info("[%s]: node_id(%d), msg_num(%d), type(%d), tx_state(%d), num(%d)\n", __func__, node_id, msg_num, type, tx_state, num);
 		q->success = -1;
-	} 
-	q->success = 1;
+	} else {
+		q->success = 1;
+	}
 //	else {
 //		SetPageUptodate(req->page);
 //		unlock_page(req->page);
 //	}
-
+	
 	complete(&req->done);
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
@@ -102,6 +107,11 @@ static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 #endif
 }
 
+/**
+ * pmdfc_rdma_recv_empty_done - Called when consume CQE
+ * @cq: target completion queue.
+ * @wc: work completion element.
+ */
 static void pmdfc_rdma_recv_empty_done(struct ib_cq *cq, struct ib_wc *wc)
 {
 	struct rdma_req *req =
@@ -350,6 +360,21 @@ static inline int drain_queue(struct rdma_queue *q)
 
 	while (atomic_read(&q->pending) > 0) {
 		spin_lock_irqsave(&q->cq_lock, flags);
+
+		/**
+		 * ib_process_direct_cq - process a CQ in caller context
+		 * @cq:		CQ to process
+		 * @budget:	number of CQEs to poll for
+		 *
+		 * This function is used to process all outstanding CQ entries.
+		 * It does not offload CQ processing to a different context and does
+		 * not ask for completion interrupts from the HCA.
+		 * Using direct processing on CQ with non IB_POLL_DIRECT type may trigger
+		 * concurrent processing.
+		 *
+		 * Note: do not pass -1 as %budget unless it is guaranteed that the number
+		 * of completions that will be processed is small.
+		 */
 		ib_process_cq_direct(q->cq, 16);
 		spin_unlock_irqrestore(&q->cq_lock, flags);
 		cpu_relax();
@@ -358,33 +383,12 @@ static inline int drain_queue(struct rdma_queue *q)
 	return 1;
 }
 
-static inline int begin_read(struct rdma_queue *q, struct page *page,
-		u64 roffset)
-{
-	struct rdma_req *req;
-	struct ib_device *dev = q->ctrl->rdev->dev;
-	struct ib_sge sge = {};
-	int ret, inflight;
-
-	/* back pressure in-flight reads, can't send more than
-	 * QP_MAX_SEND_WR at a time */
-	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR) {
-		BUG_ON(inflight > QP_MAX_SEND_WR); /* only valid case is == */
-		//poll_target(q, 8);
-		poll_target(q, 2048);
-		pr_info_ratelimited("[ warn ] back pressure happened on reads");
-	}
-
-	ret = get_req_for_page(&req, dev, page, DMA_TO_DEVICE);
-	if (unlikely(ret))
-		return ret;
-
-	req->cqe.done = pmdfc_rdma_read_done;
-	ret = pmdfc_rdma_post_rdma(q, req, &sge, roffset, IB_WR_RDMA_READ);
-	return ret;
-}
 
 /* XXX */
+/** begin_recv - prepare dma region for page and post recv
+ * @q: Q to process
+ * @q: page to receive
+ */
 static inline int begin_recv(struct rdma_queue *q, struct page *page)
 {
 	struct rdma_req *req;
@@ -407,8 +411,7 @@ static inline int begin_recv(struct rdma_queue *q, struct page *page)
 	if (unlikely(ret))
 		return ret;
 
-	req->cqe.done = pmdfc_rdma_read_done;
-//	ret = pmdfc_rdma_post_recv(q, req, &sge);
+	req->cqe.done = pmdfc_rdma_recv_done;
 
 	sge.addr = req->dma;
 	sge.length = PAGE_SIZE;
@@ -499,12 +502,13 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev; 
 
-	/* 2. post recv */
+	/* 1. post recv */
 	ret = begin_recv_empty(q);
 	BUG_ON(ret);
 
 //	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
 
+	/* 2. post send */
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
 		BUG_ON(inflight > QP_MAX_SEND_WR);
 		poll_target(q, 2048);
@@ -558,14 +562,16 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 
 	BUG_ON(ret);
 
-
 	drain_queue(q);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rdpma_put);
 
-/* XXX */
+/** rdpma_get - get page from server 
+ *
+ * return -1 if failed
+ */
 int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 {
 	struct rdma_queue *q;
@@ -587,8 +593,7 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 	fperf_start("begin_recv");
 #endif
 	/* 1. post recv page first to reduce RNR */
-//	ret = begin_recv(q, page);
-	ret = begin_recv_empty(q);
+	ret = begin_recv(q, page);
 	BUG_ON(ret);
 
 #ifdef KTIME_CHECK
@@ -596,7 +601,6 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 #endif
 
 	/* 2. post send key */
-
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
 		BUG_ON(inflight > QP_MAX_SEND_WR);
 		poll_target(q, 2048);
@@ -640,7 +644,7 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 #ifdef KTIME_CHECK
 	fperf_end("post_send");
 #endif
-	BUG_ON(ret);
+
 
 #ifdef KTIME_CHECK
 	fperf_start("drain_queue");
@@ -649,10 +653,15 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 #ifdef KTIME_CHECK
 	fperf_end("drain_queue");
 #endif
+
+	/* TODO: How to figure out this page is whether retrieved or not? */
 	/* page not found */
 	if (q->success == -1) {
 		q->success = 1;
 		return -1;
+	} else {
+		/* page found */
+		ret = 0;
 	}
 
 	return ret;
@@ -660,40 +669,7 @@ int rdpma_get(struct page *page, uint64_t key, uint32_t imm)
 EXPORT_SYMBOL_GPL(rdpma_get);
 
 
-/* page is unlocked when the wr is done.
- * posts an RDMA read on this cpu's qp */
-int pmdfc_rdma_read_async(struct page *page, u64 roffset)
-{
-	struct rdma_queue *q;
-	int ret;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-	//VM_BUG_ON_PAGE(!PageLocked(page), page);
-	//VM_BUG_ON_PAGE(PageUptodate(page), page);
-
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_ASYNC);
-
-	ret = begin_read(q, page, roffset);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmdfc_rdma_read_async);
-
-int pmdfc_rdma_read_sync(struct page *page, u64 roffset)
-{
-	struct rdma_queue *q;
-	int ret;
-
-	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
-	//VM_BUG_ON_PAGE(!PageLocked(page), page);
-	//VM_BUG_ON_PAGE(PageUptodate(page), page);
-
-	q = pmdfc_rdma_get_queue(smp_processor_id(), QP_READ_SYNC);
-	ret = begin_read(q, page, roffset);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(pmdfc_rdma_read_sync);
-
-
+/* XXX */
 inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 		enum qp_type type)
 {

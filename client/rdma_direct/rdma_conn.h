@@ -66,6 +66,7 @@ struct rdma_queue {
 
 	/* XXX*/
 	int success;
+	struct page *page;
 };
 
 struct pmdfc_rdma_memregion {
