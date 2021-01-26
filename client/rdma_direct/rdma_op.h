@@ -13,6 +13,7 @@ int pmdfc_rdma_poll_load(int cpu);
 //static inline int pmdfc_rdma_post_rdma(struct rdma_queue *q, struct rdma_req *qe,
 //        struct ib_sge *sge, u64 roffset, enum ib_wr_opcode op);
 
+void pmdfc_rdma_print_stat(void);
 int pmdfc_rdma_read_async(struct page *page, u64 roffset);
 //static void pmdfc_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc);
 int pmdfc_rdma_read_sync(struct page *page, u64 roffset);

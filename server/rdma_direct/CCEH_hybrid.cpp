@@ -171,11 +171,11 @@ RETRY:
 			target->sema = 0;
 			delete s[1];
 			delete s;
-			std::this_thread::yield;
+			std::this_thread::yield();
 			goto RETRY;
 		}
 
-		auto dir_old = dir;
+//		auto dir_old = dir;
 		auto d = dir->_;
 		auto _dir = new Directory(dir->depth+1);
 		for(unsigned i = 0; i < dir->capacity; ++i){
@@ -207,7 +207,7 @@ RETRY:
 			target->sema = 0;
 			//delete s[1];
 			delete s;
-			std::this_thread::yield;
+			std::this_thread::yield();
 			goto RETRY;
 		}
 
@@ -354,7 +354,7 @@ bool CCEH::Recovery(void) {
 		size_t stride = pow(2, dir->depth - depth_cur);
 		size_t buddy = i + stride;
 		if (buddy == dir->capacity) break;
-		for (int j = buddy - 1; i < j; j--) {
+		for (size_t j = buddy - 1; i < j; j--) {
 			if (dir->_[j]->local_depth != depth_cur) {
 				dir->_[j] = dir->_[i];
 			}

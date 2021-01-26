@@ -33,4 +33,4 @@ gdb:
 	gdb ./rdma_svr
 
 clean:
-	rm -f *.o *.out
+	rm -f *.o $(APPS)
