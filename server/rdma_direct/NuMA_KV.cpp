@@ -24,6 +24,10 @@ extern struct bitmask *pollcpubuf;
 extern int putcnt;
 extern int getcnt;
 
+#ifdef KV_DEBUG
+		uint64_t insertTime = 0;
+		uint64_t getTime = 0;
+#endif
 
 using namespace std;
 
@@ -54,6 +58,11 @@ NUMA_KV::NUMA_KV(size_t initCap, size_t nThreads, size_t nPollThreads)
 	else
 		dprintf("[ FAIL ] NUMA feature OFF\n");
 
+#ifdef KV_DEBUG
+	insertTime = 0;
+	getTime = 0;
+#endif
+
 	dprintf("[  OK  ] NUMA_KV init\n");
 }
 
@@ -70,6 +79,7 @@ void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 	cceh->Insert(key, value);
 #ifdef KV_DEBUG
 	clock_gettime(CLOCK_MONOTONIC, &i_end);
+	printf("%ld\n",i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000);
 	insertTime += i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000;
 #endif
 

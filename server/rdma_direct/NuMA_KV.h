@@ -71,12 +71,6 @@ class NUMA_KV : public KVStore {
 		vector<thread> numakvThreads;
 		atomic<int> nr_completed = 0;
 		int nr_data;
-
-#ifdef KV_DEBUG
-		uint64_t perNodeQueueTime = 0;	
-		uint64_t insertTime = 0;
-		uint64_t getTime = 0;
-#endif
 };
 
 #endif  // NUMA_KV_H_

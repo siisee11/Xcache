@@ -308,6 +308,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	queue = &ctrl->queues[idx];
 	queue->ctrl = ctrl; // point each other (queue, ctrl)
 	init_completion(&queue->cm_done);
+	idr_alloc(queue->queue_status_idr);
 	atomic_set(&queue->pending, 0);
 	spin_lock_init(&queue->cq_lock);
 	queue->qp_type = get_queue_type(idx);

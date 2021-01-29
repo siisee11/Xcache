@@ -6,7 +6,7 @@
 
 struct pmdfc_rdma_ctrl *gctrl;
 static int serverport;
-static int numqueues;
+int numqueues;
 int numcpus;
 static char serverip[INET_ADDRSTRLEN];
 static char clientip[INET_ADDRSTRLEN];
@@ -21,9 +21,6 @@ module_param_string(sip, serverip, INET_ADDRSTRLEN, 0644);
 module_param_string(cip, clientip, INET_ADDRSTRLEN, 0644);
 
 
-#ifdef SINGLE_TEST
-static int SINGLE_QUEUE = 2;
-#endif
 // TODO: destroy ctrl
 
 #define CONNECTION_TIMEOUT_MS 60000
@@ -90,7 +87,6 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		rdev->mr->pd = rdev->pd;
 		rdev->mr_size = LOCAL_META_REGION_SIZE;
 		rdev->local_mm = (uint64_t)kmalloc(rdev->mr_size, GFP_KERNEL);
-		//	rdev->local_dma_addr = ib_reg_mr_addr((void*)rdev->local_mm, rdev->mr_size);
 		rdev->local_dma_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_mm, rdev->mr_size, DMA_BIDIRECTIONAL);
 		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_addr))) {
 			ib_dma_unmap_single(rdev->dev,
@@ -98,8 +94,10 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 			return -ENOMEM;
 		}
 
-		q->ctrl->clientmr.key = rdev->pd->local_dma_lkey;
+		pr_info("[ DBUG ] mr.lkey= %u, pd->local_dma_lkey= %u\n", rdev->mr->lkey, rdev->pd->local_dma_lkey);
 		//	q->ctrl->clientmr->key = rdev->mr.rkey;
+//		q->ctrl->clientmr.key = rdev->pd->local_dma_lkey;
+		q->ctrl->clientmr.key = rdev->mr->lkey;
 		q->ctrl->clientmr.baseaddr = rdev->local_dma_addr;
 		q->ctrl->clientmr.mr_size = rdev->mr_size;
 
@@ -142,10 +140,9 @@ static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
 	init_attr.cap.max_recv_sge = 2; /* XXX */
 	init_attr.cap.max_send_sge = 2; /* XXX */
 	init_attr.sq_sig_type = IB_SIGNAL_REQ_WR;
-	//  init_attr.qp_type = IB_QPT_UD; /* XXX: RC->UC */
 	init_attr.qp_type = IB_QPT_RC;
-	init_attr.send_cq = queue->cq;
-	init_attr.recv_cq = queue->cq;
+	init_attr.send_cq = queue->send_cq;
+	init_attr.recv_cq = queue->recv_cq;
 	/* just to check if we are compiling against the right headers */
 	//init_attr.create_flags = IB_QP_EXP_CREATE_ATOMIC_BE_REPLY & 0;
 
@@ -169,7 +166,8 @@ static void pmdfc_rdma_destroy_queue_ib(struct rdma_queue *q)
 	rdev = q->ctrl->rdev;
 	ibdev = rdev->dev;
 	//rdma_destroy_qp(q->ctrl->cm_id);
-	ib_free_cq(q->cq);
+	ib_free_cq(q->send_cq);
+	ib_free_cq(q->recv_cq);
 }
 
 static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
@@ -193,14 +191,15 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 	 * specified context. The ULP must use wr->wr_cqe instead of wr->wr_id
 	 * to use this CQ abstraction.
 	 */
-	if (q->qp_type == QP_READ_ASYNC)
-		q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
-	else
-	    q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
-//		q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_SOFTIRQ);
+	q->send_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
+	q->recv_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
 
-	if (IS_ERR(q->cq)) {
-		ret = PTR_ERR(q->cq);
+	if (IS_ERR(q->send_cq)) {
+		ret = PTR_ERR(q->send_cq);
+		goto out_err;
+	}
+	if (IS_ERR(q->recv_cq)) {
+		ret = PTR_ERR(q->recv_cq);
 		goto out_err;
 	}
 
@@ -211,7 +210,8 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 	return 0;
 
 out_destroy_ib_cq:
-	ib_free_cq(q->cq);
+	ib_free_cq(q->send_cq);
+	ib_free_cq(q->recv_cq);
 out_err:
 	return ret;
 }
@@ -345,8 +345,10 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	queue->ctrl = ctrl; // point each other (queue, ctrl)
 	queue->page = alloc_pages(GFP_KERNEL, 0); /* XXX */
 	init_completion(&queue->cm_done);
+	idr_init(&queue->queue_status_idr);
 	atomic_set(&queue->pending, 0);
 	spin_lock_init(&queue->cq_lock);
+	spin_lock_init(&queue->queue_lock);
 	queue->qp_type = get_queue_type(idx);
 
 	queue->cm_id = rdma_create_id(&init_net, pmdfc_rdma_cm_handler, queue,
@@ -386,24 +388,16 @@ static void pmdfc_rdma_stop_queue(struct rdma_queue *q)
 static void pmdfc_rdma_free_queue(struct rdma_queue *q)
 {
 	rdma_destroy_qp(q->cm_id);
-	ib_free_cq(q->cq);
+	ib_free_cq(q->send_cq);
+	ib_free_cq(q->recv_cq);
 	rdma_destroy_id(q->cm_id);
 }
 
 static int pmdfc_rdma_init_queues(struct pmdfc_rdma_ctrl *ctrl)
 {
 	int ret, i;
-#ifdef SINGLE_TEST
-	// for test, 0: read_sync, 1: write_sync
-	for (i = 0; i < SINGLE_QUEUE; ++i) {
-		ret = pmdfc_rdma_init_queue(ctrl, i);
-		if (ret) {
-			pr_err("[ FAIL ] failed to initialized queue: %d\n", i);
-			goto out_free_queues;
-		}
-	}
-#else
-	// usually numqueues is same as numcpus
+
+	/* numqueues specified in Makefile as NQ */
 	for (i = 0; i < numqueues; ++i) {
 		ret = pmdfc_rdma_init_queue(ctrl, i);
 		if (ret) {
@@ -411,7 +405,6 @@ static int pmdfc_rdma_init_queues(struct pmdfc_rdma_ctrl *ctrl)
 			goto out_free_queues;
 		}
 	}
-#endif
 
 	return 0;
 
@@ -506,8 +499,8 @@ static void pmdfc_rdma_recv_remotemr_done(struct ib_cq *cq, struct ib_wc *wc)
 			DMA_FROM_DEVICE); 
 	mr_free_end = ctrl->servermr.mr_size;
 
-	pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (GB) n", ctrl->servermr.baseaddr,
-			ctrl->servermr.key, ctrl->servermr.mr_size/1024/1024/1024);
+	pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->servermr.baseaddr,
+			ctrl->servermr.key, ctrl->servermr.mr_size/1024);
 	complete_all(&qe->done);
 }
 
@@ -526,10 +519,9 @@ static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
 	}
 	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct pmdfc_rdma_memregion),
 			DMA_FROM_DEVICE); 
-	mr_free_end = ctrl->servermr.mr_size;
 
-	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (GB)\n", ctrl->clientmr.baseaddr,
-			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024/1024/1024);
+	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
+			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
 	complete_all(&qe->done);
 }
 
@@ -620,18 +612,6 @@ inline static void pmdfc_rdma_wait_completion(struct ib_cq *cq,
 	ndelay(1000);
 	while (!completion_done(&qe->done)) {
 		ndelay(250);
-		/**
-		 * ib_process_direct_cq - process a CQ in caller context
-		 * @cq:		CQ to process
-		 * @budget:	number of CQEs to poll for
-		 *
-		 * This function is used to process all outstanding CQ entries on a
-		 * %IB_POLL_DIRECT CQ.  It does not offload CQ processing to a different
-		 * context and does not ask for completion interrupts from the HCA.
-		 *
-		 * Note: for compatibility reasons -1 can be passed in %budget for unlimited
-		 * polling.  Do not use this feature in new code, it will be removed soon.
-		 */
 		ib_process_cq_direct(cq, 1);
 	}
 }
@@ -658,7 +638,7 @@ static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].cq, qe);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe);
 
 out_free_qe:
 	kmem_cache_free(req_cache, qe);
@@ -688,7 +668,7 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].cq, qe);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe);
 
 out_free_qe:
 	kmem_cache_free(req_cache, qe);
@@ -708,9 +688,9 @@ inline enum qp_type get_queue_type(unsigned int idx)
 		return QP_WRITE_SYNC;
 #else
 	/* XXX */
-	if (idx < (numcpus % numqueues) / 2)
+	if (idx < numqueues / 2)
 		return QP_READ_SYNC; // read page
-	else if (idx >= (numcpus % numqueues) / 2)
+	else if (idx >= numqueues / 2)
 		return QP_WRITE_SYNC; // write page
 #endif
 	BUG();
@@ -750,14 +730,12 @@ static int __init rdma_connection_init_module(void)
 		return -ENODEV;
 	}
 
-#if 0
 	ret = pmdfc_rdma_send_localmr(gctrl);
 	if (ret) {
 		pr_err("[ FAIL ] could not send local memory region\n");
 		ib_unregister_client(&pmdfc_rdma_ib_client);
 		return -ENODEV;
 	}
-#endif
 
 	pr_info("[ PASS ] ctrl is ready for reqs\n");
 	return 0;

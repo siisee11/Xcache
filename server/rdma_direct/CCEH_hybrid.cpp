@@ -384,7 +384,6 @@ double CCEH::Utilization(void){
 	return ((double)sum) / ((double)cnt * Segment::kNumSlot)*100.0;
 }
 
-
 size_t CCEH::Capacity(void) {
 	std::unordered_map<Segment*, bool> set;
 	for (size_t i = 0; i < dir->capacity; ++i) {

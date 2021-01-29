@@ -28,7 +28,7 @@
 //#define PMDFC_ONESIDE 1
 #define PMDFC_NETWORK 1
 
-//#define PMDFC_DEBUG 1
+#define PMDFC_DEBUG 1
 
 #ifdef CONFIG_DEBUG_FS
 struct dentry *pmdfc_dentry; 
@@ -247,7 +247,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 				(long)oid.oid[0], index, longkey);
 	}
 	/* send Address of page */
-	ret = rdpma_get(page, longkey, imm);
+	ret = rdpma_get(page, longkey);
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;

@@ -17,7 +17,7 @@ SVR_IP="10.0.0.53"
 SVR_PORT=7777
 #NQ=2 # for test, R:W=1:1
 #EXTRA_CFLAGS  += -DSINGLE_TEST
-NQ=40 # for test, 0: read, 1: write
+NQ=2 # for test, 0: read, 1: write
 
 #default: prepare modules
 default: modules

@@ -14,7 +14,7 @@
 #include "timeperf.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024)
+#define TOTAL_CAPACITY (PAGE_SIZE * 32)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -52,7 +52,7 @@ static inline uint32_t bit_mask(int node_id, int msg_num, int type, int state, u
 int rdpma_single_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int ret, status;
-	uint32_t key=4400, index=1;
+	uint32_t key=4400, index=11111;
 	char *test_string;
 	uint64_t roffset = 0;
 	struct page *test_page;
@@ -117,7 +117,7 @@ int rdpma_single_read_message_test(void* arg){
 	long longkey = get_longkey(key, index);
 	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
 	
-	ret = rdpma_get(test_page, longkey, imm);
+	ret = rdpma_get(test_page, longkey);
 
 	if (ret == -1){
 		printk("[ FAIL ] Searching for key (ret -1)\n");
@@ -153,10 +153,10 @@ int rdpma_read_message_test(void* arg){
 
 		long longkey = get_longkey(key, index);
 		imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
-		ret = rdpma_get(return_page[tid], longkey, imm);
+		ret = rdpma_get(return_page[tid], longkey);
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
-			printk("failed Searching for key %x\n return: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
@@ -361,9 +361,9 @@ ALLOC_ERR:
 void show_test_info(void){
 
 	pr_info("+------------ PMDFC SERVER TEST INFO ------------+\n");
-	pr_info("| NUMBER OF THREAD: %d  \t\t\t\t|\n", THREAD_NUM);
-	pr_info("| TOTAL CAPACITY  : %ld \t\t\t|\n", TOTAL_CAPACITY);
-	pr_info("| ITERATIONS      : %ld \t\t\t\t|\n", ITERATIONS);
+	pr_info("| NUMBER OF THREAD: %20d  \t|\n", THREAD_NUM);
+	pr_info("| TOTAL CAPACITY  : %20ld \t|\n", TOTAL_CAPACITY);
+	pr_info("| ITERATIONS      : %20ld \t|\n", ITERATIONS);
 	pr_info("+------------------------------------------------+\n");
 
 	return;
@@ -395,7 +395,6 @@ static int __init init_test_module(void){
 
 
 static void __exit exit_test_module(void){
-	int i, j;
 	pr_info("[%s]: cleaning up resources", __func__);
 
 	if(read_threads){

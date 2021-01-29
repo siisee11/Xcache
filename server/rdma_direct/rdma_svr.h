@@ -13,20 +13,22 @@ POBJ_LAYOUT_END(PM_MR);
 
 #define PAGE_SIZE 	4096
 
-#define LOCAL_META_REGION_SIZE			(MAX_NODE * MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
-#define PER_NODE_META_REGION_SIZE		(MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
-#define PER_PROCESS_META_REGION_SIZE	(NUM_ENTRY * METADATA_SIZE)
-#define GET_CLIENT_META_REGION(addr, nid, pid)	(addr + nid * PER_NODE_META_REGION_SIZE + PER_PROCESS_META_REGION_SIZE * pid)
+#define NUM_QUEUES 		2
+#define NUM_ENTRY 		32
+#define METADATA_SIZE 	16
+
+#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE)
+#define LOCAL_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
+
+#define GET_LOCAL_META_REGION(addr, qid, mid)		(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
+#define GET_REMOTE_ADDRESS_BASE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
+#define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
+#define GET_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
 const size_t BUFFER_SIZE = ((1UL << 30) * 16);
-//const unsigned int NUM_PROCS = 8;
-//const unsigned int NUM_QUEUES_PER_PROC = 3;
-//const unsigned int NUM_QUEUES = NUM_PROCS * NUM_QUEUES_PER_PROC;
-//const unsigned int NUM_QUEUES = 2;
-const unsigned int NUM_QUEUES = 40; /* XXX */
 
 enum{
 	MSG_WRITE_REQUEST,
@@ -96,7 +98,9 @@ struct ctrl {
 	struct device *dev;
 
 	/* XXX */
+	uint64_t local_mm;
 	struct memregion clientmr;
+	struct memregion servermr;
 
 	NUMA_KV* kv;
 

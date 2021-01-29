@@ -11,16 +11,18 @@
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 
-#define NUM_ENTRY			(1)
+#define NUM_QUEUES 			(2)
+#define NUM_ENTRY			(32) 			/* # of Metadata per queue */
 #define METADATA_SIZE		(16) 	 		/* [ key, remote address ] */ 
-#define MAX_PROCESS			(4096) 			/* same as PMDFC_STORAGE_SIZE */
 #define BITMAP_SIZE	(64)
 
-#define LOCAL_META_REGION_SIZE		(MAX_PROCESS * NUM_ENTRY * METADATA_SIZE)
+#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE) 	/* [ meta, page] */
+#define LOCAL_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
 
-#define GET_LOCAL_META_REGION(addr, id)	 (addr + NUM_ENTRY * METADATA_SIZE * id)
-#define GET_REMOTE_ADDRESS_BASE(addr, id) (addr + NUM_ENTRY * METADATA_SIZE * id + 8)
-
+#define GET_LOCAL_META_REGION(addr, qid, mid)		(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
+#define GET_REMOTE_ADDRESS_BASE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
+#define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
+#define GET_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 
 enum qp_type {
 	QP_READ_SYNC,
@@ -52,7 +54,8 @@ struct pmdfc_rdma_ctrl;
 
 struct rdma_queue {
 	struct ib_qp *qp;
-	struct ib_cq *cq;
+	struct ib_cq *send_cq;
+	struct ib_cq *recv_cq;
 	spinlock_t cq_lock;
 	enum qp_type qp_type;
 
@@ -67,6 +70,8 @@ struct rdma_queue {
 	/* XXX*/
 	int success;
 	struct page *page;
+	struct idr 		queue_status_idr;
+	spinlock_t		queue_lock;
 };
 
 struct pmdfc_rdma_memregion {
@@ -94,6 +99,7 @@ struct pmdfc_rdma_ctrl {
 };
 
 struct rdma_queue *pmdfc_rdma_get_queue(unsigned int idx, enum qp_type type);
+int pmdfc_rdma_get_queue_id(unsigned int idx, enum qp_type type);
 enum qp_type get_queue_type(unsigned int idx);
 
 #endif // _RDMA_CONN_H_

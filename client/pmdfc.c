@@ -286,6 +286,9 @@ retry:
 #ifndef PMDFC_BUFFERING
 	if (rdma && rdma_direct) { 
 		ret = pmdfc_rdma_write(page, tmp->roffset);
+		ret = pmdfc_rdma_write(page, key, index);
+		ret = (MSG_WRITE_REQUEST, key, index, bit,
+			storage->page_storage[bit], PAGE_SIZE, 0, &status);
 	}
 
 	if (put_cnt % SAMPLE_RATE == 0) {
