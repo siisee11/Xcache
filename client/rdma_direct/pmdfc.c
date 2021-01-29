@@ -28,7 +28,7 @@
 //#define PMDFC_ONESIDE 1
 #define PMDFC_NETWORK 1
 
-#define PMDFC_DEBUG 1
+//#define PMDFC_DEBUG 1
 
 #ifdef CONFIG_DEBUG_FS
 struct dentry *pmdfc_dentry; 

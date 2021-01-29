@@ -14,7 +14,7 @@
 #include "timeperf.h"
 
 #define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 32)
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 1024)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;

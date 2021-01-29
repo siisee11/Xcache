@@ -201,12 +201,14 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 		pr_info_ratelimited("[ WARN ] back pressure writes");
 	}
 
+#if 0
 	/* thi msg_id is unique in this queue */
 	spin_lock(&q->queue_lock);
 	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
 	spin_unlock(&q->queue_lock);
 
 	BUG_ON(msg_id >= 64);
+#endif
 
 	/* 1. post recv */
 	ret = post_recv(q);
@@ -300,7 +302,7 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	}
 
 	bit_unmask(ntohl(wc.ex.imm_data), &nid, &mid, &type, &tx_state, &num);
-	pr_info("[%s]: nid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, mid, type, tx_state, num);
+//	pr_info("[%s]: nid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, mid, type, tx_state, num);
 
 	return ret;
 }
@@ -371,7 +373,7 @@ int rdpma_get(struct page *page, uint64_t key)
 	addr = (uint64_t*)GET_LOCAL_META_REGION(gctrl->rdev->local_mm, queue_id, msg_id);
 	raddr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->rdev->local_mm, queue_id, msg_id);
 
-	pr_info("[ INFO ] dma_addr=%lx, addr= %lx\n", dma_addr, (uint64_t)addr);
+//	pr_info("[ INFO ] dma_addr=%lx, addr= %lx\n", dma_addr, (uint64_t)addr);
 
 	/* First 8byte for key */
 	*addr = key;
@@ -385,13 +387,13 @@ int rdpma_get(struct page *page, uint64_t key)
 		return -1;
 	}
 	ib_dma_sync_single_for_device(dev, page_dma, PAGE_SIZE, DMA_BIDIRECTIONAL);
-	pr_info("[ INFO ] ib_dma_map_page { page_dma=%lx }\n", page_dma);
+//	pr_info("[ INFO ] ib_dma_map_page { page_dma=%lx }\n", page_dma);
 	BUG_ON(page_dma == 0);
 
 	/* Next 8byte for page_dma address */
 	*raddr = page_dma;
-	pr_info("[ INFO ] WRITE { key=%llx, page_dma=%llx }\n", *addr, *raddr);
-	pr_info("[ INFO ] Write to remote_addr= %llx\n", q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id));
+//	pr_info("[ INFO ] WRITE { key=%llx, page_dma=%llx }\n", *addr, *raddr);
+//	pr_info("[ INFO ] Write to remote_addr= %llx\n", q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id));
 
 	sge.addr = dma_addr;
 	sge.length = METADATA_SIZE;
@@ -455,7 +457,7 @@ int rdpma_get(struct page *page, uint64_t key)
 	}
 
 	bit_unmask(ntohl(wc.ex.imm_data), &qid, &mid, &type, &tx_state, &num);
-	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
+//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
 	ib_dma_unmap_page(dev, page_dma, PAGE_SIZE, DMA_BIDIRECTIONAL);
 
