@@ -13,7 +13,7 @@ POBJ_LAYOUT_END(PM_MR);
 
 #define PAGE_SIZE 	4096
 
-#define NUM_QUEUES 		2
+#define NUM_QUEUES 		20
 #define NUM_ENTRY 		32
 #define METADATA_SIZE 	16
 
@@ -24,6 +24,7 @@ POBJ_LAYOUT_END(PM_MR);
 #define GET_REMOTE_ADDRESS_BASE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
 #define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 #define GET_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
+#define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
@@ -73,10 +74,8 @@ struct queue {
 	} state;
 
 	/* XXX */
-	void *page_key; 	/* 4096 + 64 byte */
 	void *page; 		/* 4096 byte */
 	uint64_t key; 	/* 64 byte */
-	void *empty_page; 
 };
 
 struct memregion {

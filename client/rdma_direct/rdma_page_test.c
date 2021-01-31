@@ -124,8 +124,8 @@ int rdpma_single_read_message_test(void* arg){
 		result++;
 	}
 	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){
-		printk("[ FAIL ] Searching for key\n");
-		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
+//		printk("[ FAIL ] Searching for key\n");
+//		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
 		result++;
 	}
 

@@ -18,7 +18,7 @@ all:
 	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK
 
 rdma_dram:
-	numactl -N 0,1 -m 0,1 ./rdma_svr 7777
+	numactl -N 0,1 -m 0,1 ./rdma_svr -t 7777
 
 rdma_app_direct:
 	#rm -f /mnt/pmem0/pmdfc/pm_mr

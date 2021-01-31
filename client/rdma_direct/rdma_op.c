@@ -35,6 +35,7 @@ void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* sta
 void pmdfc_rdma_print_stat() {
 	fperf_print("begin_recv");
 	fperf_print("post_send");
+	fperf_print("poll_sr");
 	fperf_print("poll_rr");
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
@@ -416,6 +417,14 @@ int rdpma_get(struct page *page, uint64_t key)
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
 
+#ifdef KTIME_CHECK
+	fperf_end("post_send");
+#endif
+
+#ifdef KTIME_CHECK
+	fperf_start("poll_sr");
+#endif
+
 	/* Poll send completion queue first */
 	do{
 		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
@@ -431,9 +440,8 @@ int rdpma_get(struct page *page, uint64_t key)
 		ret = -1;
 		goto out;
 	}
-
 #ifdef KTIME_CHECK
-	fperf_end("post_send");
+	fperf_end("poll_sr");
 #endif
 
 #ifdef KTIME_CHECK

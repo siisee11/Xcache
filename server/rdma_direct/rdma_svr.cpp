@@ -13,6 +13,8 @@
 #include <numa.h>
 #include <rdma/rdma_cma.h>
 #include <infiniband/verbs.h>
+#include <getopt.h>
+
 
 #include "rdma_svr.h"
 #include "variables.h"
@@ -192,6 +194,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 //	int thisNode = numa_node_of_cpu(cpu);
 	struct ibv_wc wc;
 	int ne;
+	struct ibv_wc wc2;
 #if defined(TIME_CHECK)
 	struct timespec start, end;
 #endif
@@ -215,8 +218,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
 			int qid, msg_id, type, tx_state;
 			uint32_t num;
-			uint64_t key;
-			void *page;
 			struct ibv_send_wr wr = {};
 			struct ibv_send_wr *bad_wr = NULL;
 			struct ibv_sge sge = {};
@@ -224,19 +225,21 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			bit_unmask(ntohl(wc.imm_data), &qid, &msg_id, &type, &tx_state, &num);
 			dprintf("[ INFO ] On Q[%d]: wr_id(%lx) qid(%d), msg_id(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, wc.wr_id,qid, msg_id, type, tx_state, num);
 
+			post_recv(queue_id);
+
 			if(type == MSG_WRITE){
 				putcnt++;
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-				key = q->key;
-				page = malloc(PAGE_SIZE);
-				memcpy(page, q->page, PAGE_SIZE);
-				pmdfc_rdma_post_recv(queue_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
+				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
+				void *save_page = malloc(PAGE_SIZE);
+				memcpy((char *)save_page, (char *)page, PAGE_SIZE);
 
-				gctrl->kv->Insert(key, (Value_t)page, 0, 0);
-				dprintf("[ INFO ] page %lx, key %lx Inserted\n", (uint64_t)page, key);
-				dprintf("[ INFO ] page %s\n", (char *)page);
+				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
+				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &end);
@@ -284,18 +287,18 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-				printf("[ INFO ] received MSG_READ\n");
-				post_recv(queue_id);
+//				printf("[ INFO ] received MSG_READ\n");
 
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
 				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
+				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
 				dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
 
 				/* 1. Get page address -> value */
 				void* value;
 				bool abort = false;
 
-				value = (void*)gctrl->kv->Get((Key_t&)*key, 0); 
+				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
 				if(!value){
 					dprintf("Value for key[%lx] not found\n", key);
 					abort = true;
@@ -312,8 +315,9 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					dprintf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send value to client mr (page) */	
+#if 0
 					sge.addr = (uint64_t)value;
-					sge.length = PAGE_SIZE;
+					sge.length = sizeof(uint64_t); /* XXX PAGE_SIZE = 16 = 1 doesn't speed up -> 0 does speed up */
 					sge.lkey = gctrl->mr_buffer->lkey;
 
 					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -321,8 +325,32 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					wr.num_sge = 1;
 					wr.send_flags = IBV_SEND_SIGNALED;
 					wr.imm_data = htonl(bit_mask(qid, msg_id, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
-					wr.wr.rdma.remote_addr = *remote_addr;
+					wr.wr.rdma.remote_addr = clientmr.baseaddr + GET_OFFSET_FROM_BASE_TO_ADDR(gctrl->local_mm, qid, msg_id);
 					wr.wr.rdma.rkey = gctrl->clientmr.key;
+
+					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+
+					do{
+						ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+						if(ne < 0){
+							fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+							return;
+						}
+					}while(ne < 1);
+
+					if(wc2.status != IBV_WC_SUCCESS){
+						fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+						return;
+					}
+#endif
+					memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
+					dprintf("[ INFO ] page %s\n", (char *)target_addr);
+
+					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+					wr.sg_list = &sge;
+					wr.num_sge = 0;
+					wr.send_flags = IBV_SEND_SIGNALED;
+					wr.imm_data = htonl(bit_mask(qid, msg_id, MSG_READ_REPLY, TX_READ_COMMITTED, 0));
 
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
@@ -339,8 +367,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 				}
 
-				struct ibv_wc wc2;
-				int ne;
 				do{
 					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
 					if(ne < 0){
@@ -370,7 +396,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 		}
 		else if ( (int)wc.opcode == IBV_WC_RECV ){
 			/* ------------------------------------------------------------- IBV_WC_RECV --------------------------------------------------------------------------------------------------*/
-			dprintf("[%s] received IBV_WC_RECV\n", __func__);
 			if ((int)wc.wc_flags == IBV_WC_WITH_IMM ) {
 				int qid, msg_id, type, tx_state;
 				uint32_t num;
@@ -418,8 +443,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 						fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 					}
 
-					struct ibv_wc wc2;
-					int ne;
 					do{
 						ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
 						if(ne < 0){
@@ -512,14 +535,6 @@ static device *get_device(struct queue *q)
 		TEST_Z(ctrl->buffer);
 		printf("[  OK  ] DAX KMEM MR initialized\n");
 #else
-		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
-		TEST_Z(ctrl->local_mm);
-		printf("[  OK  ] DRAM MR initialized\n");
-#endif
-		/*
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, ctrl->buffer, BUFFER_SIZE, 
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
-					*/
 		/* 
 		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
 		 * addr should be 0 and length should be SIZE_MAX.
@@ -531,7 +546,9 @@ static device *get_device(struct queue *q)
 
 		dprintf("[ INFO ] registered memory region of %zu KB\n", LOCAL_META_REGION_SIZE/1024);
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
+		printf("[  OK  ] DRAM MR initialized\n");
 		q->ctrl->dev = dev;
+#endif
 	}
 
 	return q->ctrl->dev;
@@ -748,9 +765,7 @@ int alloc_control()
 		gctrl->queues[i].ctrl = gctrl;
 		gctrl->queues[i].state = queue::INIT;
 		/* XXX */
-		gctrl->queues[i].page_key = malloc(PAGE_SIZE + sizeof(uint64_t));
 		gctrl->queues[i].page = malloc(PAGE_SIZE);
-		gctrl->queues[i].empty_page = malloc(PAGE_SIZE);
 	}
 
 	gctrl->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
@@ -769,15 +784,77 @@ int main(int argc, char **argv)
 	struct rdma_cm_id *listener = NULL;
 	uint16_t port = 0;
 
-	if (argc != 2) {
-		printf("Usage ./rdma_svr <port>\n");
-		die("Need to specify a port number to listen");
+	const char *short_options = "vs:t:i:n:d:z:hK:P:W:";
+	static struct option long_options[] =
+	{
+		{"verbose", 0, NULL, 'v'},
+		{"tcp_port", 1, NULL, 't'},
+		{"ib_port", 1, NULL, 'i'},
+		{"tablesize", 1, NULL, 's'},
+		{"dataset", 1, NULL, 'd'},
+		{"pm_path", 1, NULL, 'z'},
+		{"nr_data", 1, NULL, 'n'},
+		{"netcpubind", 1, NULL, 'W'},
+		{"kvcpubind", 1, NULL, 'K'},
+		{"pollcpubind", 1, NULL, 'P'},
+		{0, 0, 0, 0} 
+	};
+
+
+	while(1){
+		int c = getopt_long(argc, argv, short_options, long_options, NULL);
+		if(c == -1) break;
+		switch(c){
+			case 'i':
+				ib_port = strtol(optarg, NULL, 0);
+				if(ib_port <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					return 0;
+				}
+				break;
+			case 't':
+				tcp_port = strtol(optarg, NULL, 0);
+				if(tcp_port <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					return 0;
+				}
+				break;
+			case 'n':
+				numData = strtol(optarg, NULL, 0);
+				if(numData <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					return 0;
+				}
+				break;
+			case 's':
+				initialTableSize = strtol(optarg, NULL, 0);
+				if(initialTableSize <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					return 0;
+				}
+				break;
+			case 'd':
+				data_path = strdup(optarg);
+				break;
+			case 'z':
+				pm_path= strdup(optarg);
+				break;
+			case 'h':
+				human = true;
+				break;
+			case 'v':
+				verbose_flag = true;
+				break;
+			default:
+				printf ("%c, <%s> is invalid\n", (char)c,optarg);
+				return 0;
+		}
 	}
 
 	nr_cpus = std::thread::hardware_concurrency();
 
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(atoi(argv[1]));
+	addr.sin_port = htons(tcp_port);
 
 	TEST_NZ(alloc_control());
 
@@ -804,8 +881,9 @@ int main(int argc, char **argv)
 		}
 
 		/* posting recv request */
-		if (get_queue_type(i) == QP_READ_SYNC)
+		if (get_queue_type(i) == QP_READ_SYNC) {
 			post_recv(i);
+		}
 		else
 			pmdfc_rdma_post_recv(i);
 	}

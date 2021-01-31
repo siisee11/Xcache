@@ -1,7 +1,7 @@
 CONFIG_MODULE_SIG=n
 obj-m := pmdfc_client.o pmdfc_rdma_core.o rdma_testing.o
 
-pmdfc_rdma_core-objs := rdma_conn.o rdma_op.o
+pmdfc_rdma_core-objs := rdpma.o
 pmdfc_client-objs := pmdfc.o bloom_filter.o
 rdma_testing-objs := rdma_page_test.o
 
@@ -15,9 +15,7 @@ EXTRA_CFLAGS  += -g
 CLI_IP="10.0.0.51"
 SVR_IP="10.0.0.53"
 SVR_PORT=7777
-#NQ=2 # for test, R:W=1:1
-#EXTRA_CFLAGS  += -DSINGLE_TEST
-NQ=2 # for test, 0: read, 1: write
+NQ=20 
 
 #default: prepare modules
 default: modules
