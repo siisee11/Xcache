@@ -11,12 +11,12 @@
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 
-#define NUM_QUEUES 			(2)
+#define NUM_QUEUES 			(40)
 #define NUM_ENTRY			(32) 			/* # of Metadata per queue */
 #define METADATA_SIZE		(16) 	 		/* [ key, remote address ] */ 
 #define BITMAP_SIZE	(64)
 
-#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE) 	/* [ meta, page] */
+#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE) 	/* [meta, page] */
 #define LOCAL_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
 
 #define GET_LOCAL_META_REGION(addr, qid, mid)		(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
@@ -104,7 +104,7 @@ struct rdma_queue *pmdfc_rdma_get_queue(unsigned int idx, enum qp_type type);
 int pmdfc_rdma_get_queue_id(unsigned int idx, enum qp_type type);
 
 int rdpma_get(struct page *page, uint64_t);
-int rdpma_put(struct page *page, uint64_t, uint32_t imm);
+int rdpma_put(struct page *page, uint64_t);
 int pmdfc_rdma_poll_load(int cpu);
 void pmdfc_rdma_print_stat(void);
 enum qp_type get_queue_type(unsigned int idx);

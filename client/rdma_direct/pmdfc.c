@@ -17,8 +17,7 @@
 #include "bloom_filter.h"
 #include "pmdfc.h"
 
-#include "rdma_op.h"
-#include "rdma_conn.h"
+#include "rdpma.h"
 
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
@@ -77,19 +76,6 @@ static long get_longkey(long key, long index)
     return longkey;
 }
 
-static inline uint32_t bit_mask(int node_id, int msg_num, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
-	return target;
-}
-
-static void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* state, uint32_t* num){
-	*num = (uint32_t)(target & 0x000000ff);
-	*state = (int)((target >> 8) & 0x0000000f);
-	*type = (int)((target >> 12) & 0x0000000f);
-	*msg_num = (int)((target >> 16) & 0x00000fff);
-	*node_id = (int)((target >> 28) & 0x0000000f);
-}
-
 /*  Clean cache operations implementation */
 static void pmdfc_cleancache_put_page(int pool_id,
 		struct cleancache_filekey key,
@@ -97,11 +83,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 {
 #if defined(PMDFC_PUT)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-	void *pg_from;
 
 	int ret = -1;
-    struct ht_data *tmp;
-	uint32_t imm;
 	uint64_t longkey;
 
 #if defined(PMDFC_BLOOM_FILTER)
@@ -139,27 +122,13 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
 
-#ifdef PMDFC_ONESIDE
-	/* get page virtual address */
-	pg_from = page_address(page);
     
-    tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
-    tmp->longkey = get_longkey((long)oid.oid[0], index);
-    tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
-    if(tmp->roffset >= mr_free_end) {
-        pr_warn("[ WARN ] Remote memory is full..\n");
-    }
-    hash_add(hash_head, &tmp->h_node, tmp->longkey);
-#endif
-    
-	/* imm data */
 	longkey = get_longkey((long)oid.oid[0], index);
-	imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
-	ret = rdpma_put(page, longkey, imm);
+	ret = rdpma_put(page, longkey);
     
     if (put_cnt % SAMPLE_RATE == 0) {
-        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx, imm=%u\n",
-                (long)oid.oid[0], index, longkey, imm);
+        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
+                (long)oid.oid[0], index, longkey);
     }
     put_cnt++;
 
@@ -179,10 +148,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	int ret;
 
-    long longkey = 0, roffset = 0;
-    struct ht_data *cur;
-	uint32_t imm;
-    atomic_t found = ATOMIC_INIT(0);
+    long longkey = 0;
 
 #if defined(PMDFC_BLOOM_FILTER)
 	bool isIn = false;
@@ -221,25 +187,6 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif
     
     longkey = get_longkey((long)oid.oid[0], index);
-#ifdef PMDFC_ONESIDE 
-    hash_for_each_possible(hash_head, cur, h_node, longkey) {
-        if (cur->longkey == longkey) {
-            atomic_set(&found, 1);
-            roffset = cur->roffset;
-        }
-    }
-
-    if (!atomic_read(&found)) {
-        if (get_cnt % SAMPLE_RATE == 0) {
-            pr_info("pmdfc: GET PAGE FAILED: not allocated...\n");
-        }
-        get_cnt++;
-        goto not_exists;
-    }
-#endif
-
-	/* imm data */
-	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
 
 	/* RDMA networking */
 	if (get_cnt % SAMPLE_RATE == 0) {

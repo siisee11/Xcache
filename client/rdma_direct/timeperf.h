@@ -39,7 +39,6 @@ inline void fperf_start(const char * str) {
 
 inline void fperf_end(const char * str) {
 	int i;
-	long sec, nsec;
 	ktime_t now;
 	struct fperf *fpp = NULL;
 	for (i = 0; i < fperf_num; ++i) {

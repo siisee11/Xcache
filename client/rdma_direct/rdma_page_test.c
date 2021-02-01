@@ -9,12 +9,11 @@
 #include <linux/kthread.h>
 
 #include "pmdfc.h"
-#include "rdma_op.h"
-#include "rdma_conn.h"
+#include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 1
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 1024)
+#define THREAD_NUM 16
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 1024 * 16)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -43,20 +42,13 @@ static long get_longkey(long key, long index)
 	return longkey;
 }
 
-static inline uint32_t bit_mask(int node_id, int msg_num, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
-	return target;
-}
-
-
 int rdpma_single_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
-	int ret, status;
+	int ret;
 	uint32_t key=4400, index=11111;
 	char *test_string;
-	uint64_t roffset = 0;
 	struct page *test_page;
-	uint32_t imm;
+	long longkey;
 
 	test_page = alloc_pages(GFP_KERNEL, 0);
 	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
@@ -64,10 +56,9 @@ int rdpma_single_write_message_test(void* arg){
 
 	memcpy(page_address(test_page), test_string, PAGE_SIZE);
 
-	long longkey = get_longkey(key, index);
-	imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
+	longkey = get_longkey(key, index);
 	
-	ret = rdpma_put(test_page, longkey, imm);
+	ret = rdpma_put(test_page, longkey);
 	complete(my_data->comp);
 
 	printk("[ PASS ] %s succeeds \n", __func__);
@@ -80,18 +71,14 @@ int rdpma_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int tid = my_data->tid;
 	int i, ret;
-	int status;
 	uint32_t index = 0;
 	uint32_t key;
-	uint32_t imm;
+	long longkey;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
-//		pr_info("write_message: %u\n", key);
-
-		long longkey = get_longkey(key, index);
-		imm = htonl(bit_mask(1, index, MSG_WRITE, TX_WRITE_BEGIN, 0));
-		ret = rdpma_put(vpages[tid][i], longkey, imm);
+		longkey = get_longkey(key, index);
+		ret = rdpma_put(vpages[tid][i], longkey);
 	}
 
 	complete(my_data->comp);
@@ -103,19 +90,18 @@ int rdpma_write_message_test(void* arg){
 
 int rdpma_single_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
-	int ret, status;
+	int ret;
 	uint32_t key=4400, index = 11111;
 	char *test_string;
 	int result = 0;
 	struct page *test_page;
-	uint32_t imm;
+	long longkey;
 
 	test_page = alloc_pages(GFP_KERNEL, 0);
 	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
-	long longkey = get_longkey(key, index);
-	imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
+	longkey = get_longkey(key, index);
 	
 	ret = rdpma_get(test_page, longkey);
 
@@ -141,18 +127,16 @@ int rdpma_single_read_message_test(void* arg){
 
 int rdpma_read_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
-	int ret, i, status;
-	int result = 0;
+	int ret, i;
 	uint32_t key, index = 0;
 	int tid = my_data->tid;
 	int nfailed = 0;
-	uint32_t imm;
+	long longkey;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
 
-		long longkey = get_longkey(key, index);
-		imm = htonl(bit_mask(1, index, MSG_READ, TX_WRITE_BEGIN, 0));
+		longkey = get_longkey(key, index);
 		ret = rdpma_get(return_page[tid], longkey);
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
@@ -228,6 +212,7 @@ int main(void){
 		reinit_completion(&comp[i]);
 		args[i]->comp = &comp[i];
 	}
+#if 0
 	pr_info("Start running fail read thread functions...\n");
 	start = ktime_get();
 
@@ -243,6 +228,7 @@ int main(void){
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
 	pr_info("[ PASS ] complete fail read thread functions: time( %llu ) usec", elapsed);
+#endif
 
 	for(i=0; i<THREAD_NUM; i++){
 		kfree(args[i]);
@@ -289,7 +275,6 @@ int init_pages(void){
 		goto ALLOC_ERR;
 	}
 	for(i=0; i<THREAD_NUM; i++){
-		struct page *pages;
 		vpages[i] = (struct page**)vmalloc(sizeof(void*)*ITERATIONS);
 		if(!vpages[i]){
 			printk(KERN_ALERT "vpages[%d] allocation failed\n", i);

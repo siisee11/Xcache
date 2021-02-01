@@ -33,17 +33,17 @@ int QP_MAX_SEND_WR = 4096;
 
 #define KTIME_CHECK 1
 
-static uint32_t bit_mask(int node_id, int msg_num, int type, int state, uint32_t num){
-	uint32_t target = (((uint32_t)node_id << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)num & 0x000000ff));
+static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
+	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
 	return target;
 }
 
-static void bit_unmask(uint32_t target, int* node_id, int* msg_num, int* type, int* state, uint32_t* num){
-	*num = (uint32_t)(target & 0x000000ff);
+static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* state, int* qid){
+	*qid = (uint32_t)(target & 0x000000ff);
 	*state = (int)((target >> 8) & 0x0000000f);
 	*type = (int)((target >> 12) & 0x0000000f);
 	*msg_num = (int)((target >> 16) & 0x00000fff);
-	*node_id = (int)((target >> 28) & 0x0000000f);
+	*num= (int)((target >> 28) & 0x0000000f);
 }
 
 #ifdef KTIME_CHECK
@@ -52,6 +52,7 @@ void pmdfc_rdma_print_stat() {
 	fperf_print("post_send");
 	fperf_print("poll_sr");
 	fperf_print("poll_rr");
+	fperf_print("rdma_read");
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #else
@@ -60,24 +61,6 @@ void pmdfc_rdma_print_stat() {
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #endif
-
-static void pmdfc_rdma_send_done(struct ib_cq *cq, struct ib_wc *wc)
-{
-	struct rdma_req *req =
-		container_of(wc->wr_cqe, struct rdma_req, cqe);
-	struct rdma_queue *q = cq->cq_context;
-	struct ib_device *ibdev = q->ctrl->rdev->dev;
-
-//	pr_info("[ PASS ] wc.wr_id(%llx) send_done\n", wc->wr_id);
-	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("[ FAIL ] pmdfc_rdma_send_done status is not success, it is=%d\n", wc->status);
-		//q->write_error = wc->status;
-	}
-	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE); /* XXX for test */
-
-	atomic_dec(&q->pending);
-	kmem_cache_free(req_cache, req);
-}
 
 /* allocates a pmdfc rdma request, creates a dma mapping for it in
  * req->dma, and synchronizes the dma mapping in the direction of
@@ -188,19 +171,20 @@ int post_recv(struct rdma_queue *q){
 /** rdpma_put - put page into server
  *
  */
-int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
+int rdpma_put(struct page *page, uint64_t key)
 {
 	struct rdma_queue *q;
 	struct rdma_req *req[2];
 	struct ib_device *dev;
 	struct ib_sge sge[2];
 	int ret, inflight;
+	uint32_t imm;
 	uint64_t *key_ptr;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
-	int nid, mid, type, tx_state;
-	uint32_t num;
+//	int qid, mid, type, tx_state;
+	int num = 0;
 	struct ib_wc wc;
 	int ne = 0;
 	int cpuid = smp_processor_id();
@@ -217,25 +201,20 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 		pr_info_ratelimited("[ WARN ] back pressure writes");
 	}
 
-#if 0
 	/* thi msg_id is unique in this queue */
 	spin_lock(&q->queue_lock);
 	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
 	spin_unlock(&q->queue_lock);
 
 	BUG_ON(msg_id >= 64);
-#endif
 
 	/* 1. post recv */
 	ret = post_recv(q);
 	BUG_ON(ret);
 
-//	pr_info("[ INFO ] %s:: pid= %d\n", __func__, smp_processor_id());
-
 	/* 2. post send */
-
 	/* setup imm data */
-	imm = htonl(bit_mask(queue_id, msg_id, MSG_WRITE, TX_WRITE_BEGIN, 0));
+	imm = htonl(bit_mask(num, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
@@ -266,6 +245,7 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
 	 * to just post requests in batches */
+	/* WRITE PAGE */
 	rdma_wr[0].wr.next    = &rdma_wr[1].wr;
 	rdma_wr[0].wr.sg_list = &sge[0];
 	rdma_wr[0].wr.num_sge = 1;
@@ -274,6 +254,7 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 	rdma_wr[0].remote_addr = q->ctrl->servermr.baseaddr + GET_PAGE_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
+	/* WRITE KEY */
 	rdma_wr[1].wr.next    = NULL;
 	rdma_wr[1].wr.sg_list = &sge[1];
 	rdma_wr[1].wr.num_sge = 1;
@@ -314,7 +295,6 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 
 #ifdef KTIME_CHECK
 	fperf_end("put_poll_sr");
-//	fperf_print("put_poll_sr");
 #endif
 
 #if 1
@@ -332,9 +312,11 @@ int rdpma_put(struct page *page, uint64_t key, uint32_t imm)
 		return 1;
 	}
 
-	bit_unmask(ntohl(wc.ex.imm_data), &nid, &mid, &type, &tx_state, &num);
-//	pr_info("[%s]: nid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, nid, mid, type, tx_state, num);
+//	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
 #endif
+
+out:
+	idr_remove(&q->queue_status_idr, msg_id);
 
 	return ret;
 }
@@ -347,19 +329,16 @@ EXPORT_SYMBOL_GPL(rdpma_put);
 int rdpma_get(struct page *page, uint64_t key)
 {
 	struct rdma_queue *q;
-	struct rdma_req *req;
 	struct ib_device *dev;
 	struct ib_sge sge = { };
 	struct ib_rdma_wr rdma_wr = {};
 	const struct ib_send_wr *bad_wr;
-	int inflight;
-	u64 *key_ptr;
 	int msg_id;
 	uint64_t imm;
 	int cpuid = smp_processor_id();
 	int queue_id;
 	uint64_t *addr, *raddr;
-	void* dma_addr;
+	uint64_t dma_addr;
 	uint64_t page_dma;
 	struct ib_wc wc;
 	int ret, ne = 0;
@@ -398,10 +377,10 @@ int rdpma_get(struct page *page, uint64_t key)
 #endif
 
 	/* setup imm data */
-	imm = htonl(bit_mask(queue_id, msg_id, MSG_READ, TX_READ_BEGIN, 0));
+	imm = htonl(bit_mask(0, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
 
 	/* get dma address by queue_id and msg_id */
-	dma_addr = (uintptr_t)GET_LOCAL_META_REGION(gctrl->rdev->local_dma_addr, queue_id, msg_id);
+	dma_addr = (uint64_t)GET_LOCAL_META_REGION(gctrl->rdev->local_dma_addr, queue_id, msg_id);
 	addr = (uint64_t*)GET_LOCAL_META_REGION(gctrl->rdev->local_mm, queue_id, msg_id);
 	raddr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->rdev->local_mm, queue_id, msg_id);
 
@@ -415,7 +394,6 @@ int rdpma_get(struct page *page, uint64_t key)
 	if (unlikely(ib_dma_mapping_error(dev, page_dma))) {
 		pr_err("[ FAIL ] ib_dma_mapping_error\n");
 		ret = -ENOMEM;
-		kmem_cache_free(req_cache, req);
 		return -1;
 	}
 	ib_dma_sync_single_for_device(dev, page_dma, PAGE_SIZE, DMA_BIDIRECTIONAL);
@@ -497,7 +475,7 @@ int rdpma_get(struct page *page, uint64_t key)
 		goto out;
 	}
 
-	bit_unmask(ntohl(wc.ex.imm_data), &qid, &mid, &type, &tx_state, &num);
+	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
 //	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
 	if ( tx_state == TX_READ_ABORTED ) {
@@ -512,6 +490,10 @@ int rdpma_get(struct page *page, uint64_t key)
 
 #ifdef KTIME_CHECK
 	fperf_end("poll_rr");
+#endif
+
+#ifdef KTIME_CHECK
+	fperf_start("rdma_read");
 #endif
 
 	sge.addr = page_dma;
@@ -547,6 +529,9 @@ int rdpma_get(struct page *page, uint64_t key)
 		goto out;
 	}
 
+#ifdef KTIME_CHECK
+	fperf_end("rdma_read");
+#endif
 out:
 	ib_dma_unmap_page(dev, page_dma, PAGE_SIZE, DMA_BIDIRECTIONAL);
 
@@ -660,7 +645,7 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_addr))) {
 			ib_dma_unmap_single(rdev->dev,
 					rdev->local_dma_addr, rdev->mr_size, DMA_BIDIRECTIONAL);
-			return -ENOMEM;
+			return NULL;
 		}
 
 		pr_info("[ DBUG ] mr.lkey= %u, pd->local_dma_lkey= %u\n", rdev->mr->lkey, rdev->pd->local_dma_lkey);
@@ -669,11 +654,6 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		q->ctrl->clientmr.key = rdev->mr->lkey;
 		q->ctrl->clientmr.baseaddr = rdev->local_dma_addr;
 		q->ctrl->clientmr.mr_size = rdev->mr_size;
-
-		pr_info("[ INFO ] local mr: key(%u), baseaddr(%llx), mr_size(%llu)\n", 
-				q->ctrl->clientmr.key,
-				q->ctrl->clientmr.baseaddr,
-				q->ctrl->clientmr.mr_size);
 
 		q->ctrl->rdev = rdev;
 	}
