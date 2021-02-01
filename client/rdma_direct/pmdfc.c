@@ -23,8 +23,6 @@
 #define PMDFC_GET 1
 #define PMDFC_BLOOM_FILTER 1 
 #define PMDFC_REMOTIFY 1
-//#define PMDFC_BUFFERING 1
-//#define PMDFC_ONESIDE 1
 #define PMDFC_NETWORK 1
 
 //#define PMDFC_DEBUG 1
@@ -33,18 +31,19 @@
 struct dentry *pmdfc_dentry; 
 #endif
 
-// Hashtable
-//#define BITS 21 // 8GB=4KBx2x2^20
+//#define PMDFC_HASHTABLE
+#ifdef PMDFC_HASHTABLE
 #define BITS 22 // 16GB=4KBx4x2^20
 #define NUM_PAGES (1UL << BITS)
 #define REMOTE_BUF_SIZE (PAGE_SIZE * NUM_PAGES)
 DEFINE_HASHTABLE(hash_head, BITS);
+#endif
 
 // Remote buffer address mapping
 atomic_long_t mr_free_start;
 extern long mr_free_end;
 
-static int rdma, rdma_direct;
+static int rdma;
 //#define SAMPLE_RATE 10000 // Per-MB
 #define SAMPLE_RATE 10000
 static long put_cnt, get_cnt;
@@ -353,9 +352,11 @@ static int __init pmdfc_init(void)
 	pr_info("[  OK  ] bloom filter initialized\n");
 #endif
     
+#ifdef PMDFC_HASHTABLE
     hash_init(hash_head);
     pr_info("[ OK ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
             BITS, NUM_PAGES);
+#endif
 
 	ret = pmdfc_cleancache_register_ops();
 
@@ -392,7 +393,6 @@ static void pmdfc_exit(void)
 }
 
 module_param(rdma, int, 0);
-module_param(rdma_direct, int, 0);
 
 module_init(pmdfc_init);
 module_exit(pmdfc_exit);

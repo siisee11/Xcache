@@ -694,52 +694,6 @@ int rdma_read(int node_id, int pid, int type, uint32_t size, uintptr_t addr, uin
 	}
 	return 0;
 }
-/*
-   int rdma_write_batch(void* addr, uint64_t dest, int size, int batch_size){
-   struct ib_rdma_wr wr[batch_size];
-   const struct ib_send_wr* bad_wr;
-   struct ib_sge sge[batch_size];
-   struct ib_wc wc;
-   int ret, ne, i;
-
-   memset(sge, 0, sizeof(struct ib_sge)*batch_size);
-   memset(wr, 0, sizeof(struct ib_rdma_wr)*batch_size);
-   for(i=0; i<batch_size; i++){
-   sge[i].addr = (uintptr_t)addr;
-   sge[i].length = size;
-   sge[i].lkey = ctx->mr->lkey;
-
-   wr[i].wr.wr_id = 0;
-   wr[i].wr.opcode = IB_WR_RDMA_WRITE;
-   wr[i].wr.sg_list = &sge[i];
-   wr[i].wr.num_sge = 1;
-   wr[i].wr.next = (i == batch_size-1) ? NULL : wr[i+1];
-   wr[i].wr.send_flags = IB_SEND_SIGNALED;
-
-   wr[i].remote_addr = (uintptr_t)dest + i*RDMA_BUFFER_SIZE;
-   wr[i].rkey = ctx->rkey;
-   }
-
-   ret = ib_post_send(ctx->qp, (struct ib_send_wr*)&wr[0], &bad_wr);
-   if(ret){
-   printk(KERN_ALERT "[%s] ib_post_send failed\n", __func__);
-   return 1;
-   }
-
-   do{
-   ne = ib_poll_cq(ctx->send_cq, 1, &wc);
-   if(ne < 0){
-   printk(KERN_ALERT "[%s] ib_poll_cq failed\n", __func__);
-   return 1;
-   }
-   }while(ne < 1);
-
-   if(wc.status != IB_WC_SUCCESS){
-   printk(KERN_ALERT "[%s] sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-   return 1;
-   }
-   return 0;
-   }*/
 
 int post_meta_request_batch(int pid, int type, int num, int tx_state, int len, void* addr, uint64_t offset, int batch_size){
 	struct ib_rdma_wr wr[batch_size];
