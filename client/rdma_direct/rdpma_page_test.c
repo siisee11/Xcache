@@ -13,7 +13,7 @@
 #include "timeperf.h"
 
 #define THREAD_NUM 16
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 16)
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 256 * 16)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -140,7 +140,7 @@ int rdpma_read_message_test(void* arg){
 		ret = rdpma_get(return_page[tid], longkey);
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
-			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+//			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
@@ -180,6 +180,7 @@ int main(void){
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
 	pr_info("[ PASS ] complete write thread functions: time( %llu ) usec", elapsed);
+	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 	
 	ssleep(3);
 
@@ -203,6 +204,31 @@ int main(void){
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
 	pr_info("[ PASS ] complete read thread functions: time( %llu ) usec", elapsed);
+	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+
+#if 0
+	for(i=0; i<THREAD_NUM; i++){
+		reinit_completion(&comp[i]);
+		args[i]->comp = &comp[i];
+	}
+	pr_info("Start running mixed thread functions...\n");
+	start = ktime_get();
+
+	for(i=0; i<THREAD_NUM; i++){
+//		read_threads[i] = kthread_create((void*)&rdpma_single_read_message_test, (void*)args[i], "page_reader");
+		read_threads[i] = kthread_create((void*)&rdpma_read_message_test, (void*)args[i], "page_reader");
+		wake_up_process(read_threads[i]);
+	}
+
+	for(i=0; i<THREAD_NUM; i++){
+		wait_for_completion(&comp[i]);
+	}
+
+	end = ktime_get();
+	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
+	pr_info("[ PASS ] complete mixed thread functions: time( %llu ) usec", elapsed);
+	pr_info("[ PASS ] Throughput: %.3f (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed*1000*1000.0));
+#endif
 
 	pmdfc_rdma_print_stat();
 

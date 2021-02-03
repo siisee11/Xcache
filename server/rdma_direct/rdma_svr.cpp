@@ -297,7 +297,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
 				} else {
-					printf("[ INFO ] aborted\n");
 					notfound_cnt++;
 
 					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -420,7 +419,7 @@ static device *get_device(struct queue *q)
 
 		dprintf("[ INFO ] registered memory region of %zu KB\n", LOCAL_META_REGION_SIZE/1024);
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
-		printf("[  OK  ] DRAM MR initialized\n");
+		printf("[  OK  ] MEMORY MODE DRAM MR (ODP) initialized\n");
 		q->ctrl->dev = dev;
 #endif
 	}

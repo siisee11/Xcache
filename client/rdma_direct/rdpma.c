@@ -570,7 +570,6 @@ int rdpma_get(struct page *page, uint64_t key)
 //	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
 	if ( tx_state == TX_READ_ABORTED ) {
-		pr_info("TX_READ_ABORTED\n");
 		ret = -1;
 		goto out;
 	} else {
