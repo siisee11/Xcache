@@ -1,0 +1,16 @@
+[global]
+bs=${BLOCK_SIZE}
+#bsrange=${BLOCK_RANGE}
+ioengine=libaio
+iodepth=${IO_DEPTH}
+size=${FILE_SIZE}
+time_based=0
+directory=${MNT_POINT}
+group_reporting=1
+startdelay=3
+invalidate=0
+[seq_test]
+direct=${IS_DIRECT}
+thread=1
+numjobs=${NUM_THREAD}
+rw=${IO_TYPE}

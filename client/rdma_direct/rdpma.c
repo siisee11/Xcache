@@ -31,7 +31,7 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
-#define KTIME_CHECK 1
+//#define KTIME_CHECK 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -61,6 +61,97 @@ void pmdfc_rdma_print_stat() {
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #endif
+
+#if 0
+/* NSW */
+static int rdpma_prep_nsw(struct rdma_queue *q, struct rdpma_status_wait *nsw)
+{
+	int ret;
+
+	spin_lock(&q->queue_lock);
+	ret = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
+	if (ret >= 0) {
+		nsw->ns_id = ret;
+		list_add_tail(&nsw->ns_node_item, &nn->nn_status_list);
+	}
+	spin_unlock(&q->queue_lock);
+	if (ret < 0)
+		return ret;
+
+	init_waitqueue_head(&nsw->ns_wq);
+	nsw->ns_sys_status = RDPMA_ERR_NONE;
+	nsw->ns_status = 0;
+	return 0;
+}
+
+static void rdpma_complete_nsw_locked(struct rdma_queue *q,
+				      struct rdpma_status_wait *nsw,
+				      enum rdpma_system_error sys_status,
+				      s32 status)
+{
+	assert_spin_locked(&q->queue_lock);
+
+	if (!list_empty(&nsw->ns_node_item)) {
+		list_del_init(&nsw->ns_node_item);
+		nsw->ns_sys_status = sys_status;
+		nsw->ns_status = status;
+//		idr_remove(&nn->nn_status_idr, nsw->ns_id);
+		wake_up(&nsw->ns_wq);
+	}
+}
+
+void rdpma_complete_nsw(struct rdpma_node *nn,
+			       struct rdpma_status_wait *nsw,
+			       u64 id, enum rdpma_system_error sys_status,
+			       s32 status)
+{
+	spin_lock(&nn->nn_lock);
+	if (nsw == NULL) {
+		if (id > INT_MAX)
+			goto out;
+
+		nsw = idr_find(&nn->nn_status_idr, id);
+		if (nsw == NULL)
+			goto out;
+	}
+
+	rdpma_complete_nsw_locked(nn, nsw, sys_status, status);
+	spin_unlock(&nn->nn_lock);
+	return;
+
+out:
+	pr_err("%s: idr_find cannot find nsw (%llx)\n", __func__, id);
+	spin_unlock(&nn->nn_lock);
+	return;
+}
+
+static void rdpma_complete_nodes_nsw(struct rdpma_node *nn)
+{
+	struct rdpma_status_wait *nsw, *tmp;
+	unsigned int num_kills = 0;
+
+	assert_spin_locked(&nn->nn_lock);
+
+	list_for_each_entry_safe(nsw, tmp, &nn->nn_status_list, ns_node_item) {
+		rdpma_complete_nsw_locked(nn, nsw, RDPMA_ERR_DIED, 0);
+		num_kills++;
+	}
+}
+
+static int rdpma_nsw_completed(struct rdpma_node *nn,
+			       struct rdpma_status_wait *nsw)
+{
+	int completed;
+	spin_lock(&nn->nn_lock);
+	completed = list_empty(&nsw->ns_node_item);
+	spin_unlock(&nn->nn_lock);
+	return completed;
+}
+#endif
+
+
+
+
 
 /* allocates a pmdfc rdma request, creates a dma mapping for it in
  * req->dma, and synchronizes the dma mapping in the direction of
@@ -157,7 +248,7 @@ int post_recv(struct rdma_queue *q){
 
 	wr.wr_id = 0;
 	wr.sg_list = &sge;
-	wr.num_sge = 0; /* XXX: 1 or zero */
+	wr.num_sge = 0; 
 	wr.next = NULL;
 
 	ret = ib_post_recv(q->qp, &wr, &bad_wr);
@@ -400,7 +491,7 @@ int rdpma_get(struct page *page, uint64_t key)
 //	pr_info("[ INFO ] ib_dma_map_page { page_dma=%lx }\n", page_dma);
 	BUG_ON(page_dma == 0);
 
-	/* Next 8byte for page_dma address */
+	/* Next 8 byte for page_dma address */
 	*raddr = page_dma;
 //	pr_info("[ INFO ] WRITE { key=%llx, page_dma=%llx }\n", *addr, *raddr);
 //	pr_info("[ INFO ] Write to remote_addr= %llx\n", q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id));
@@ -479,7 +570,6 @@ int rdpma_get(struct page *page, uint64_t key)
 //	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
 	if ( tx_state == TX_READ_ABORTED ) {
-		pr_info("TX_READ_ABORTED\n");
 		ret = -1;
 		goto out;
 	} else {
@@ -549,6 +639,7 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 	BUG_ON(gctrl == NULL);
 
 	cpuid = cpuid % numqueues;
+	return &gctrl->queues[cpuid]; /* XXX */
 	switch (type) {
 		case QP_READ_SYNC:
 			if (cpuid >= numqueues / 2)
@@ -568,6 +659,7 @@ inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
 		enum qp_type type)
 {
 	cpuid = cpuid % numqueues;
+	return cpuid; /*  XXX */
 	switch (type) {
 		case QP_READ_SYNC:
 			if (cpuid >= numqueues / 2)
@@ -582,6 +674,47 @@ inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
 			return cpuid;
 	};
 }
+
+
+#if 0
+/* -------------------------------------- Poll ------------------------------------------- */
+static int client_poll_cq(struct ib_cq* cq){
+	struct ib_wc wc;
+	int ne, i, ret;
+	uint32_t size;
+	allow_signal(SIGKILL);
+	while(1){
+		do{
+			ne = ib_poll_cq(cq, 1, &wc);
+			if(ne < 0){
+				printk(KERN_ALERT "[%s]: ib_poll_cq failed (%d)\n", __func__, ne);
+				return 1;
+			}
+		}while(ne < 1);
+
+		if(wc.status != IB_WC_SUCCESS){
+			printk(KERN_ALERT "[%s]: ib_poll_cq returned failure status (%d)\n", __func__, wc.status);
+			return 1;
+		}
+		//dprintk("[%s]: polled a work request\n", __func__);
+		post_recv();
+
+		if((int)wc.opcode == IB_WC_RECV_RDMA_WITH_IMM){
+			}
+			else if(type == MSG_WRITE_REPLY){
+			}
+			else if(type == MSG_READ_REQUEST_REPLY){
+			}
+			else{
+				printk(KERN_ALERT "[%s]: received weired type msg from remote server (%d)\n", __func__, type);
+			}
+		}
+		else{
+			printk(KERN_ALERT "[%s]: received weired opcode from remote server (%d)\n", __func__, (int)wc.opcode);
+		}
+	}
+}
+#endif
 
 
 /* -------------------------------------- RDMA_CONN.C ----------------------------------------------*/

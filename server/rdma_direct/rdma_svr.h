@@ -14,7 +14,7 @@ POBJ_LAYOUT_END(PM_MR);
 #define PAGE_SIZE 	4096
 
 #define NUM_QUEUES 		40
-#define NUM_ENTRY 		32
+#define NUM_ENTRY 		8
 #define METADATA_SIZE 	16
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE)

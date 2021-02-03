@@ -159,35 +159,6 @@ int post_recv(int queue_id){
 	return 0;
 }
 
-/* post recv [ page, key ] */
-int pmdfc_rdma_post_recv(int queue_id){
-	struct ibv_recv_wr wr;
-	struct ibv_recv_wr* bad_wr;
-	struct ibv_sge sge[2];
-
-	memset(&wr, 0, sizeof(struct ibv_recv_wr));
-	memset(&sge, 0, sizeof(struct ibv_sge) * 2);
-
-	sge[0].addr = (uint64_t)gctrl->queues[queue_id].page;
-	sge[0].length = PAGE_SIZE;
-	sge[0].lkey = gctrl->mr_buffer->lkey;
-
-	sge[1].addr = (uint64_t)&gctrl->queues[queue_id].key;
-	sge[1].length = sizeof(uint64_t);
-	sge[1].lkey = gctrl->mr_buffer->lkey;
-
-	wr.wr_id = 0;
-	wr.sg_list = &sge[0];
-	wr.num_sge = 2;
-	wr.next = NULL;
-
-	if(ibv_post_recv(gctrl->queues[queue_id].qp, &wr, &bad_wr)){
-		fprintf(stderr, "[%s] ibv_post_recv to node %d failed\n", __func__, queue_id);
-		return 1;
-	}
-	return 0;
-}
-
 static void server_recv_poll_cq(struct queue *q, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 //	int cpu = sched_getcpu();
@@ -229,14 +200,14 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			if(type == MSG_WRITE){
 				putcnt++;
 
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
 				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
 				void *save_page = malloc(PAGE_SIZE);
 				memcpy((char *)save_page, (char *)page, PAGE_SIZE);
 
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-#endif
 				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
 				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
 				dprintf("[ INFO ] page %s\n", (char *)save_page);
@@ -326,7 +297,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
 				} else {
-					printf("[ INFO ] aborted\n");
 					notfound_cnt++;
 
 					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -449,7 +419,7 @@ static device *get_device(struct queue *q)
 
 		dprintf("[ INFO ] registered memory region of %zu KB\n", LOCAL_META_REGION_SIZE/1024);
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
-		printf("[  OK  ] DRAM MR initialized\n");
+		printf("[  OK  ] MEMORY MODE DRAM MR (ODP) initialized\n");
 		q->ctrl->dev = dev;
 #endif
 	}
@@ -783,12 +753,7 @@ int main(int argc, char **argv)
 				break;
 		}
 
-		/* posting recv request */
-		if (get_queue_type(i) == QP_READ_SYNC) {
-			post_recv(i);
-		}
-		else
-			pmdfc_rdma_post_recv(i);
+		post_recv(i);
 	}
 
 	/* XXX: After all connection done. It is needed? */

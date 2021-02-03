@@ -3,7 +3,7 @@ obj-m := pmdfc_client.o pmdfc_rdma_core.o rdma_testing.o
 
 pmdfc_rdma_core-objs := rdpma.o
 pmdfc_client-objs := pmdfc.o bloom_filter.o
-rdma_testing-objs := rdma_page_test.o
+rdma_testing-objs := rdpma_page_test.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
 PWD     := $(shell pwd)
@@ -28,7 +28,8 @@ rdma_conn:
 	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CLI_IP) nq=$(NQ)
 
 pmdfc_client:
-	insmod ./pmdfc_client.ko rdma=1 rdma_direct=1
+	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CLI_IP) nq=$(NQ)
+	insmod ./pmdfc_client.ko rdma=1
 
 tcptest:
 	insmod ./pmnet_testing.ko

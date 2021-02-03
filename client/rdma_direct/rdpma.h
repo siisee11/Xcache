@@ -12,7 +12,7 @@
 #include <linux/spinlock.h>
 
 #define NUM_QUEUES 			(40)
-#define NUM_ENTRY			(32) 			/* # of Metadata per queue */
+#define NUM_ENTRY			(8) 			/* # of Metadata per queue */
 #define METADATA_SIZE		(16) 	 		/* [ key, remote address ] */ 
 #define BITMAP_SIZE	(64)
 
