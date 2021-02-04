@@ -16,12 +16,14 @@
 #include "tmem.h"
 #include "bloom_filter.h"
 #include "pmdfc.h"
+#include "timeperf.h"
 
 #include "rdpma.h"
 
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
-#define PMDFC_BLOOM_FILTER 1 
+//#define PMDFC_BLOOM_FILTER 1 
+#define PMDFC_TIME 1
 
 //#define PMDFC_DEBUG 1
 
@@ -41,7 +43,6 @@ DEFINE_HASHTABLE(hash_head, BITS);
 atomic_long_t mr_free_start;
 extern long mr_free_end;
 
-static int rdma;
 //#define SAMPLE_RATE 10000 // Per-MB
 #define SAMPLE_RATE 10000
 static long put_cnt, get_cnt;
@@ -80,11 +81,14 @@ static void pmdfc_cleancache_put_page(int pool_id,
 {
 #if defined(PMDFC_PUT)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
-
+	int status;
 	int ret = -1;
 	uint64_t longkey;
 
 #if defined(PMDFC_BLOOM_FILTER)
+#ifdef PMDFC_TIME
+	fperf_start("put_bf");
+#endif
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
 
@@ -108,7 +112,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
+#ifdef PMDFC_TIME
+	fperf_end("put_bf");
 #endif
+#endif 	/* PMDFC_BLOOM_FILTER */
 
 
 #if defined(PMDFC_DEBUG)
@@ -119,15 +126,25 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
 #endif
 
-    
+#ifdef PMDFC_TIME
+	fperf_start("rdpma_put");
+#endif   
 	longkey = get_longkey((long)oid.oid[0], index);
-	ret = rdpma_put(page, longkey);
+	ret = rdpma_put(page, longkey, &status);
     
     if (put_cnt % SAMPLE_RATE == 0) {
         pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
                 (long)oid.oid[0], index, longkey);
+#ifdef PMDFC_TIME
+		fperf_print("put_bf");
+		fperf_print("rdpma_put");
+#endif   
     }
     put_cnt++;
+#ifdef PMDFC_TIME
+	fperf_end("rdpma_put");
+#endif   
+
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
@@ -143,11 +160,15 @@ static int pmdfc_cleancache_get_page(int pool_id,
 {
 #if defined(PMDFC_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
+	int status;
 	int ret;
 
     long longkey = 0;
 
 #if defined(PMDFC_BLOOM_FILTER)
+#ifdef PMDFC_TIME
+	fperf_start("get_bf");
+#endif
 	bool isIn = false;
 
 	/* hash input data */
@@ -175,6 +196,9 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		goto not_exists;
 
 	pmdfc_actual_gets++;
+#ifdef PMDFC_TIME
+	fperf_end("get_bf");
+#endif
 #endif
 
 #if defined(PMDFC_DEBUG)
@@ -182,19 +206,29 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
 		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 #endif
-    
+
+#ifdef PMDFC_TIME
+	fperf_start("rdpma_get");
+#endif      
     longkey = get_longkey((long)oid.oid[0], index);
 
 	/* RDMA networking */
 	if (get_cnt % SAMPLE_RATE == 0) {
 		pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
 				(long)oid.oid[0], index, longkey);
+#ifdef PMDFC_TIME
+		fperf_print("get_bf");
+		fperf_print("rdpma_get");
+#endif   
 	}
-	/* send Address of page */
-	ret = rdpma_get(page, longkey);
+	/* get page from server by longkey */
+	ret = rdpma_get(page, longkey, &status);
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;
+#ifdef PMDFC_TIME
+	fperf_end("rdpma_get");
+#endif   
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: GET PAGE success\n");
@@ -299,7 +333,6 @@ static int pmdfc_cleancache_register_ops(void)
 #if defined(PMDFC_BLOOM_FILTER)
 static int bloom_filter_init(void)
 {
-//	bf = bloom_filter_new(12364167);
 	bf = bloom_filter_new(10000000);
 	bloom_filter_add_hash_alg(bf, "md5");
 	bloom_filter_add_hash_alg(bf, "sha1");
@@ -342,7 +375,7 @@ static int __init pmdfc_init(void)
 #endif
 
 	pr_info("Hostname: \tapache1\n");
-	pr_info("Transport: \t%s\n", rdma ? "rdma" : "tcp");
+	pr_info("Transport: \t%s\n", "rdma");
 
 #if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
@@ -390,7 +423,6 @@ static void pmdfc_exit(void)
 #endif
 }
 
-module_param(rdma, int, 0);
 
 module_init(pmdfc_init);
 module_exit(pmdfc_exit);

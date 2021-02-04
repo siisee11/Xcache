@@ -88,12 +88,15 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 
 inline enum qp_type get_queue_type(unsigned int idx)
 {
-	if (idx < NUM_QUEUES / 2)
+	if (idx % NUM_QUEUES)
 		return QP_READ_SYNC;
-	else if (idx >= NUM_QUEUES /2)
+	else 
 		return QP_WRITE_SYNC;
+}
 
-	return QP_READ_SYNC;
+inline int get_node_id(unsigned int idx)
+{
+	return idx / NUM_QUEUES; 
 }
 
 static void rdpma_print_stats() {
@@ -226,7 +229,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				wr.sg_list = &sge;
 				wr.num_sge = 0;
 				wr.send_flags = IBV_SEND_SIGNALED;
-				wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
+				wr.imm_data = htonl(bit_mask(0, msg_id, MSG_WRITE_REPLY, TX_WRITE_COMMITTED, qid));
 
 				ret = ibv_post_send(q->qp, &wr, &bad_wr);
 				if(ret){
@@ -360,54 +363,6 @@ static device *get_device(struct queue *q)
 		TEST_Z(dev->pd);
 
 		struct ctrl *ctrl = q->ctrl;    
-#if APP_DIRECT
-		/*
-		   if (access(pm_path, 0)) {
-		   ctrl->pop = pmemobj_create(pm_path, POBJ_LAYOUT_NAME(PM_MR), BUFFER_SIZE, 0666);
-		   if(!ctrl->pop){
-		   perror("pmemobj_create");
-		   exit(0);
-		   }
-		   } else {
-		   ctrl->pop = pmemobj_open(pm_path, POBJ_LAYOUT_NAME(PM_MR));
-		   if(!ctrl->pop){
-		   perror("pmemobj_open");
-		   exit(0);
-		   }
-		   }
-		   printf("[  OK  ] PM initialized\n");
-		   POBJ_ALLOC(ctrl->pop, &ctrl->p_mr, void, BUFFER_SIZE, NULL, NULL);
-		   ctrl->buffer = (void *)&ctrl->p_mr;
-		   */
-		struct stat sb;
-		int flag = PROT_WRITE | PROT_READ | PROT_EXEC;
-
-		if ((ctrl->fd = open(pm_path, O_RDWR|O_CREAT, 645)) < 0) {
-			perror("File Open Error");
-			exit(1);
-		}
-
-		if (fstat(ctrl->fd, &sb) < 0) {
-			perror("fstat error");
-			exit(1);
-		}
-		ctrl->buffer = mmap(0, BUFFER_SIZE, flag, MAP_SHARED, ctrl->fd, 0); //XXX
-		//memset(ctrl->buffer, 0x00, BUFFER_SIZE);
-
-		if (ctrl->buffer == MAP_FAILED) {
-			perror("mmap error");
-			exit(1);
-		}
-
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, ctrl->buffer, BUFFER_SIZE,
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ)); // XXX
-		printf("[  OK  ] PM MR initialized\n");
-#elif DAX_KMEM
-		int dax_kmem_node = 3;
-		ctrl->buffer = numa_alloc_onnode(BUFFER_SIZE, dax_kmem_node); 
-		TEST_Z(ctrl->buffer);
-		printf("[  OK  ] DAX KMEM MR initialized\n");
-#else
 		/* 
 		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
 		 * addr should be 0 and length should be SIZE_MAX.
@@ -421,7 +376,6 @@ static device *get_device(struct queue *q)
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
 		printf("[  OK  ] MEMORY MODE DRAM MR (ODP) initialized\n");
 		q->ctrl->dev = dev;
-#endif
 	}
 
 	return q->ctrl->dev;
@@ -432,10 +386,6 @@ static void destroy_device(struct ctrl *ctrl)
 	TEST_Z(ctrl->dev);
 
 	ibv_dereg_mr(ctrl->mr_buffer);
-#ifdef APP_DIRECT
-	munmap(ctrl->buffer, BUFFER_SIZE);
-	close(ctrl->fd);
-#endif
 	free((void*)ctrl->local_mm);
 	ibv_dealloc_pd(ctrl->dev->pd);
 	free(ctrl->dev);
@@ -478,7 +428,6 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	struct queue *q = &gctrl->queues[queue_number];
 
 	TEST_Z(q->state == queue::INIT);
-//	printf("[ INFO ] %s\n", __FUNCTION__);
 
 	id->context = q;
 	q->cm_id = id;
@@ -506,26 +455,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 
 	TEST_NZ(ibv_query_device(dev->verbs, &attrs));
-
-#if 0
-	if (queue_number == 0 ) {
-		dprintf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d max_cqe=%d max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", 
-				attrs.max_qp, 
-				attrs.max_qp_wr, attrs.max_cq, attrs.max_cqe, 
-				attrs.max_qp_rd_atom, attrs.max_qp_init_rd_atom);
-
-		dprintf("[ INFO ] ctrl attrs: initiator_depth=%d responder_resources=%d\n", 
-				param->initiator_depth, param->responder_resources);
-	}
-#endif
-
-	// the following should hold for initiator_depth:
-	// initiator_depth <= max_qp_init_rd_atom, and
-	// initiator_depth <= param->initiator_depth
 	cm_params.initiator_depth = param->initiator_depth;
-	// the following should hold for responder_resources:
-	// responder_resources <= max_qp_rd_atom, and
-	// responder_resources >= param->responder_resources
 	cm_params.responder_resources = param->responder_resources;
 	cm_params.rnr_retry_count = param->rnr_retry_count;
 	cm_params.flow_control = param->flow_control;
@@ -539,10 +469,12 @@ int on_connection(struct queue *q)
 {
 //	printf("%s\n", __FUNCTION__);
 	struct ctrl *ctrl = q->ctrl;
+	int isNewClient = 0;
 
 	TEST_Z(q->state == queue::INIT);
 
-	if (q == &ctrl->queues[0]) {
+	/* TODO: for every new client */
+	if (q == &ctrl->queues[0] || q == &ctrl->queues[2]) {
 		struct ibv_send_wr wr = {};
 		struct ibv_recv_wr rwr = {};
 		struct ibv_send_wr *bad_wr = NULL;
@@ -569,7 +501,7 @@ int on_connection(struct queue *q)
 		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
 		// TODO: poll here XXX Where?????
-
+#if 0
 		/* XXX: GET CLIENT MR REGION */
 		sge.addr = (uint64_t) &ctrl->clientmr;
 		sge.length = sizeof(struct memregion);
@@ -579,8 +511,8 @@ int on_connection(struct queue *q)
 		rwr.num_sge = 1;
 
 		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
+#endif
 	}
-
 
 	q->state = queue::CONNECTED;
 	return 0;
@@ -588,8 +520,6 @@ int on_connection(struct queue *q)
 
 int on_disconnect(struct queue *q)
 {
-//	printf("[ INFO ] %s\n", __FUNCTION__);
-
 	if (q->state == queue::CONNECTED) {
 		q->state = queue::INIT;
 		rdma_destroy_qp(q->cm_id);
@@ -601,7 +531,6 @@ int on_disconnect(struct queue *q)
 
 int on_event(struct rdma_cm_event *event)
 {
-//	printf("[ INFO ] %s\n", __FUNCTION__);
 	struct queue *q = (struct queue *) event->id->context;
 
 	switch (event->event) {
@@ -637,8 +566,6 @@ int alloc_control()
 	for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
 		gctrl->queues[i].ctrl = gctrl;
 		gctrl->queues[i].state = queue::INIT;
-		/* XXX */
-		gctrl->queues[i].page = malloc(PAGE_SIZE);
 	}
 
 	gctrl->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
@@ -656,6 +583,7 @@ int main(int argc, char **argv)
 	struct rdma_event_channel *ec = NULL;
 	struct rdma_cm_id *listener = NULL;
 	uint16_t port = 0;
+	std::thread indicator;
 
 	const char *short_options = "vs:t:i:n:d:z:hK:P:W:";
 	static struct option long_options[] =
@@ -734,46 +662,52 @@ int main(int argc, char **argv)
 	TEST_Z(ec = rdma_create_event_channel());
 	TEST_NZ(rdma_create_id(ec, &listener, NULL, RDMA_PS_TCP));
 	TEST_NZ(rdma_bind_addr(listener, (struct sockaddr *)&addr));
-	TEST_NZ(rdma_listen(listener, NUM_QUEUES + 1));
+	TEST_NZ(rdma_listen(listener, NUM_CLIENT * NUM_QUEUES + 1));
 	port = ntohs(rdma_get_src_port(listener));
 	printf("[ INFO ] listening on port %d\n", port);
 
-	for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
-//		printf("[ INFO ] waiting for queue connection: %d\n", i);
-		struct queue *q = &gctrl->queues[i];
+	/* Wait for connection up to NUM_CLIENT * NUM_QUEUES */
+	for (unsigned int i = 0; i < NUM_CLIENT; ++i) {
+		for (unsigned int j = 0; j < NUM_QUEUES; ++j) {
+	//		printf("[ INFO ] waiting for queue connection: %d\n", i);
+			struct queue *q = &gctrl->queues[i * NUM_QUEUES + j];
 
-		// handle connection requests
-		while (rdma_get_cm_event(ec, &event) == 0) {
-			struct rdma_cm_event event_copy;
+			// handle connection requests
+			while (rdma_get_cm_event(ec, &event) == 0) {
+				struct rdma_cm_event event_copy;
 
-			memcpy(&event_copy, event, sizeof(*event));
-			rdma_ack_cm_event(event);
+				memcpy(&event_copy, event, sizeof(*event));
+				rdma_ack_cm_event(event);
 
-			if (on_event(&event_copy) || q->state == queue::CONNECTED)
-				break;
+				if (on_event(&event_copy) || q->state == queue::CONNECTED)
+					break;
+			}
+
+			post_recv(i * NUM_QUEUES + j);
 		}
 
-		post_recv(i);
+		/* servermr post send cq need polling */
+		struct ibv_wc wc;
+		int ne;
+		do{
+			ne = ibv_poll_cq(gctrl->queues[i * NUM_QUEUES].qp->send_cq, 1, &wc);
+			if(ne < 0){
+				fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+				return 1;
+			}
+		}while(ne < 1);
+
+		if(wc.status != IBV_WC_SUCCESS){
+			fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
+			return 1;
+		}
+
+		indicator = std::thread( rdpma_indicator );
 	}
 
 	/* XXX: After all connection done. It is needed? */
-	/* servermr post send cq need polling */
-	struct ibv_wc wc;
-	int ne;
-	do{
-		ne = ibv_poll_cq(gctrl->queues[0].qp->send_cq, 1, &wc);
-		if(ne < 0){
-			fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-			return 1;
-		}
-	}while(ne < 1);
 
-	if(wc.status != IBV_WC_SUCCESS){
-		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
-		return 1;
-	}
 	
-	std::thread i = std::thread( rdpma_indicator );
 
 	// handle disconnects, etc.
 	while (rdma_get_cm_event(ec, &event) == 0) {
@@ -786,7 +720,7 @@ int main(int argc, char **argv)
 			break;
 	}
 
-	i.join();
+	indicator.join();
 
 	rdma_destroy_event_channel(ec);
 	rdma_destroy_id(listener);
@@ -794,4 +728,3 @@ int main(int argc, char **argv)
 
 	return 0;
 }
-

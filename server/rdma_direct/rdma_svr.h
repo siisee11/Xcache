@@ -13,13 +13,16 @@ POBJ_LAYOUT_END(PM_MR);
 
 #define PAGE_SIZE 	4096
 
-#define NUM_QUEUES 		40
+#define NUM_CLIENT 		16
+#define NUM_QUEUES 		2
 #define NUM_ENTRY 		8
 #define METADATA_SIZE 	16
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE)
-#define LOCAL_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
+#define CLIENT_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
+#define LOCAL_META_REGION_SIZE			(NUM_CLIENT * CLIENT_META_REGION_SIZE)
 
+#define GET_CLIENT_BASE(addr, nid) 		(addr + nid * CLIENT_META_REGION_SIZE)
 #define GET_LOCAL_META_REGION(addr, qid, mid)		(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_REMOTE_ADDRESS_BASE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
 #define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
@@ -72,10 +75,6 @@ struct queue {
 		INIT,
 		CONNECTED
 	} state;
-
-	/* XXX */
-	void *page; 		/* 4096 byte */
-	uint64_t key; 	/* 64 byte */
 };
 
 struct memregion {
@@ -87,12 +86,6 @@ struct memregion {
 struct ctrl {
 	struct queue *queues;
 	struct ibv_mr *mr_buffer;
-#ifdef APP_DIRECT
-	PMEMobjpool* log_pop[NUM_NUMA];
-	PMEMobjpool* pop[NUM_NUMA];
-	TOID(void) p_mr;
-	int fd;
-#endif
 	void *buffer;
 	struct device *dev;
 

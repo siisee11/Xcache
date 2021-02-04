@@ -11,7 +11,7 @@
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 
-#define NUM_QUEUES 			(40)
+#define NUM_QUEUES 			(2)
 #define NUM_ENTRY			(8) 			/* # of Metadata per queue */
 #define METADATA_SIZE		(16) 	 		/* [ key, remote address ] */ 
 #define BITMAP_SIZE	(64)
@@ -71,9 +71,28 @@ struct rdma_queue {
 
 	/* XXX*/
 	int success;
-	struct page *page;
-	struct idr 		queue_status_idr;
-	spinlock_t		queue_lock;
+	int qid;
+	struct page 		*page;
+	struct idr 			queue_status_idr;
+	struct list_head 	queue_status_list;
+	spinlock_t			queue_lock;
+};
+
+enum rdpma_system_error {
+	RDPMA_ERR_NONE = 0,
+	RDPMA_ERR_NO_HNDLR,
+	RDPMA_ERR_NOT_FOUND,
+	RDPMA_ERR_OVERFLOW,
+	RDPMA_ERR_DIED,
+	RDPMA_ERR_MAX
+};
+
+struct rdpma_status_wait {
+	enum rdpma_system_error ns_sys_status;
+	s32 ns_status;
+	int ns_id;
+	wait_queue_head_t ns_wq;
+	struct list_head ns_node_item;
 };
 
 struct pmdfc_rdma_memregion {
@@ -81,6 +100,21 @@ struct pmdfc_rdma_memregion {
 	u32 key;
 	u64 mr_size;
 };
+
+struct request_struct{
+	struct list_head list; // 16
+	int type;// 4
+	int pid; 	// 4
+	u32 key;// 4
+	u32 index;// 4
+	uint32_t num; // 4
+	union{
+		uint64_t remote_mm; // 8
+		void* pages[NUM_ENTRY]; // 8*4 = 32
+		uint64_t keys[NUM_ENTRY]; // 8*4 = 32
+	};
+};
+
 
 struct pmdfc_rdma_ctrl {
 	struct pmdfc_rdma_dev *rdev; // TODO: move this to queue
@@ -103,8 +137,8 @@ struct pmdfc_rdma_ctrl {
 struct rdma_queue *pmdfc_rdma_get_queue(unsigned int idx, enum qp_type type);
 int pmdfc_rdma_get_queue_id(unsigned int idx, enum qp_type type);
 
-int rdpma_get(struct page *page, uint64_t);
-int rdpma_put(struct page *page, uint64_t);
+int rdpma_get(struct page *page, uint64_t, int*);
+int rdpma_put(struct page *page, uint64_t, int*);
 int pmdfc_rdma_poll_load(int cpu);
 void pmdfc_rdma_print_stat(void);
 enum qp_type get_queue_type(unsigned int idx);

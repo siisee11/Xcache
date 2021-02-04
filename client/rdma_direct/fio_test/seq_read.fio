@@ -8,7 +8,7 @@ size=512m
 direct=0
 time_based=0
 #runtime=20
-directory=/mnt/sdb/fio/1GBx8
+directory=/home/siisee11/fio/1GBx8
 startdelay=5
 group_reporting=1
 

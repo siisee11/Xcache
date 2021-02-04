@@ -15,7 +15,7 @@ EXTRA_CFLAGS  += -g
 CLI_IP="10.0.0.51"
 SVR_IP="10.0.0.53"
 SVR_PORT=7777
-NQ=40 
+NQ=2 
 
 #default: prepare modules
 default: modules
@@ -29,7 +29,7 @@ rdma_conn:
 
 pmdfc_client:
 	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CLI_IP) nq=$(NQ)
-	insmod ./pmdfc_client.ko rdma=1
+	insmod ./pmdfc_client.ko
 
 tcptest:
 	insmod ./pmnet_testing.ko
