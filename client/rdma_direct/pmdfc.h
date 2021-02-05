@@ -35,8 +35,8 @@ struct pmdfc_storage_cluster{
 extern struct pmdfc_storage_cluster *ps_cluster;
 
 struct ht_data {
-    u64 longkey;
-    u64 roffset;
+    uint64_t longkey;
+    uint64_t roffset;
     struct hlist_node h_node;
 };
 

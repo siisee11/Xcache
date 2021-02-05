@@ -7,7 +7,7 @@ static int drain_queue(struct rdma_queue *q);
 static inline int get_req_for_page(struct rdma_req **req, struct ib_device *dev, 
         struct page *page, enum dma_data_direction dir);
 */
-
+void pmdfc_rdma_print_stat(void);
 //struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid, enum qp_type type);
 int pmdfc_rdma_poll_load(int cpu);
 //static inline int pmdfc_rdma_post_rdma(struct rdma_queue *q, struct rdma_req *qe,

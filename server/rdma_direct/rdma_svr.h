@@ -12,6 +12,9 @@ POBJ_LAYOUT_END(PM_MR);
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
+#ifdef IMPLICIT_ODP
+const size_t ODP_MM_SIZE = ((1UL << 30) * 16);
+#endif
 const size_t BUFFER_SIZE = ((1UL << 30) * 16);
 //const unsigned int NUM_PROCS = 8;
 //const unsigned int NUM_QUEUES_PER_PROC = 3;
@@ -45,7 +48,10 @@ struct ctrl {
 #endif
   void *buffer;
   struct device *dev;
-
+  
+#ifdef IMPLICIT_ODP
+  uint64_t odp_mm;
+#endif
   struct ibv_comp_channel *comp_channel;
 };
 

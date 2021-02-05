@@ -52,7 +52,7 @@ struct pmdfc_rdma_memregion {
     u64 baseaddr;
     u32 key;
     u64 mr_size;
-};
+}; // 20B
 
 struct pmdfc_rdma_ctrl {
   struct pmdfc_rdma_dev *rdev; // TODO: move this to queue

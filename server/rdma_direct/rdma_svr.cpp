@@ -16,7 +16,8 @@ static struct ctrl *gctrl = NULL;
 static unsigned int queue_ctr = 0;
 
 #ifdef APP_DIRECT
-static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
+//static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
+static char pm_path[32] = "/dev/dax1.0";
 #endif
 
 static device *get_device(struct queue *q)
@@ -84,21 +85,41 @@ static device *get_device(struct queue *q)
     ctrl->buffer = numa_alloc_onnode(BUFFER_SIZE, dax_kmem_node); 
     TEST_Z(ctrl->buffer);
     printf("[  OK  ] DAX KMEM MR initialized\n");
-#else
+#elif !defined(IMPLICIT_ODP)
     ctrl->buffer = malloc(BUFFER_SIZE);
     TEST_Z(ctrl->buffer);
     printf("[  OK  ] DRAM MR initialized\n");
 #endif
+   
+    int flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+#ifdef IMPLICIT_ODP
+    TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
+                dev->pd,
+                NULL,
+                (uint64_t)-1,
+                flags | IBV_ACCESS_ON_DEMAND));
+
+    ctrl->odp_mm = (uint64_t)malloc(ODP_MM_SIZE);
+    TEST_Z(ctrl->odp_mm);
+    printf("[ INFO ] registered memory region: Implicit ODP\n");
+#else
+
+#ifdef EXPLICIT_ODP
+    flags |= IBV_ACCESS_ON_DEMAND;   
+    printf("[ INFO ] registered memory region: Explicit ODP\n");
+#endif
+
     TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
       dev->pd,
       ctrl->buffer,
       BUFFER_SIZE,
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+      flags));
 
     printf("[ INFO ] registered memory region of %zu GB\n", BUFFER_SIZE/1024/1024/1024);
+#endif
+
     q->ctrl->dev = dev;
   }
-
   return q->ctrl->dev;
 }
 
@@ -111,6 +132,11 @@ static void destroy_device(struct ctrl *ctrl)
     munmap(ctrl->buffer, BUFFER_SIZE);
     close(ctrl->fd);
 #endif
+
+#ifdef IMPLICIT_ODP
+  free((void *)ctrl->odp_mm);
+#endif
+
   free(ctrl->buffer);
   ibv_dealloc_pd(ctrl->dev->pd);
   free(ctrl->dev);
@@ -141,7 +167,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
   struct queue *q = &gctrl->queues[queue_ctr++];
 
   TEST_Z(q->state == queue::INIT);
-  printf("[ INFO ] %s\n", __FUNCTION__);
+  //printf("[ INFO ] %s\n", __FUNCTION__);
 
   id->context = q;
   q->cm_id = id;
@@ -151,14 +177,16 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
   TEST_NZ(ibv_query_device(dev->verbs, &attrs));
 
+  /*
   printf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d max_cqe=%d \
           max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", attrs.max_qp,
           attrs.max_qp_wr, attrs.max_cq, attrs.max_cqe,
           attrs.max_qp_rd_atom, attrs.max_qp_init_rd_atom);
-
+  */
+  /*
   printf("[ INFO ] ctrl attrs: initiator_depth=%d responder_resources=%d\n",
       param->initiator_depth, param->responder_resources);
-
+  */
   // the following should hold for initiator_depth:
   // initiator_depth <= max_qp_init_rd_atom, and
   // initiator_depth <= param->initiator_depth
@@ -177,7 +205,6 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 int on_connection(struct queue *q)
 {
-  printf("%s\n", __FUNCTION__);
   struct ctrl *ctrl = q->ctrl;
 
   TEST_Z(q->state == queue::INIT);
@@ -188,12 +215,18 @@ int on_connection(struct queue *q)
     struct ibv_sge sge = {};
     struct memregion servermr = {};
 
-    printf("[ INFO ] connected. sending memory region info.\n");
+    //printf("[ INFO ] connected. sending memory region info.\n");
+#ifdef IMPLICIT_ODP
+    printf("[ INFO ] Server ODP MR key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->odp_mm);
+    servermr.baseaddr = (uint64_t) ctrl->odp_mm;
+    servermr.key  = ctrl->mr_buffer->rkey;
+    servermr.mr_size  = ODP_MM_SIZE;
+#else
     printf("[ INFO ] MR key=%u base vaddr=%p\n", ctrl->mr_buffer->rkey, ctrl->mr_buffer->addr);
-
     servermr.baseaddr = (uint64_t) ctrl->mr_buffer->addr;
     servermr.key  = ctrl->mr_buffer->rkey;
-    servermr.mr_size  = BUFFER_SIZE;
+    servermr.mr_size = BUFFER_SIZE;
+#endif
 
     wr.opcode = IBV_WR_SEND;
     wr.sg_list = &sge;
@@ -227,7 +260,7 @@ int on_disconnect(struct queue *q)
 
 int on_event(struct rdma_cm_event *event)
 {
-  printf("[ INFO ] %s\n", __FUNCTION__);
+  //printf("[ INFO ] %s\n", __FUNCTION__);
   struct queue *q = (struct queue *) event->id->context;
 
   switch (event->event) {
@@ -270,7 +303,7 @@ int main(int argc, char **argv)
   printf("[ INFO ] listening on port %d\n", port);
 
   for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
-    printf("[ INFO ] waiting for queue connection: %d\n", i);
+    //printf("[ INFO ] waiting for queue connection: %d\n", i);
     struct queue *q = &gctrl->queues[i];
 
     // handle connection requests

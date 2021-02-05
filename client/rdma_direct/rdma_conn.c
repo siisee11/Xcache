@@ -12,7 +12,7 @@ static char serverip[INET_ADDRSTRLEN];
 static char clientip[INET_ADDRSTRLEN];
 struct kmem_cache *req_cache;
 
-long mr_free_end;
+uint64_t mr_free_end;
 EXPORT_SYMBOL_GPL(mr_free_end);
 
 module_param_named(sport, serverport, int, 0644);
@@ -29,7 +29,7 @@ static int SINGLE_QUEUE = 2;
 #define CONNECTION_TIMEOUT_MS 60000
 #define QP_QUEUE_DEPTH 256
 /* we don't really use recv wrs, so any small number should do */
-#define QP_MAX_RECV_WR 4096
+#define QP_MAX_RECV_WR 256
 /* we mainly do send wrs */
 int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
@@ -37,12 +37,12 @@ int QP_MAX_SEND_WR = 4096;
 
 static void pmdfc_rdma_addone(struct ib_device *dev)
 {
-  pr_info("[ INFO ] pmdfc_rdma_addone() = %s\n", dev->name);
+  //pr_info("[ INFO ] pmdfc_rdma_addone() = %s\n", dev->name);
 }
 
 static void pmdfc_rdma_removeone(struct ib_device *ib_device, void *client_data)
 {
-  pr_info("[ INFO ] pmdfc_rdma_removeone()\n");
+  //pr_info("[ INFO ] pmdfc_rdma_removeone()\n");
 }
 
 static struct ib_client pmdfc_rdma_ib_client = {
@@ -63,8 +63,10 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
     }
 
     rdev->dev = q->cm_id->device;
-
-    pr_info("[ INFO ] selecting device %s\n", rdev->dev->name);
+    if (!rdev->dev->name || !rdev->dev)
+        pr_err("[ FAIL ] Cannot find RNIC\n");
+    else
+        pr_info("[ INFO ] selecting device %s\n", rdev->dev->name);
 
 #ifdef MLNX_OFED
     rdev->pd = ib_alloc_pd(rdev->dev); // protection domain
@@ -98,7 +100,7 @@ out_err:
 
 static void pmdfc_rdma_qp_event(struct ib_event *e, void *c)
 {
-  pr_info("pmdfc_rdma_qp_event\n");
+  //pr_info("pmdfc_rdma_qp_event\n");
 }
 
 static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
@@ -107,7 +109,7 @@ static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
   struct ib_qp_init_attr init_attr;
   int ret;
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
   memset(&init_attr, 0, sizeof(init_attr));
   init_attr.event_handler = pmdfc_rdma_qp_event;
@@ -151,14 +153,14 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
   int ret;
   int comp_vector = 0;
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
   if (q->qp_type == QP_READ_ASYNC)
     q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES,
       comp_vector, IB_POLL_SOFTIRQ);
   else
     q->cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES,
-      comp_vector, IB_POLL_DIRECT);
+        comp_vector, IB_POLL_DIRECT);
 
   if (IS_ERR(q->cq)) {
     ret = PTR_ERR(q->cq);
@@ -182,7 +184,7 @@ static int pmdfc_rdma_addr_resolved(struct rdma_queue *q)
   struct pmdfc_rdma_dev *rdev = NULL;
   int ret;
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
   rdev = pmdfc_rdma_get_device(q);
   if (!rdev) {
@@ -214,14 +216,14 @@ static int pmdfc_rdma_route_resolved(struct rdma_queue *q,
   param.flow_control = 1;
   param.responder_resources = 16;
   param.initiator_depth = 16;
-  param.retry_count = 7;
-  param.rnr_retry_count = 7;
+  param.retry_count = 2;
+  param.rnr_retry_count = 2;
   param.private_data = NULL;
   param.private_data_len = 0;
 
-  pr_info("[ INFO ] max_qp_rd_atom=%d max_qp_init_rd_atom=%d\n",
-      q->ctrl->rdev->dev->attrs.max_qp_rd_atom,
-      q->ctrl->rdev->dev->attrs.max_qp_init_rd_atom);
+  //pr_info("[ INFO ] max_qp_rd_atom=%d max_qp_init_rd_atom=%d\n",
+  //    q->ctrl->rdev->dev->attrs.max_qp_rd_atom,
+  //    q->ctrl->rdev->dev->attrs.max_qp_init_rd_atom);
 
   ret = rdma_connect(q->cm_id, &param);
   if (ret) {
@@ -234,7 +236,7 @@ static int pmdfc_rdma_route_resolved(struct rdma_queue *q,
 
 static int pmdfc_rdma_conn_established(struct rdma_queue *q)
 {
-  pr_info("[ INFO ] connection established\n");
+  //pr_info("[ INFO ] connection established\n");
   return 0;
 }
 
@@ -244,8 +246,8 @@ static int pmdfc_rdma_cm_handler(struct rdma_cm_id *cm_id,
   struct rdma_queue *queue = cm_id->context;
   int cm_error = 0;
 
-  pr_info("[ INFO ] cm_handler msg: %s (%d) status %d id %p\n", rdma_event_msg(ev->event),
-    ev->event, ev->status, cm_id);
+  //pr_info("[ INFO ] cm_handler msg: %s (%d) status %d id %p\n", 
+  //rdma_event_msg(ev->event), ev->event, ev->status, cm_id);
 
   switch (ev->event) {
   case RDMA_CM_EVENT_ADDR_RESOLVED:
@@ -303,7 +305,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
   struct rdma_queue *queue;
   int ret;
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
   queue = &ctrl->queues[idx];
   queue->ctrl = ctrl; // point each other (queue, ctrl)
@@ -401,7 +403,7 @@ static int pmdfc_rdma_parse_ipaddr(struct sockaddr_in *saddr, char *ip)
   u8 *addr = (u8 *)&saddr->sin_addr.s_addr;
   size_t buflen = strlen(ip);
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
   if (buflen > INET_ADDRSTRLEN)
     return -EINVAL;
@@ -415,7 +417,7 @@ static int pmdfc_rdma_create_ctrl(struct pmdfc_rdma_ctrl **c)
 {
   int ret;
   struct pmdfc_rdma_ctrl *ctrl;
-  pr_info("[ INFO ] will try to connect to %s:%d\n", serverip, serverport); // from module parm
+  //pr_info("[ INFO ] will try to connect to %s:%d\n", serverip, serverport); // from module parm
 
   *c = kzalloc(sizeof(struct pmdfc_rdma_ctrl), GFP_KERNEL); // global ctrl
   if (!*c) {
@@ -544,7 +546,7 @@ static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
   int ret;
   struct ib_device *dev;
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
   dev = ctrl->rdev->dev;
 
   ret = get_req_for_buf(&qe, dev, &(ctrl->servermr), sizeof(ctrl->servermr),
@@ -591,8 +593,7 @@ static int __init rdma_connection_init_module(void)
 {
   int ret;
 
-  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
-  pr_info("[ INFO ] * RDMA BACKEND *");
+  //pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
   numcpus = num_online_cpus();
   //numqueues = numcpus * 3; // prefetch, read, write

@@ -4,17 +4,18 @@ bsrange=4k-128k
 ioengine=libaio
 iodepth=16
 #size=${SIZE}
-size=512m
-direct=0
+size=1G
 time_based=0
-#runtime=20
-directory=/mnt/sdb/fio/1GBx8
-startdelay=5
+
+startdelay=3
 group_reporting=1
+invalidate=0
+
+directory=/mnt/sdb
 
 [seq_read]
+direct=0
 thread=1
-#numjobs=${NUMJOBS}
 numjobs=8
 rw=read
 
