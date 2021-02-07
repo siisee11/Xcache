@@ -13,14 +13,11 @@ int numcpus;
 static char serverip[INET_ADDRSTRLEN];
 static char clientip[INET_ADDRSTRLEN];
 struct kmem_cache *req_cache;
-struct kmem_cache* request_cache;
-
+struct kmem_cache *request_cache;
 
 /* poller and event handler */
 struct task_struct* thread_poll_cq[8];
 struct task_struct* thread_handler[8];
-struct request_struct request_list;
-spin_lock_t list_lock;
 
 long mr_free_end;
 EXPORT_SYMBOL_GPL(mr_free_end);
@@ -74,10 +71,10 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 
 #ifdef KTIME_CHECK
 void pmdfc_rdma_print_stat() {
-	fperf_print("begin_recv");
+	fperf_print("put_poll_sr");
+	fperf_print("put_wait");
 	fperf_print("post_send");
 	fperf_print("poll_sr");
-	fperf_print("poll_rr");
 	fperf_print("rdma_read");
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
@@ -281,10 +278,10 @@ int post_recv(struct rdma_queue *q){
 	return 0;
 }
 
-/** rdpma_put - put page into server
+/** _rdpma_put - put page into server
  *
  */
-int rdpma_put(struct page *page, uint64_t key, int* status)
+int _rdpma_put(struct page *page, uint64_t key)
 {
 	struct rdma_queue *q;
 	struct rdma_req *req[2];
@@ -301,23 +298,27 @@ int rdpma_put(struct page *page, uint64_t key, int* status)
 	struct ib_wc wc;
 	int ne = 0;
 	int cpuid = smp_processor_id();
-	struct rdpma_status_wait nsw = {
-		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
-	};
 
 	/* get q and its infomation */
+	q = pmdfc_rdma_get_queue(cpuid, QP_WRITE_SYNC);
 	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
-	q = &gctrl->queues[queue_id];
 	dev = q->ctrl->rdev->dev;
 
-	ret = rdpma_prep_nsw(q, &nsw);
+	/* Protect from overrun */
+	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
+		BUG_ON(inflight > QP_MAX_SEND_WR);
+		poll_target(q, 2048);
+		pr_info_ratelimited("[ WARN ] back pressure writes");
+	}
+
 	/* thi msg_id is unique in this queue */
-	msg_id = nsw.ns_id;
-	BUG_ON(msg_id >= 8);
+	msg_id = 0;	
+
+	BUG_ON(msg_id >= 64);
 
 	/* 1. post recv */
-//	ret = post_recv(q);
-//	BUG_ON(ret);
+	ret = post_recv(q);
+	BUG_ON(ret);
 
 	/* 2. post send */
 	/* setup imm data */
@@ -362,11 +363,10 @@ int rdpma_put(struct page *page, uint64_t key, int* status)
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
 	/* WRITE KEY */
-	rdma_wr[1].wr.wr_id 	= msg_id;
-	rdma_wr[1].wr.next    	= NULL;
-	rdma_wr[1].wr.sg_list 	= &sge[1];
-	rdma_wr[1].wr.num_sge 	= 1;
-	rdma_wr[1].wr.opcode  	= IB_WR_RDMA_WRITE_WITH_IMM;
+	rdma_wr[1].wr.next    = NULL;
+	rdma_wr[1].wr.sg_list = &sge[1];
+	rdma_wr[1].wr.num_sge = 1;
+	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
@@ -394,9 +394,64 @@ int rdpma_put(struct page *page, uint64_t key, int* status)
 		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		return 1;
 	}
+
+	atomic_dec(&q->pending);
+	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE, DMA_TO_DEVICE); /* XXX for test */
+	ib_dma_unmap_page(dev, req[1]->dma, sizeof(uint64_t), DMA_TO_DEVICE); /* XXX for test */
+	kmem_cache_free(req_cache, req[0]);
+	kmem_cache_free(req_cache, req[1]);
+
 #ifdef KTIME_CHECK
 	fperf_end("put_poll_sr");
 #endif
+
+#if 1
+	/* Polling recv cq here */
+	do{
+		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(unlikely(wc.status != IB_WC_SUCCESS)){
+		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
+//	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
+#endif
+
+out:
+	return ret;
+}
+
+int rdpma_put(struct page *page, uint64_t key, int *status){
+	int cpuid = smp_processor_id();
+	int ret;
+	struct request_struct* new_request;
+	struct rdpma_status_wait nsw = {
+		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
+	};
+
+	/* get q and its infomation */
+	int queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	struct rdma_queue *q = &gctrl->queues[queue_id];
+
+	ret = rdpma_prep_nsw(q, &nsw);
+	BUG_ON(nsw.ns_id >= NUM_ENTRY);
+
+	new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
+
+	new_request->page = page;
+	new_request->key = key;
+	new_request->type = MSG_WRITE;
+	new_request->mid = nsw.ns_id;
+
+	spin_lock(&q->list_lock);
+	list_add_tail(&(new_request->list), &q->request_list.list);
+	spin_unlock(&q->list_lock);
 
 #ifdef KTIME_CHECK
 	fperf_start("put_wait");
@@ -409,16 +464,7 @@ int rdpma_put(struct page *page, uint64_t key, int* status)
 #ifdef KTIME_CHECK
 	fperf_end("put_wait");
 #endif
-
-	atomic_dec(&q->pending);
-	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE, DMA_TO_DEVICE); /* XXX for test */
-	ib_dma_unmap_page(dev, req[1]->dma, sizeof(uint64_t), DMA_TO_DEVICE); /* XXX for test */
-	kmem_cache_free(req_cache, req[0]);
-	kmem_cache_free(req_cache, req[1]);
-
-out:
-
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(rdpma_put);
 
@@ -426,7 +472,7 @@ EXPORT_SYMBOL_GPL(rdpma_put);
  *
  * return -1 if failed
  */
-int rdpma_get(struct page *page, uint64_t key, int *status)
+int _rdpma_get(struct page *page, uint64_t key)
 {
 	struct rdma_queue *q;
 	struct ib_device *dev;
@@ -442,25 +488,27 @@ int rdpma_get(struct page *page, uint64_t key, int *status)
 	uint64_t page_dma;
 	struct ib_wc wc;
 	int ret, ne = 0;
-	struct rdpma_status_wait nsw = {
-		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
-	};
+	int qid, mid, type, tx_state;
+	uint32_t num;
 
 	/* get q and its infomation */
 	q = pmdfc_rdma_get_queue(cpuid, QP_READ_SYNC);
 	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_READ_SYNC);
 	dev = q->ctrl->rdev->dev;
 
-	ret = rdpma_prep_nsw(q, &nsw);
 	/* thi msg_id is unique in this queue */
-	msg_id = nsw.ns_id;
+	msg_id = 0;
 
-	BUG_ON(msg_id >= 8);
-
+#ifdef KTIME_CHECK
+	fperf_start("begin_recv");
+#endif
 	/* 1. post recv page first to reduce RNR */
-//	ret = begin_recv(q, page);
-//	ret = post_recv(q);
-//	BUG_ON(ret);
+	ret = post_recv(q);
+	BUG_ON(ret);
+
+#ifdef KTIME_CHECK
+	fperf_end("begin_recv");
+#endif
 
 	/* 2. post send key */
 #ifdef KTIME_CHECK
@@ -502,7 +550,6 @@ int rdpma_get(struct page *page, uint64_t key, int *status)
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
 	 * to just post requests in batches */
-	rdma_wr.wr.wr_id   = nsw.ns_id;
 	rdma_wr.wr.next    = NULL;
 	rdma_wr.wr.sg_list = &sge;
 	rdma_wr.wr.num_sge = 1;
@@ -542,23 +589,46 @@ int rdpma_get(struct page *page, uint64_t key, int *status)
 		ret = -1;
 		goto out;
 	}
-
-	BUG_ON(wc.wr_id != nsw.ns_id);
 #ifdef KTIME_CHECK
 	fperf_end("poll_sr");
 #endif
 
-	/* Wait until recv done */
-	wait_event(nsw.ns_wq, rdpma_nsw_completed(q, &nsw));
-	ret = rdpma_sys_err_to_errno(nsw.ns_sys_status);
-	if (status && !ret)
-		*status = nsw.ns_status;
 
-	/* PAGE_NOT_EXIST */
-	if (*status == -1) {
+#ifdef KTIME_CHECK
+	fperf_start("poll_rr");
+#endif
+	/* Polling recv cq here */
+	do{
+		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(unlikely(wc.status != IB_WC_SUCCESS)){
+		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+
 		ret = -1;
 		goto out;
 	}
+
+	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
+//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
+
+	if ( tx_state == TX_READ_ABORTED ) {
+		ret = -1;
+		goto out;
+	} else {
+		ret = 0;
+	}
+	
+//	atomic_dec(&q->pending);
+
+#ifdef KTIME_CHECK
+	fperf_end("poll_rr");
+#endif
 
 #ifdef KTIME_CHECK
 	fperf_start("rdma_read");
@@ -582,7 +652,6 @@ int rdpma_get(struct page *page, uint64_t key, int *status)
 	}
 
 	/* Poll send completion queue first */
-	/* TODO: poll other threads work?? */
 	do{
 		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
 		if(ne < 0){
@@ -606,7 +675,49 @@ out:
 
 	return ret;
 }
+
+int rdpma_get(struct page *page, uint64_t key, int *status){
+	int cpuid = smp_processor_id();
+	int ret;
+	struct request_struct* new_request;
+	struct rdpma_status_wait nsw = {
+		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
+	};
+
+	/* get q and its infomation */
+	int queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	struct rdma_queue *q = &gctrl->queues[queue_id];
+
+	ret = rdpma_prep_nsw(q, &nsw);
+	BUG_ON(nsw.ns_id >= NUM_ENTRY);
+
+	new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
+
+	new_request->page = page;
+	new_request->key = key;
+	new_request->type = MSG_READ;
+	new_request->mid = nsw.ns_id;
+
+	spin_lock(&q->list_lock);
+	list_add_tail(&(new_request->list), &q->request_list.list);
+	spin_unlock(&q->list_lock);
+
+#ifdef KTIME_CHECK
+	fperf_start("put_wait");
+#endif
+	/* Wait until recv done */
+	wait_event(nsw.ns_wq, rdpma_nsw_completed(q, &nsw));
+	ret = rdpma_sys_err_to_errno(nsw.ns_sys_status);
+	if (status && !ret)
+		*status = nsw.ns_status;
+#ifdef KTIME_CHECK
+	fperf_end("put_wait");
+#endif
+
+	return 0;
+}
 EXPORT_SYMBOL_GPL(rdpma_get);
+
 
 
 /* XXX */
@@ -650,6 +761,42 @@ inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
 }
 
 /* -------------------------------------- Poll ------------------------------------------- */
+int requester(struct rdma_queue *q){
+	struct request_struct* new_request;
+	allow_signal(SIGKILL);
+	while(1){
+		while(list_empty(&(q->request_list.list))){
+			schedule();
+			if(kthread_should_stop()){
+				printk("[%s]: stopping event_handler\n", __func__);
+				return 0;
+			}
+		}
+		spin_lock(&q->list_lock);
+		new_request = list_entry(q->request_list.list.next, struct request_struct, list);
+		spin_unlock(&q->list_lock);
+
+		/* TODO: how about delegating those request process to another thread? */
+
+		if(new_request->type == MSG_WRITE){
+			_rdpma_put(new_request->page, new_request->key);
+			rdpma_complete_nsw(q, NULL, new_request->mid, 0, 0); /* XXX */
+		}
+		else if(new_request->type == MSG_READ){
+			_rdpma_get(new_request->page, new_request->key);
+			rdpma_complete_nsw(q, NULL, new_request->mid, 0, 0); /* XXX */
+		}
+		else{
+			printk(KERN_ALERT "[%s]: weired request type (%d)\n", __func__, new_request->type);
+		}
+		spin_lock(&q->list_lock);
+		list_del(&new_request->list);
+		spin_unlock(&q->list_lock);
+		kmem_cache_free(request_cache, new_request);
+	}
+	return 0;
+}
+
 static int client_poll_cq(struct rdma_queue* q){
 	struct ib_wc wc;
 	int ne;
@@ -660,13 +807,13 @@ static int client_poll_cq(struct rdma_queue* q){
 
 	allow_signal(SIGKILL);
 	while(1){
-		do{
+		do {
 			ne = ib_poll_cq(q->recv_cq, 1, &wc);
 			if(ne < 0){
 				printk(KERN_ALERT "[%s]: ib_poll_cq failed (%d)\n", __func__, ne);
 				return 1;
 			}
-		}while(ne < 1);
+		} while ( ne < 1 );
 
 		if(wc.status != IB_WC_SUCCESS){
 			printk(KERN_ALERT "[%s]: ib_poll_cq returned failure status (%d)\n", __func__, wc.status);
@@ -679,12 +826,12 @@ static int client_poll_cq(struct rdma_queue* q){
 			bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
 			pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 			if(type == MSG_WRITE_REPLY){
-				printk("[%s]: received MSG_WRITE_REPLY\n", __func__);
+//				printk("[%s]: received MSG_WRITE_REPLY\n", __func__);
 				rdpma_complete_nsw(q, NULL, mid, 0, 0);
 				/* TODO: need to distinguish committed or aborted? */
 			}
 			else if(type == MSG_READ_REPLY){
-				printk("[%s]: received MSG_READ_REQUEST_REPLY\n", __func__);
+//				printk("[%s]: received MSG_READ_REPLY\n", __func__);
 				if(tx_state == TX_READ_COMMITTED){
 					rdpma_complete_nsw(q, NULL, mid, 0, 0);
 				}
@@ -703,55 +850,6 @@ static int client_poll_cq(struct rdma_queue* q){
 		}
 	}
 }
-
-#if 0
-int event_handler(void){
-	struct request_struct* new_request;
-	allow_signal(SIGKILL);
-	while(1){
-		wait_event(ctx->req_wq, !list_empty(&ctx->req_list));
-		spin_lock(&ctx->lock);
-
-		if (list_empty(&ctx->req_list)){
-			spin_unlock(&ctx->lock);
-			continue;
-		}
-		new_request = list_first_entry(&ctx->req_list, struct request_struct, entry);
-		BUG_ON(new_request == NULL);
-
-		list_del_init(&new_request->entry);
-		spin_unlock(&ctx->lock);
-
-		dprintk("[%s]: handle new request(type=%s, msg_num=%d, num=%lld)\n", 
-				__func__, TYPE_STR(new_request->type),
-				new_request->msg_num, new_request->num);
-
-		switch(new_request->type) {
-			case MSG_WRITE_REQUEST: 
-				handle_write_request(new_request->msg_num, new_request->num);
-				break;
-			
-			case MSG_WRITE: 
-				handle_write(new_request->msg_num, new_request->num);
-				break;
-
-			case MSG_READ_REQUEST:
-				handle_read_request(new_request->msg_num, new_request->num);
-				break;
-
-			case MSG_READ:
-				handle_read(new_request->msg_num, new_request->num);
-				break;
-
-			default:
-				printk(KERN_ALERT "[%s]: weired request type (%d)\n", __func__, new_request->type);
-
-		}
-		kmem_cache_free(request_cache, new_request);
-	}
-	return 0;
-}
-#endif
 
 
 /* -------------------------------------- RDMA_CONN.C ----------------------------------------------*/
@@ -1070,6 +1168,10 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	spin_lock_init(&queue->cq_lock);
 	spin_lock_init(&queue->queue_lock);
 	queue->qp_type = get_queue_type(idx);
+
+	/* XXX */
+	spin_lock_init(&queue->list_lock);
+	INIT_LIST_HEAD(&(queue->request_list.list));
 
 	queue->cm_id = rdma_create_id(&init_net, pmdfc_rdma_cm_handler, queue,
 			RDMA_PS_TCP, IB_QPT_RC); // start rdma_cm XXX
@@ -1399,10 +1501,8 @@ static int __init rdma_connection_init_module(void)
 		return -ENOMEM;
 	}
 
-	/* request list */
-	spin_lock_init(&list_lock);
-	INIT_LIST_HEAD(&(request_list.list));
-	request_cache = kmem_cache_create("request_cache", sizeof(struct request_struct), 64, SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
+	request_cache = kmem_cache_create("request_cache", sizeof(struct request_struct), 64, 
+			SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD, NULL);
 
 	ib_register_client(&pmdfc_rdma_ib_client);
 	ret = pmdfc_rdma_create_ctrl(&gctrl);
@@ -1421,12 +1521,21 @@ static int __init rdma_connection_init_module(void)
 
 	/* After recv remotemr run cq poller */
 	for (i = 0 ; i < numqueues; ++i ) {
+#if 0
 		thread_poll_cq[i] = kthread_create((void*)&client_poll_cq, &gctrl->queues[i], "cq_poller");
 		if(IS_ERR(thread_poll_cq[i])){
 			printk(KERN_ALERT "cq_poller thread creation failed\n");
 			return 1;
 		}
 		wake_up_process(thread_poll_cq[i]);
+#endif
+
+		thread_handler[i] = kthread_create((void*)&requester, &gctrl->queues[i], "requester");
+		if(IS_ERR(thread_handler[i])){
+			printk(KERN_ALERT "requester thread creation failed\n");
+			return 1;
+		}
+		wake_up_process(thread_handler[i]);
 	}
 
 #if 0

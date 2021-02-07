@@ -12,8 +12,8 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 4
-#define TOTAL_CAPACITY (PAGE_SIZE * 16 * THREAD_NUM)
+#define THREAD_NUM 32
+#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 128 * THREAD_NUM)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
 
 struct page*** vpages;
@@ -249,7 +249,6 @@ int main(void){
 
 	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 
-#if 0
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
 		args[i]->comp = &comp[i];
@@ -285,10 +284,12 @@ int main(void){
 	else
 		pr_info("[ FAIL ] complete mixed thread functions: time( %llu ) usec, %d failed\n", elapsed, ret);
 
-	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
-#endif
+	if ( elapsed / 1000/ 1000 != 0)
+		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+	else 
+		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
-	pmdfc_rdma_print_stat();
+//	pmdfc_rdma_print_stat();
 
 	ssleep(1);
 

@@ -12,7 +12,7 @@
 #include <linux/spinlock.h>
 
 #define NUM_QUEUES 			(2)
-#define NUM_ENTRY			(8) 			/* # of Metadata per queue */
+#define NUM_ENTRY			(32) 			/* # of Metadata per queue */
 #define METADATA_SIZE		(16) 	 		/* [ key, remote address ] */ 
 #define BITMAP_SIZE	(64)
 
@@ -54,6 +54,20 @@ struct rdma_req {
 
 struct pmdfc_rdma_ctrl;
 
+struct request_struct{
+	struct list_head list; // 16
+	int type;// 4
+	int mid; 	// 4
+	uint64_t key;// 4
+	uint32_t num; // 4
+	struct page *page;
+	union{
+		uint64_t remote_mm; // 8
+		void* pages[NUM_ENTRY]; // 8*4 = 32
+		uint64_t keys[NUM_ENTRY]; // 8*4 = 32
+	};
+};
+
 struct rdma_queue {
 	struct ib_qp *qp;
 	struct ib_cq *send_cq;
@@ -76,6 +90,8 @@ struct rdma_queue {
 	struct idr 			queue_status_idr;
 	struct list_head 	queue_status_list;
 	spinlock_t			queue_lock;
+	struct request_struct request_list;
+	spinlock_t 			list_lock;
 };
 
 enum rdpma_system_error {
@@ -101,19 +117,6 @@ struct pmdfc_rdma_memregion {
 	u64 mr_size;
 };
 
-struct request_struct{
-	struct list_head list; // 16
-	int type;// 4
-	int pid; 	// 4
-	u32 key;// 4
-	u32 index;// 4
-	uint32_t num; // 4
-	union{
-		uint64_t remote_mm; // 8
-		void* pages[NUM_ENTRY]; // 8*4 = 32
-		uint64_t keys[NUM_ENTRY]; // 8*4 = 32
-	};
-};
 
 
 struct pmdfc_rdma_ctrl {

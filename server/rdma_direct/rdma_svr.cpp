@@ -467,14 +467,14 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 int on_connection(struct queue *q)
 {
-//	printf("%s\n", __FUNCTION__);
+	printf("%s\n", __FUNCTION__);
 	struct ctrl *ctrl = q->ctrl;
 	int isNewClient = 0;
 
 	TEST_Z(q->state == queue::INIT);
 
 	/* TODO: for every new client */
-	if (q == &ctrl->queues[0] || q == &ctrl->queues[2]) {
+	if (q == &ctrl->queues[0] || q == &ctrl->queues[NUM_QUEUES]) {
 		struct ibv_send_wr wr = {};
 		struct ibv_recv_wr rwr = {};
 		struct ibv_send_wr *bad_wr = NULL;
@@ -560,10 +560,10 @@ int alloc_control()
 	TEST_Z(gctrl);
 	memset(gctrl, 0, sizeof(struct ctrl));
 
-	gctrl->queues = (struct queue *) malloc(sizeof(struct queue) * NUM_QUEUES);
+	gctrl->queues = (struct queue *) malloc(sizeof(struct queue) * NUM_QUEUES * NUM_CLIENT);
 	TEST_Z(gctrl->queues);
-	memset(gctrl->queues, 0, sizeof(struct queue) * NUM_QUEUES);
-	for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
+	memset(gctrl->queues, 0, sizeof(struct queue) * NUM_QUEUES * NUM_CLIENT);
+	for (unsigned int i = 0; i < NUM_QUEUES * NUM_CLIENT; ++i) {
 		gctrl->queues[i].ctrl = gctrl;
 		gctrl->queues[i].state = queue::INIT;
 	}
