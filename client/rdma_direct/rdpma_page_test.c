@@ -82,7 +82,7 @@ int rdpma_write_message_test(void* arg){
 		key = (uint32_t)keys[tid][i];
 		longkey = get_longkey(key, index);
 		ret = rdpma_put(vpages[tid][i], longkey, &status);
-		if (ret != 0)
+		if (status == -1)
 			failed++;
 	}
 
@@ -117,7 +117,7 @@ int rdpma_single_read_message_test(void* arg){
 	
 	ret = rdpma_get(test_page, longkey, &status);
 
-	if (ret == -1){
+	if (status == -1){
 		printk("[ FAIL ] Searching for key (ret -1)\n");
 		result++;
 	}
@@ -154,7 +154,9 @@ int rdpma_read_message_test(void* arg){
 		longkey = get_longkey(key, index);
 		ret = rdpma_get(return_page[tid], longkey, &status);
 
-		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
+		if(status == -1)
+			nfailed++;
+		else if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
 //			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
