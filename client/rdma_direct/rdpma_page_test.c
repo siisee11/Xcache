@@ -12,9 +12,11 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 32
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 128 * THREAD_NUM)
-#define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
+#define THREAD_NUM 2
+#define PAGE_ORDER 2
+#define BATCH_SIZE (1 << PAGE_ORDER)
+#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1024 * 128)
+#define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
 struct page*** vpages;
 atomic_t failedSearch;
@@ -52,15 +54,15 @@ int rdpma_single_write_message_test(void* arg){
 	int status;
 	long longkey;
 
-	test_page = alloc_pages(GFP_KERNEL, 0);
+	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
-	memcpy(page_address(test_page), test_string, PAGE_SIZE);
+	memcpy(page_address(test_page), test_string, PAGE_SIZE * (1 << PAGE_ORDER));
 
 	longkey = get_longkey(key, index);
 	
-	ret = rdpma_put(test_page, longkey, &status);
+	ret = rdpma_put(test_page, longkey, (1 << PAGE_ORDER), &status);
 	complete(my_data->comp);
 
 	printk("[ PASS ] %s succeeds \n", __func__);
@@ -81,7 +83,7 @@ int rdpma_write_message_test(void* arg){
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
 		longkey = get_longkey(key, index);
-		ret = rdpma_put(vpages[tid][i], longkey, &status);
+		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE, &status);
 		if (ret != 0)
 			failed++;
 	}
@@ -109,19 +111,19 @@ int rdpma_single_read_message_test(void* arg){
 	long longkey;
 	int status;
 
-	test_page = alloc_pages(GFP_KERNEL, 0);
-	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
+	test_string = kzalloc(PAGE_SIZE * (1 << PAGE_ORDER), GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
 	longkey = get_longkey(key, index);
 	
-	ret = rdpma_get(test_page, longkey, &status);
+	ret = rdpma_get(test_page, longkey, (1 << PAGE_ORDER), &status);
 
 	if (ret == -1){
 		printk("[ FAIL ] Searching for key (ret -1)\n");
 		result++;
 	}
-	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){
+	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE * (1 << PAGE_ORDER)) != 0){
 //		printk("[ FAIL ] Searching for key\n");
 //		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
 		result++;
@@ -152,10 +154,10 @@ int rdpma_read_message_test(void* arg){
 		key = keys[tid][i];
 
 		longkey = get_longkey(key, index);
-		ret = rdpma_get(return_page[tid], longkey, &status);
+		ret = rdpma_get(return_page[tid], longkey, BATCH_SIZE, &status);
 
-		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
-//			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * (1 << PAGE_ORDER)) != 0){
+			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
@@ -325,7 +327,7 @@ int init_pages(void){
 	}
 
 	for(i=0; i<THREAD_NUM; i++){
-		return_page[i] = alloc_pages(GFP_KERNEL, 0);
+		return_page[i] = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 		if(!return_page[i]){
 			printk(KERN_ALERT "return page[%d] allocation failed\n", i);
 			goto ALLOC_ERR;
@@ -344,7 +346,7 @@ int init_pages(void){
 			goto ALLOC_ERR;
 		}
 		for(j=0; j<ITERATIONS; j++){
-			vpages[i][j] = alloc_pages(GFP_KERNEL, 0);
+			vpages[i][j] = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 			if(!vpages[i][j]){
 				printk(KERN_ALERT "vpages[%d][%d] allocation failed\n", i, j);
 				goto ALLOC_ERR;

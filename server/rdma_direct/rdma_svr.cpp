@@ -207,12 +207,13 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
+				int* batch = (int*)GET_BATCH_SIZE(gctrl->local_mm, qid, msg_id);
 				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
-				void *save_page = malloc(PAGE_SIZE);
-				memcpy((char *)save_page, (char *)page, PAGE_SIZE);
+				void *save_page = malloc(PAGE_SIZE * (*batch));
+				memcpy((char *)save_page, (char *)page, PAGE_SIZE * (*batch));
 
 				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
-				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
+				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted, batch %d\n", (uint64_t)page, *key, *batch);
 				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
 #if defined(TIME_CHECK)
@@ -264,13 +265,15 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
 				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
-				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
-				dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
+				uint64_t* batch = (uint64_t*)GET_BATCH_SIZE(gctrl->local_mm, qid, msg_id);
+				uint64_t target_addr = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
+				dprintf("[ INFO ] key= %lx, remote address= %lx, batch=%d, target_addr=%lx \n", *key, *remote_addr, *batch, target_addr);
 
 				/* 1. Get page address -> value */
 				void* value;
 				bool abort = false;
 
+				/* TODO: get-> get batch */
 				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
 				if(!value){
 					dprintf("Value for key[%lx] not found\n", key);
@@ -288,7 +291,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					dprintf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send page retrieved to client so that client can initiate RDMA READ */	
-					memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
+					memcpy((char *)target_addr, (char *)value, PAGE_SIZE * (*batch));  /* COPY BATCH */
 					dprintf("[ INFO ] page %s\n", (char *)target_addr);
 
 					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;

@@ -15,16 +15,18 @@ POBJ_LAYOUT_END(PM_MR);
 
 #define NUM_CLIENT 		16
 #define NUM_QUEUES 		2
+#define MAX_BATCH 		8
 #define NUM_ENTRY 		32
-#define METADATA_SIZE 	16
+#define METADATA_SIZE 	24
 
-#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE)
+#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH)
 #define CLIENT_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
 #define LOCAL_META_REGION_SIZE			(NUM_CLIENT * CLIENT_META_REGION_SIZE)
 
 #define GET_CLIENT_BASE(addr, nid) 		(addr + nid * CLIENT_META_REGION_SIZE)
 #define GET_LOCAL_META_REGION(addr, qid, mid)		(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_REMOTE_ADDRESS_BASE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
+#define GET_BATCH_SIZE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 #define GET_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)

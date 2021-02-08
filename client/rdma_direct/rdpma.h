@@ -12,15 +12,17 @@
 #include <linux/spinlock.h>
 
 #define NUM_QUEUES 			(2)
+#define MAX_BATCH 			(8) 			/* 16 get fault */
 #define NUM_ENTRY			(32) 			/* # of Metadata per queue */
-#define METADATA_SIZE		(16) 	 		/* [ key, remote address ] */ 
+#define METADATA_SIZE		(24) 	 		/* [ key, remote address, batch ] */ 
 #define BITMAP_SIZE	(64)
 
-#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE) 	/* [meta, page] */
+#define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */
 #define LOCAL_META_REGION_SIZE			(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
 
 #define GET_LOCAL_META_REGION(addr, qid, mid)		(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_REMOTE_ADDRESS_BASE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
+#define GET_BATCH_SIZE(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 #define GET_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
@@ -31,6 +33,12 @@ enum qp_type {
 	QP_READ_ASYNC,
 	QP_WRITE_SYNC,
 	QP_TEST_SYNC
+};
+
+struct rdpma_metadata {
+	uint64_t key;
+	uint64_t raddr;
+	int batch;
 };
 
 struct pmdfc_rdma_dev {
@@ -59,13 +67,8 @@ struct request_struct{
 	int type;// 4
 	int mid; 	// 4
 	uint64_t key;// 4
-	uint32_t num; // 4
+	int batch; // 4
 	struct page *page;
-	union{
-		uint64_t remote_mm; // 8
-		void* pages[NUM_ENTRY]; // 8*4 = 32
-		uint64_t keys[NUM_ENTRY]; // 8*4 = 32
-	};
 };
 
 struct rdma_queue {
@@ -140,8 +143,8 @@ struct pmdfc_rdma_ctrl {
 struct rdma_queue *pmdfc_rdma_get_queue(unsigned int idx, enum qp_type type);
 int pmdfc_rdma_get_queue_id(unsigned int idx, enum qp_type type);
 
-int rdpma_get(struct page *page, uint64_t, int*);
-int rdpma_put(struct page *page, uint64_t, int*);
+int rdpma_get(struct page *page, uint64_t, int, int*);
+int rdpma_put(struct page *page, uint64_t, int, int*);
 int pmdfc_rdma_poll_load(int cpu);
 void pmdfc_rdma_print_stat(void);
 enum qp_type get_queue_type(unsigned int idx);

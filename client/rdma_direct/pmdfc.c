@@ -130,7 +130,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	fperf_start("rdpma_put");
 #endif   
 	longkey = get_longkey((long)oid.oid[0], index);
-	ret = rdpma_put(page, longkey, &status);
+	ret = rdpma_put(page, longkey, 1, &status);
     
     if (put_cnt % SAMPLE_RATE == 0) {
         pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
@@ -222,7 +222,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif   
 	}
 	/* get page from server by longkey */
-	ret = rdpma_get(page, longkey, &status);
+	ret = rdpma_get(page, longkey, 1, &status);
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;
