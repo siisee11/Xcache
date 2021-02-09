@@ -12,8 +12,10 @@ class IHash {
     ~IHash(void) = default;
 //    virtual bool InsertOnly(Key_t&, Value_t) = 0;
 	virtual int GetNodeID(Key_t&) = 0;
+	virtual void Insert_extent(Key_t&, Value_t, uint64_t) = 0;
     virtual void Insert(Key_t&, Value_t) = 0;
     virtual bool Delete(Key_t&) = 0;
+    virtual Value_t Get_extent(Key_t&) = 0;
     virtual Value_t Get(Key_t&) = 0;
     virtual Value_t FindAnyway(Key_t&) = 0;
     virtual double Utilization(void) = 0;

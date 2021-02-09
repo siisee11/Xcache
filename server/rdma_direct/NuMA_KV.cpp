@@ -70,6 +70,22 @@ NUMA_KV::~NUMA_KV(void)
 { 
 }
 
+void NUMA_KV::InsertExtent(Key_t& key, Value_t value, uint64_t len) {
+#ifdef KV_DEBUG
+	struct timespec i_start;
+	struct timespec i_end;
+	clock_gettime(CLOCK_MONOTONIC, &i_start);
+#endif
+	auto extent = new Extent(key, value, len);
+	cceh->Insert_extent(extent->_key, extent, extent->_len);
+#ifdef KV_DEBUG
+	clock_gettime(CLOCK_MONOTONIC, &i_end);
+	insertTime += i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000;
+#endif
+
+	return;
+}
+
 void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 #ifdef KV_DEBUG
 	struct timespec i_start;
@@ -83,6 +99,25 @@ void NUMA_KV::Insert(Key_t& key, Value_t value, int unique_id, int thisNode) {
 #endif
 
 	return;
+}
+
+/* extented get */
+Value_t NUMA_KV::GetExtent(Key_t& key) {
+#ifdef KV_DEBUG
+	struct timespec g_start;
+	clock_gettime(CLOCK_MONOTONIC, &g_start);
+#endif
+	auto extent = cceh->Get_extent(key);
+	printf("extent info _key=%d _value=%llx, _len=%d\n", extent->_key, extent->_value, extent->_len);
+	auto key_diff = key - extent->_key;
+	auto target = extent->_value + 4096 * key_diff;
+	printf("key_diff=%d, value=%llx\n", key_diff, target);
+#ifdef KV_DEBUG
+	struct timespec g_end;
+	clock_gettime(CLOCK_MONOTONIC, &g_end);
+	getTime += g_end.tv_nsec - g_start.tv_nsec + (g_end.tv_sec - g_start.tv_sec)*1000000000;
+#endif
+	return target;
 }
 
 /* Normal get non-queue */
