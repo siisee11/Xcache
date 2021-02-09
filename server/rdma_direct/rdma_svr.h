@@ -1,14 +1,6 @@
 #ifndef _RDMA_DIRECT_SVR_H_
 #define _RDMA_DIRECT_SVR_H_
 
-#ifdef APP_DIRECT
-#include <libpmemobj.h>
-
-POBJ_LAYOUT_BEGIN(PM_MR);
-POBJ_LAYOUT_TOID(PM_MR, void);
-POBJ_LAYOUT_END(PM_MR);
-#endif
-
 #include "NuMA_KV.h"
 
 #define PAGE_SIZE 	4096
@@ -16,7 +8,7 @@ POBJ_LAYOUT_END(PM_MR);
 #define NUM_CLIENT 		16
 #define NUM_QUEUES 		2
 #define MAX_BATCH 		8
-#define NUM_ENTRY 		32
+#define NUM_ENTRY 		16
 #define METADATA_SIZE 	24
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH)

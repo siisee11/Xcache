@@ -1,0 +1,138 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<strings.h>
+#include<string.h>
+#include<math.h>
+
+#include "src/CCEH.h"
+#include "src/log.h"
+#define MAX_HEIGHT 20
+#define POOL_SIZE (10737418240)
+
+int NO=0;
+
+typedef struct extent{
+	int start;
+	int len;
+	int no;
+//	Bucket* bucket;
+}Extents;
+Extents* extent_array[4096];
+
+/*Bucket* bucket_search(int key, int target){
+	if(extent_array[key]){
+		int start = extent_array[key]->start;
+		printf("[start : %d]\n", start);
+		return &extent_array[key]->bucket[target-start];
+	}
+	else
+		return NULL;
+}*/
+int bucket_insert(int head, Extents* e){
+	extent_array[head] = e;
+	printf("bucket insert head %d\n",head);
+}
+
+int extent_insert(int start, int len, Extents* e){
+	if(len==0)
+		return 0;	
+	int head = start;
+	if(len==1){
+		bucket_insert(head ,e);
+		return 0;
+	}
+	if(head%2){
+		bucket_insert(head, e);
+		extent_insert(head+1, len-1, e);
+		return 0;
+	}
+	unsigned int cover_range = 1UL << (ffs(head)-1);
+	if(cover_range == 0) cover_range = 1UL << MAX_HEIGHT;
+	while(cover_range > len){
+		cover_range >>=1;
+	}
+	bucket_insert(head, e);
+	extent_insert(head+cover_range, len-cover_range, e);
+}
+
+Extents* extent_search(int target){
+//	Bucket* found;
+	Extents* e=NULL;
+	int prev = -1;
+	for(int h=0; h<MAX_HEIGHT; h++){
+		int key = target-(target %(1<<h));
+		if(key == prev) continue;
+		prev = key;
+//		found = bucket_search(key, target);
+		e = extent_array[key];
+		if(e!=NULL && target>= e->start && target < e->start+e->len){
+	printf("[%d %d %d]",target, e->start, e->len);
+			break;
+		}
+	}
+	return e;
+}
+
+int main(int argc, char* argv[]){
+
+	if(argc!=3){
+		printf("./exe CCEH_path LOG_path");
+		exit(1);
+	}
+	Log *log = new Log(argv[2]);	
+	const size_t initialSize = 1024;
+	PMEMobjpool* pop;
+	TOID(CCEH) HashTable = OID_NULL;
+	if(access(argv[1], 0) != 0){
+		pop = pmemobj_create(argv[1], "CCEH", PMEMOBJ_MIN_POOL*10, 0666);
+		if(!pop){
+			perror("pmemobj_create");
+			exit(1);
+		}
+		HashTable = POBJ_ROOT(pop, CCEH);
+		D_RW(HashTable)->initCCEH(pop, initialSize);
+	}else{
+		pop = pmemobj_open(argv[1], "CCEH");
+		if(pop == NULL){
+			perror("pmemobj_open");
+			exit(1);
+		}
+		HashTable = POBJ_ROOT(pop, CCEH);
+		if(D_RO(HashTable)->crashed){
+			D_RW(HashTable)->Recovery(pop);
+		}
+	}
+
+	int inst,b;
+	Key_t start, target;
+	printf("pmem create finished\n");
+	printf("inst start len\n");fflush(stdout);
+	while(1){
+		scanf("%d",&inst);
+		if(inst==1){
+			NO++;
+			scanf("%d %d",&start,&b);
+			Extents* e = (Extents*)malloc(sizeof(Extents));
+			e->start = start;
+			e->len = b;
+			e->no = NO;
+//			D_RW(HashTable)->Insert(pop, start, reinterpret_cast<Value_t>(e));
+//			for(int i=0;i<b;i++){
+//				e->bucket[i].page[0] = i;
+//			}
+			extent_insert(start,b,e);
+		}
+		if(inst==2){
+			scanf("%d",&target);
+			Extents* e = extent_search(target);
+			if(e==NULL){	
+				printf("Not Exist\n");
+			}else{
+					
+				printf("[%d]",e->start);
+				
+			}
+		}
+	}
+}

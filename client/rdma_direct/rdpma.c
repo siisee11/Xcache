@@ -304,17 +304,9 @@ int _rdpma_put(struct page *page, uint64_t key, int batch)
 	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev;
 
-	/* Protect from overrun */
-	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
-		BUG_ON(inflight > QP_MAX_SEND_WR);
-		poll_target(q, 2048);
-		pr_info_ratelimited("[ WARN ] back pressure writes");
-	}
-
 	/* thi msg_id is unique in this queue */
 	msg_id = 0;	
-
-	BUG_ON(msg_id >= 64);
+	BUG_ON(msg_id >= 16);
 
 	/* 1. post recv */
 	ret = post_recv(q);
@@ -322,7 +314,7 @@ int _rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* 2. post send */
 	/* setup imm data */
-	imm = htonl(bit_mask(num, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
+	imm = htonl(bit_mask(batch, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
@@ -373,7 +365,6 @@ int _rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
-	atomic_inc(&q->pending);
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -396,7 +387,6 @@ int _rdpma_put(struct page *page, uint64_t key, int batch)
 		return 1;
 	}
 
-	atomic_dec(&q->pending);
 	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE * batch, DMA_TO_DEVICE); /* XXX for test */
 	ib_dma_unmap_page(dev, req[1]->dma, sizeof(uint64_t), DMA_TO_DEVICE); /* XXX for test */
 	kmem_cache_free(req_cache, req[0]);
@@ -562,7 +552,6 @@ int _rdpma_get(struct page *page, uint64_t key, int batch)
 	rdma_wr.remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr.rkey = q->ctrl->servermr.key;
 
-//	atomic_inc(&q->pending);
 	ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -624,7 +613,6 @@ int _rdpma_get(struct page *page, uint64_t key, int batch)
 		ret = 0;
 	}
 	
-//	atomic_dec(&q->pending);
 
 #ifdef KTIME_CHECK
 	fperf_end("poll_rr");

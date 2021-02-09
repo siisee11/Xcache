@@ -196,7 +196,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			struct ibv_sge sge = {};
 
 			bit_unmask(ntohl(wc.imm_data), &num, &msg_id, &type, &tx_state, &qid);
-			dprintf("[ INFO ] On Q[%d]: num(%d), msg_id(%d), type(%d), tx_state(%d), qid(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
+			dprintf("[ INFO ] On Q[%d]: qid(%d), msg_id(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
 
 			post_recv(queue_id);
 
@@ -206,6 +206,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
+				/* TODO: node awareness */
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
 				int* batch = (int*)GET_BATCH_SIZE(gctrl->local_mm, qid, msg_id);
 				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);

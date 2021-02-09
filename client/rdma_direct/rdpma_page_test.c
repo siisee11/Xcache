@@ -12,7 +12,7 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 2
+#define THREAD_NUM 8
 #define PAGE_ORDER 2
 #define BATCH_SIZE (1 << PAGE_ORDER)
 #define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1024 * 128)
@@ -157,7 +157,7 @@ int rdpma_read_message_test(void* arg){
 		ret = rdpma_get(return_page[tid], longkey, BATCH_SIZE, &status);
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * (1 << PAGE_ORDER)) != 0){
-			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+//			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
