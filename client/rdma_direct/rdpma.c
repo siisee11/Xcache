@@ -418,6 +418,50 @@ out:
 	return ret;
 }
 
+/* CPU가 번갈아가면서 같은 큐에 대해서 이 함수를 부를 수 있음 */
+int rdpma_buffered_put(struct page *page, uint64_t key, int *status){
+	int cpuid = smp_processor_id();
+	int ret;
+	struct request_struct* new_request;
+	struct rdpma_status_wait nsw = {
+		.ns_node_item = LIST_HEAD_INIT(nsw.ns_node_item),
+	};
+
+	/* get q and its infomation */
+	int queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	struct rdma_queue *q = &gctrl->queues[queue_id];
+
+	ret = rdpma_prep_nsw(q, &nsw);
+	BUG_ON(nsw.ns_id >= NUM_ENTRY);
+
+	new_request = kmem_cache_alloc(request_cache, GFP_KERNEL);
+
+	new_request->page = page;
+	new_request->key = key;
+	new_request->type = MSG_WRITE;
+	new_request->mid = nsw.ns_id;
+	new_request->batch = batch;
+
+	spin_lock(&q->list_lock);
+	list_add_tail(&(new_request->list), &q->request_list.list);
+	spin_unlock(&q->list_lock);
+
+#ifdef KTIME_CHECK
+	fperf_start("put_wait");
+#endif
+	/* Wait until recv done */
+	wait_event(nsw.ns_wq, rdpma_nsw_completed(q, &nsw));
+	ret = rdpma_sys_err_to_errno(nsw.ns_sys_status);
+	if (status && !ret)
+		*status = nsw.ns_status;
+#ifdef KTIME_CHECK
+	fperf_end("put_wait");
+#endif
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rdpma_put);
+
+
 int rdpma_put(struct page *page, uint64_t key, int batch, int *status){
 	int cpuid = smp_processor_id();
 	int ret;
