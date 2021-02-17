@@ -1,8 +1,8 @@
 .PHONY: clean all
 
 #CFLAGS := -Wall -O2 -g -ggdb -Werror -lrdmacm -libverbs -lpthread
-#CFLAGS := -std=c++17 -g -Wall -O2 
-CFLAGS := -std=c++17 -O3 
+CFLAGS := -std=c++17 -g -Wall
+#CFLAGS := -std=c++17 -O3 
 LIBS := -lrdmacm -libverbs -lpthread -lpmemobj -lnuma  -lpmem
 
 #LDLIBS := ${LDLIBS} -lrdmacm -libverbs -lpthread

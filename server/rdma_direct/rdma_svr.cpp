@@ -213,7 +213,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				void *save_page = malloc(PAGE_SIZE * (*batch));
 				memcpy((char *)save_page, (char *)page, PAGE_SIZE * (*batch));
 
-				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+//				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+				gctrl->kv->InsertExtent(*key, (Value_t)save_page, 1);
 				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted, batch %d\n", (uint64_t)page, *key, *batch);
 				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
@@ -275,7 +276,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				bool abort = false;
 
 				/* TODO: get-> get batch */
-				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
+//				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
+				value = (void *)gctrl->kv->GetExtent((Key_t&)*key); 
 				if(!value){
 					dprintf("Value for key[%lx] not found\n", key);
 					abort = true;

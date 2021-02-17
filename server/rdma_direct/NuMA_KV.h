@@ -66,10 +66,11 @@ class NUMA_KV : public KVStore {
 		NUMA_KV(void);
 		NUMA_KV(size_t, size_t, size_t);
 		~NUMA_KV(void);
+		void InsertExtent(Key_t&, Value_t, uint64_t);
 		void Insert(Key_t&, Value_t, int, int);
 		void Insert(Key_t&, Value_t, uint64_t);
 		bool Delete(Key_t&);
-		void GetExtent(Key_t&);
+		Value_t GetExtent(Key_t&);
 		void Get(Key_t&, int, int);
 		Value_t Get(Key_t&, int);
 		int GetNodeID(Key_t&);

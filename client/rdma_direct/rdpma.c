@@ -419,7 +419,7 @@ out:
 }
 
 /* CPU가 번갈아가면서 같은 큐에 대해서 이 함수를 부를 수 있음 */
-int rdpma_buffered_put(struct page *page, uint64_t key, int *status){
+int rdpma_buffered_put(struct page *page, uint64_t key, int batch, int *status){
 	int cpuid = smp_processor_id();
 	int ret;
 	struct request_struct* new_request;
@@ -459,7 +459,7 @@ int rdpma_buffered_put(struct page *page, uint64_t key, int *status){
 #endif
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rdpma_put);
+EXPORT_SYMBOL_GPL(rdpma_buffered_put);
 
 
 int rdpma_put(struct page *page, uint64_t key, int batch, int *status){
@@ -559,7 +559,7 @@ int _rdpma_get(struct page *page, uint64_t key, int batch)
 	addr = (uint64_t*)GET_LOCAL_META_REGION(gctrl->rdev->local_mm, queue_id, msg_id);
 	raddr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->rdev->local_mm, queue_id, msg_id);
 
-//	pr_info("[ INFO ] dma_addr=%lx, addr= %lx\n", dma_addr, (uint64_t)addr);
+	pr_info("[ INFO ] dma_addr=%lx, addr= %lx\n", dma_addr, (uint64_t)addr);
 
 	/* First 8byte for key */
 	*addr = key;
@@ -573,13 +573,13 @@ int _rdpma_get(struct page *page, uint64_t key, int batch)
 		return -1;
 	}
 	ib_dma_sync_single_for_device(dev, page_dma, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
-//	pr_info("[ INFO ] ib_dma_map_page { page_dma=%lx }\n", page_dma);
+	pr_info("[ INFO ] ib_dma_map_page { page_dma=%lx }\n", page_dma);
 	BUG_ON(page_dma == 0);
 
 	/* Next 8 byte for page_dma address */
 	*raddr = page_dma;
-//	pr_info("[ INFO ] WRITE { key=%llx, page_dma=%llx }\n", *addr, *raddr);
-//	pr_info("[ INFO ] Write to remote_addr= %llx\n", q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id));
+	pr_info("[ INFO ] WRITE { key=%llx, page_dma=%llx }\n", *addr, *raddr);
+	pr_info("[ INFO ] Write to remote_addr= %llx\n", q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id));
 
 	sge.addr = dma_addr;
 	sge.length = METADATA_SIZE;

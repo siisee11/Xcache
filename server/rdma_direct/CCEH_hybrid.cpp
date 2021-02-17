@@ -87,13 +87,13 @@ CCEH::CCEH(size_t initCap)
 CCEH::~CCEH(void)
 { }
 
-void CCEH::Insert_extent(Key_t& key ,Value_t value, uint64_t len){
+void CCEH::Insert_extent(Key_t key ,Value_t value, uint64_t len){
 	printf("Key:%ld, len:%ld\n", key, len);
 	if(len == 0) return;
 	uint64_t head = key;
 	if(len == 1){
 		Insert(key, value);
-		Insert_extent(key+1, len-1, value);
+		Insert_extent(key+1, value, len-1);
 		return;
 	}
 	unsigned int cover_range = 1UL << (ffs(head)-1);
@@ -101,7 +101,7 @@ void CCEH::Insert_extent(Key_t& key ,Value_t value, uint64_t len){
 	while(cover_range > len)
 		cover_range >>=1;
 	Insert(key, value);
-	Insert_extent(head+cover_range, len-cover_range, value);
+	Insert_extent(head+cover_range, value, len-cover_range);
 	return;
 }
 
