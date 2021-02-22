@@ -108,12 +108,10 @@ Value_t NUMA_KV::GetExtent(Key_t& key) {
 	clock_gettime(CLOCK_MONOTONIC, &g_start);
 #endif
 	auto extent = (Extent *)cceh->Get_extent(key); /*  XXX */
-	printf("extent info _key=%d\n", extent->_key);
-	printf("extent info _key=%d,  _len=%d\n", extent->_key, extent->_len);
-	printf("extent info _key=%d, _value=%llx, _len=%d\n", extent->_key, extent->_value, extent->_len);
+	printf("extent info _key=%lu, _value=%p, _len=%lu\n", extent->_key, extent->_value, extent->_len);
 	auto key_diff = key - extent->_key;
 	auto target = extent->_value + 4096 * key_diff;
-	printf("key_diff=%d, value=%llx\n", key_diff, target);
+	printf("key_diff=%lu, value=%llx\n", key_diff, target);
 #ifdef KV_DEBUG
 	struct timespec g_end;
 	clock_gettime(CLOCK_MONOTONIC, &g_end);

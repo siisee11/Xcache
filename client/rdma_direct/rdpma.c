@@ -736,7 +736,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch, int *status){
 	spin_unlock(&q->list_lock);
 
 #ifdef KTIME_CHECK
-	fperf_start("put_wait");
+	fperf_start("get_wait");
 #endif
 	/* Wait until recv done */
 	wait_event(nsw.ns_wq, rdpma_nsw_completed(q, &nsw));
@@ -744,7 +744,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch, int *status){
 	if (status && !ret)
 		*status = nsw.ns_status;
 #ifdef KTIME_CHECK
-	fperf_end("put_wait");
+	fperf_end("get_wait");
 #endif
 
 	return 0;
