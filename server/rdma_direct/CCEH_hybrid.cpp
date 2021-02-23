@@ -88,12 +88,11 @@ CCEH::~CCEH(void)
 { }
 
 void CCEH::Insert_extent(Key_t key ,Value_t value, uint64_t len){
-	printf("Key:%ld, len:%ld\n", key, len);
+//	printf("Key:%ld, len:%ld\n", key, len);
 	if(len == 0) return;
 	uint64_t head = key;
 	if(len == 1){
 		Insert(key, value);
-		Insert_extent(key+1, value, len-1);
 		return;
 	}
 	unsigned int cover_range = 1UL << (ffs(head)-1);

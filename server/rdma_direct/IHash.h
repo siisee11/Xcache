@@ -16,6 +16,7 @@ class IHash {
     virtual void Insert(Key_t&, Value_t) = 0;
     virtual bool Delete(Key_t&) = 0;
     virtual Value_t Get(Key_t&) = 0;
+	virtual Value_t Get_extent(Key_t&) = 0;
     virtual Value_t FindAnyway(Key_t&) = 0;
     virtual double Utilization(void) = 0;
     virtual size_t Capacity(void) = 0;

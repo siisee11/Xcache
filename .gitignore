@@ -66,3 +66,5 @@ eval_log/
 #test code
 rdma_example/
 the-geek-in-the-corner/
+
+.nfs*

@@ -213,7 +213,10 @@ int main(void){
 	else
 		pr_info("[ FAIL ] complete write thread functions: time( %llu ) usec, %d failed ", elapsed, ret);
 
-	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+	if (elapsed/1000/1000 != 0)
+		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+	else 
+		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 	
 	ssleep(1);
 
@@ -249,7 +252,10 @@ int main(void){
 	else
 		pr_info("[ FAIL ] complete read thread functions: time( %llu ) usec, %d failed \n", elapsed, ret);
 
-	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+	if (elapsed/1000/1000 != 0)
+		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+	else 
+		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);

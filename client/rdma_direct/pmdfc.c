@@ -16,6 +16,7 @@
 #include "tmem.h"
 #include "bloom_filter.h"
 #include "pmdfc.h"
+#include "timeperf.h"
 
 #include "rdpma.h"
 

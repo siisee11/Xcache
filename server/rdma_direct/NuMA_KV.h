@@ -38,15 +38,38 @@ struct work_request
 #endif
 };
 
+struct Extent{
+	uint64_t _key;
+	uint64_t _len;
+	Value_t _value;
+
+
+	Extent(void)
+	{  
+		_key = 0;
+		_len = 0;
+		_value = NULL;
+	}
+
+	Extent(uint64_t key, Value_t value, uint64_t len)
+	{  
+		_key = key;
+		_len = len;
+		_value = value;
+	}
+};
+
 class NUMA_KV : public KVStore {
 	public:
 		NUMA_KV(void);
 		NUMA_KV(size_t, size_t, size_t);
 		~NUMA_KV(void);
 		void Insert(Key_t&, Value_t, int, int);
+		void InsertExtent(Key_t&, Value_t, uint64_t);
 		bool Delete(Key_t&);
 		void Get(Key_t&, int, int);
 		Value_t Get(Key_t&, int);
+		Value_t GetExtent(Key_t&);
 		int GetNodeID(Key_t&);
 		Value_t FindAnyway(Key_t&);
 		bool Recovery(void);

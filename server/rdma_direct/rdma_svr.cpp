@@ -193,7 +193,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			struct ibv_sge sge = {};
 
 			bit_unmask(ntohl(wc.imm_data), &num, &msg_id, &type, &tx_state, &qid);
-			dprintf("[ INFO ] On Q[%d]: num(%d), msg_id(%d), type(%d), tx_state(%d), qid(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
+			dprintf("[ INFO ] On Q[%d]: qid(%d), msg_id(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
 
 			post_recv(queue_id);
 
@@ -208,7 +208,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				void *save_page = malloc(PAGE_SIZE);
 				memcpy((char *)save_page, (char *)page, PAGE_SIZE);
 
-				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+//				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
 				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
 				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
@@ -217,7 +218,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-#if 1 /* if this block is commented, Client polling get slow down */
+#if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
 				sge.addr = 0;
 				sge.length = 0;
 				sge.lkey = gctrl->mr_buffer->lkey;
@@ -268,7 +269,9 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				void* value;
 				bool abort = false;
 
-				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
+//				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
+				value = (void *)gctrl->kv->GetExtent((Key_t&)*key); 
+
 				if(!value){
 					dprintf("Value for key[%lx] not found\n", key);
 					abort = true;
@@ -408,18 +411,29 @@ static device *get_device(struct queue *q)
 		TEST_Z(ctrl->buffer);
 		printf("[  OK  ] DAX KMEM MR initialized\n");
 #else
+
+#ifdef ODP
 		/* 
 		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
 		 * addr should be 0 and length should be SIZE_MAX.
 		 */
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
-
 		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
+#else
+		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
+		TEST_Z(ctrl->local_mm);
+
+		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
+					dev->pd,
+					(void *)ctrl->local_mm,
+					LOCAL_META_REGION_SIZE,
+					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+#endif
 
 		dprintf("[ INFO ] registered memory region of %zu KB\n", LOCAL_META_REGION_SIZE/1024);
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
-		printf("[  OK  ] MEMORY MODE DRAM MR (ODP) initialized\n");
+		printf("[  OK  ] MEMORY MODE DRAM MR initialized\n");
 		q->ctrl->dev = dev;
 #endif
 	}
