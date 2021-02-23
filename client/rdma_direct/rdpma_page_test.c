@@ -12,9 +12,11 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 16
-#define TOTAL_CAPACITY (PAGE_SIZE * 1024 * 256 * 16)
-#define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/THREAD_NUM)
+#define THREAD_NUM 8
+#define PAGE_ORDER 0
+#define BATCH_SIZE (1 << PAGE_ORDER)
+#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1024 * 128)
+#define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
 struct page*** vpages;
 atomic_t failedSearch;
@@ -25,6 +27,7 @@ uint64_t** keys;
 struct thread_data{
 	int tid;
 	struct completion *comp;
+	int ret;
 };
 
 struct task_struct** write_threads;
@@ -48,44 +51,54 @@ int rdpma_single_write_message_test(void* arg){
 	uint32_t key=4400, index=11111;
 	char *test_string;
 	struct page *test_page;
+	int status;
 	long longkey;
 
-	test_page = alloc_pages(GFP_KERNEL, 0);
+	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
-	memcpy(page_address(test_page), test_string, PAGE_SIZE);
+	memcpy(page_address(test_page), test_string, PAGE_SIZE * (1 << PAGE_ORDER));
 
 	longkey = get_longkey(key, index);
 	
-	ret = rdpma_put(test_page, longkey);
+	ret = rdpma_put(test_page, longkey, (1 << PAGE_ORDER));
 	complete(my_data->comp);
 
 	printk("[ PASS ] %s succeeds \n", __func__);
 
-	return 0;
+	return ret;
 }
 
 
 int rdpma_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int tid = my_data->tid;
-	int i, ret;
+	int i, ret, status;
 	uint32_t index = 0;
 	uint32_t key;
 	long longkey;
+	int failed = 0;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
 		longkey = get_longkey(key, index);
-		ret = rdpma_put(vpages[tid][i], longkey);
+		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE);
+		if (ret != 0)
+			failed++;
 	}
 
 	complete(my_data->comp);
 
-	printk("[ PASS ] %s succeeds \n", __func__);
+	if (failed == 0) {
+		ret = 0;
+	} else {
+		ret = failed;
+	}
 
-	return 0;
+	my_data->ret = ret;
+
+	return ret;
 }
 
 int rdpma_single_read_message_test(void* arg){
@@ -96,33 +109,36 @@ int rdpma_single_read_message_test(void* arg){
 	int result = 0;
 	struct page *test_page;
 	long longkey;
+	int status;
 
-	test_page = alloc_pages(GFP_KERNEL, 0);
-	test_string = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
+	test_string = kzalloc(PAGE_SIZE * (1 << PAGE_ORDER), GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
 	longkey = get_longkey(key, index);
 	
-	ret = rdpma_get(test_page, longkey);
+	ret = rdpma_get(test_page, longkey, (1 << PAGE_ORDER));
 
 	if (ret == -1){
 		printk("[ FAIL ] Searching for key (ret -1)\n");
 		result++;
 	}
-	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE) != 0){
+	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE * (1 << PAGE_ORDER)) != 0){
 //		printk("[ FAIL ] Searching for key\n");
 //		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
 		result++;
 	}
 
-	if (result == 0)
-		printk("[ PASS ] %s succeeds\n", __func__);
-	else
-		printk("[ FAIL ] %d key failed\n", result);
+	if (result == 0) {
+		ret = 0;
+	} else {
+		ret = result;
+	}
 
 	complete(my_data->comp);
+	my_data->ret = ret;
 
-	return 0;
+	return ret;
 }
 
 int rdpma_read_message_test(void* arg){
@@ -132,26 +148,32 @@ int rdpma_read_message_test(void* arg){
 	int tid = my_data->tid;
 	int nfailed = 0;
 	long longkey;
+	int status;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
 
 		longkey = get_longkey(key, index);
-		ret = rdpma_get(return_page[tid], longkey);
+		ret = rdpma_get(return_page[tid], longkey, BATCH_SIZE);
 
-		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE) != 0){
+		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * BATCH_SIZE) != 0){
 //			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
 
-	if (nfailed == 0)
-		printk("[ PASS ] %s succeeds\n", __func__);
-	else
-		printk("[ FAIL ] failedSearch: %d\n", nfailed);
+	if (nfailed == 0) {
+//		printk("[ PASS ] %s succeeds\n", __func__);
+		ret = 0;
+	} else {
+//		printk("[ FAIL ] failedSearch: %d\n", nfailed);
+		ret = nfailed;
+	}
 
 	complete(my_data->comp);
-	return 0;
+	my_data->ret = ret;
+
+	return ret;
 }
 
 
@@ -159,12 +181,14 @@ int main(void){
 	int i;
 	ktime_t start, end;
 	uint64_t elapsed;
+	int ret = 0;
 	struct thread_data** args = (struct thread_data**)kmalloc(sizeof(struct thread_data*)*THREAD_NUM, GFP_KERNEL);
 
 	for(i = 0; i < THREAD_NUM; i++){
 		args[i] = (struct thread_data*)kmalloc(sizeof(struct thread_data), GFP_KERNEL);
 		args[i]->tid = i;
 		args[i]->comp = &comp[i];
+		args[i]->ret = 0;
 	}
 	pr_info("Start running write thread functions...\n");
 	start = ktime_get();
@@ -179,14 +203,25 @@ int main(void){
 	}
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
-	pr_info("[ PASS ] complete write thread functions: time( %llu ) usec", elapsed);
+
+	for(i=0; i<THREAD_NUM; i++){
+		ret += args[i]->ret;
+	}
+
+	if (ret == 0 )
+		pr_info("[ PASS ] complete write thread functions: time( %llu ) usec, %d failed", elapsed, ret);
+	else
+		pr_info("[ FAIL ] complete write thread functions: time( %llu ) usec, %d failed ", elapsed, ret);
+
 	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 	
-	ssleep(3);
+	ssleep(1);
 
+	ret = 0;
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
 		args[i]->comp = &comp[i];
+		args[i]->ret = 0;
 	}
 	pr_info("Start running read thread functions...\n");
 	start = ktime_get();
@@ -203,19 +238,33 @@ int main(void){
 
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
-	pr_info("[ PASS ] complete read thread functions: time( %llu ) usec", elapsed);
+
+	ret = 0;
+	for(i=0; i<THREAD_NUM; i++){
+		ret += args[i]->ret;
+	}
+
+	if (ret == 0 )
+		pr_info("[ PASS ] complete read thread functions: time( %llu ) usec, %d failed\n", elapsed, ret);
+	else
+		pr_info("[ FAIL ] complete read thread functions: time( %llu ) usec, %d failed \n", elapsed, ret);
+
 	pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 
-#if 0
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
 		args[i]->comp = &comp[i];
+		args[i]->ret = 0;
 	}
+
 	pr_info("Start running mixed thread functions...\n");
 	start = ktime_get();
 
-	for(i=0; i<THREAD_NUM; i++){
-//		read_threads[i] = kthread_create((void*)&rdpma_single_read_message_test, (void*)args[i], "page_reader");
+	for(i=0; i<THREAD_NUM/2; i++){
+		write_threads[i] = kthread_create((void*)&rdpma_write_message_test, (void*)args[i], "page_writer");
+		wake_up_process(write_threads[i]);
+	}
+	for(i=THREAD_NUM/2; i<THREAD_NUM; i++){
 		read_threads[i] = kthread_create((void*)&rdpma_read_message_test, (void*)args[i], "page_reader");
 		wake_up_process(read_threads[i]);
 	}
@@ -226,35 +275,25 @@ int main(void){
 
 	end = ktime_get();
 	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
-	pr_info("[ PASS ] complete mixed thread functions: time( %llu ) usec", elapsed);
-	pr_info("[ PASS ] Throughput: %.3f (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed*1000*1000.0));
-#endif
 
-	pmdfc_rdma_print_stat();
-
-	ssleep(3);
-
+	ret = 0;
 	for(i=0; i<THREAD_NUM; i++){
-		reinit_completion(&comp[i]);
-		args[i]->comp = &comp[i];
-	}
-#if 0
-	pr_info("Start running fail read thread functions...\n");
-	start = ktime_get();
-
-	for(i=0; i<THREAD_NUM; i++){
-		read_threads[i] = kthread_create((void*)&rdpma_single_read_message_test, (void*)args[i], "page_reader");
-		wake_up_process(read_threads[i]);
+		ret += args[i]->ret;
 	}
 
-	for(i=0; i<THREAD_NUM; i++){
-		wait_for_completion(&comp[i]);
-	}
+	if (ret == 0 )
+		pr_info("[ PASS ] complete mixed thread functions: time( %llu ) usec, %d failed\n", elapsed, ret);
+	else
+		pr_info("[ FAIL ] complete mixed thread functions: time( %llu ) usec, %d failed\n", elapsed, ret);
 
-	end = ktime_get();
-	elapsed = ((u64)ktime_to_ns(ktime_sub(end, start)) / 1000);
-	pr_info("[ PASS ] complete fail read thread functions: time( %llu ) usec", elapsed);
-#endif
+	if ( elapsed / 1000/ 1000 != 0)
+		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
+	else 
+		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
+
+//	pmdfc_rdma_print_stat();
+
+	ssleep(1);
 
 	for(i=0; i<THREAD_NUM; i++){
 		kfree(args[i]);
@@ -288,7 +327,7 @@ int init_pages(void){
 	}
 
 	for(i=0; i<THREAD_NUM; i++){
-		return_page[i] = alloc_pages(GFP_KERNEL, 0);
+		return_page[i] = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 		if(!return_page[i]){
 			printk(KERN_ALERT "return page[%d] allocation failed\n", i);
 			goto ALLOC_ERR;
@@ -307,7 +346,7 @@ int init_pages(void){
 			goto ALLOC_ERR;
 		}
 		for(j=0; j<ITERATIONS; j++){
-			vpages[i][j] = alloc_pages(GFP_KERNEL, 0);
+			vpages[i][j] = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 			if(!vpages[i][j]){
 				printk(KERN_ALERT "vpages[%d][%d] allocation failed\n", i, j);
 				goto ALLOC_ERR;
@@ -385,14 +424,14 @@ static int __init init_test_module(void){
 	int ret = 0;
 
 	show_test_info();
-	ssleep(3);
+	ssleep(1);
 
 	ret = init_pages();
 	if(ret){
 		printk(KERN_ALERT "module initialization failed\n");
 		return -1;
 	}
-	ssleep(3);
+	ssleep(1);
 
 	ret = main();
 	if(ret){

@@ -121,7 +121,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
     
 	longkey = get_longkey((long)oid.oid[0], index);
-	ret = rdpma_put(page, longkey);
+	ret = rdpma_put(page, longkey, 1);
     
     if (put_cnt % SAMPLE_RATE == 0) {
         pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
@@ -191,7 +191,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 				(long)oid.oid[0], index, longkey);
 	}
 	/* send Address of page */
-	ret = rdpma_get(page, longkey);
+	ret = rdpma_get(page, longkey, 1);
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;

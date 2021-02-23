@@ -159,7 +159,7 @@ static int rdpma_nsw_completed(struct rdpma_node *nn,
  * Don't touch the page with cpu after creating the request for it!
  * Deallocates the request if there was an error */
 static inline int get_req_for_page(struct rdma_req **req, struct ib_device *dev,
-		struct page *page, enum dma_data_direction dir)
+		struct page *page, int batch, enum dma_data_direction dir)
 {
 	int ret;
 
@@ -174,7 +174,7 @@ static inline int get_req_for_page(struct rdma_req **req, struct ib_device *dev,
 	(*req)->page = page;
 	init_completion(&(*req)->done);
 
-	(*req)->dma = ib_dma_map_page(dev, page, 0, PAGE_SIZE, dir);
+	(*req)->dma = ib_dma_map_page(dev, page, 0, PAGE_SIZE * batch, dir);
 	if (unlikely(ib_dma_mapping_error(dev, (*req)->dma))) {
 		pr_err("[ FAIL ] ib_dma_mapping_error\n");
 		ret = -ENOMEM;
@@ -182,7 +182,7 @@ static inline int get_req_for_page(struct rdma_req **req, struct ib_device *dev,
 		goto out;
 	}
 
-	ib_dma_sync_single_for_device(dev, (*req)->dma, PAGE_SIZE, dir);
+	ib_dma_sync_single_for_device(dev, (*req)->dma, PAGE_SIZE * batch, dir);
 out:
 	return ret;
 }
@@ -262,7 +262,7 @@ int post_recv(struct rdma_queue *q){
 /** rdpma_put - put page into server
  *
  */
-int rdpma_put(struct page *page, uint64_t key)
+int rdpma_put(struct page *page, uint64_t key, int batch)
 {
 	struct rdma_queue *q;
 	struct rdma_req *req[2];
@@ -270,7 +270,7 @@ int rdpma_put(struct page *page, uint64_t key)
 	struct ib_sge sge[2];
 	int ret, inflight;
 	uint32_t imm;
-	uint64_t *key_ptr;
+	struct rdpma_metadata *meta;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
@@ -292,12 +292,7 @@ int rdpma_put(struct page *page, uint64_t key)
 		pr_info_ratelimited("[ WARN ] back pressure writes");
 	}
 
-	/* thi msg_id is unique in this queue */
-	spin_lock(&q->queue_lock);
-	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
-	spin_unlock(&q->queue_lock);
-
-	BUG_ON(msg_id >= 64);
+	msg_id = 0;
 
 	/* 1. post recv */
 	ret = post_recv(q);
@@ -305,33 +300,34 @@ int rdpma_put(struct page *page, uint64_t key)
 
 	/* 2. post send */
 	/* setup imm data */
-	imm = htonl(bit_mask(num, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
+	imm = htonl(bit_mask(batch, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
-	key_ptr = kzalloc(sizeof(u64), GFP_ATOMIC);
-	*key_ptr = key;
+	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	meta->key = key;
+	meta->batch = batch;
 
 	/* DMA PAGE */
-	ret = get_req_for_page(&req[0], dev, page, DMA_TO_DEVICE);
+	ret = get_req_for_page(&req[0], dev, page, batch, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
-	sge[0].length = PAGE_SIZE;
+	sge[0].length = PAGE_SIZE * batch;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* DMA KEY */
-	ret = get_req_for_buf(&req[1], dev, key_ptr, sizeof(uint64_t), DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[1], dev, meta, sizeof(uint64_t), DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = sizeof(uint64_t);
+	sge[1].length = sizeof(struct rdpma_metadata);
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -379,8 +375,8 @@ int rdpma_put(struct page *page, uint64_t key)
 	}
 
 	atomic_dec(&q->pending);
-	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE, DMA_TO_DEVICE); /* XXX for test */
-	ib_dma_unmap_page(dev, req[1]->dma, sizeof(uint64_t), DMA_TO_DEVICE); /* XXX for test */
+	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE * batch, DMA_TO_DEVICE); /* XXX for test */
+	ib_dma_unmap_page(dev, req[1]->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE); /* XXX for test */
 	kmem_cache_free(req_cache, req[0]);
 	kmem_cache_free(req_cache, req[1]);
 
@@ -403,11 +399,9 @@ int rdpma_put(struct page *page, uint64_t key)
 		return 1;
 	}
 
-//	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
 #endif
 
 out:
-	idr_remove(&q->queue_status_idr, msg_id);
 
 	return ret;
 }
@@ -417,7 +411,7 @@ EXPORT_SYMBOL_GPL(rdpma_put);
  *
  * return -1 if failed
  */
-int rdpma_get(struct page *page, uint64_t key)
+int rdpma_get(struct page *page, uint64_t key, int batch)
 {
 	struct rdma_queue *q;
 	struct ib_device *dev;
@@ -443,11 +437,7 @@ int rdpma_get(struct page *page, uint64_t key)
 	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_READ_SYNC);
 	dev = q->ctrl->rdev->dev;
 
-	/* thi msg_id is unique in this queue */
-	spin_lock(&q->queue_lock);
-	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
-	spin_unlock(&q->queue_lock);
-
+	msg_id = 0;
 	BUG_ON(msg_id >= 64);
 
 #ifdef KTIME_CHECK
@@ -468,7 +458,7 @@ int rdpma_get(struct page *page, uint64_t key)
 #endif
 
 	/* setup imm data */
-	imm = htonl(bit_mask(0, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
+	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
 
 	/* get dma address by queue_id and msg_id */
 	dma_addr = (uint64_t)GET_LOCAL_META_REGION(gctrl->rdev->local_dma_addr, queue_id, msg_id);
@@ -479,20 +469,22 @@ int rdpma_get(struct page *page, uint64_t key)
 
 	/* First 8byte for key */
 	*addr = key;
+	*(addr + 1) = dma_addr;
+	*(addr + 2) = batch;
 
 	/* DMA Page and write dma address to server */
-	page_dma = ib_dma_map_page(dev, page, 0, PAGE_SIZE, DMA_BIDIRECTIONAL);
+	page_dma = ib_dma_map_page(dev, page, 0, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
 	if (unlikely(ib_dma_mapping_error(dev, page_dma))) {
 		pr_err("[ FAIL ] ib_dma_mapping_error\n");
 		ret = -ENOMEM;
 		return -1;
 	}
-	ib_dma_sync_single_for_device(dev, page_dma, PAGE_SIZE, DMA_BIDIRECTIONAL);
+	ib_dma_sync_single_for_device(dev, page_dma, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
 //	pr_info("[ INFO ] ib_dma_map_page { page_dma=%lx }\n", page_dma);
 	BUG_ON(page_dma == 0);
 
 	/* Next 8 byte for page_dma address */
-	*raddr = page_dma;
+//	*raddr = page_dma;
 //	pr_info("[ INFO ] WRITE { key=%llx, page_dma=%llx }\n", *addr, *raddr);
 //	pr_info("[ INFO ] Write to remote_addr= %llx\n", q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id));
 
@@ -587,7 +579,7 @@ int rdpma_get(struct page *page, uint64_t key)
 #endif
 
 	sge.addr = page_dma;
-	sge.length = PAGE_SIZE;
+	sge.length = PAGE_SIZE * batch;
 	sge.lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	rdma_wr.wr.next    = NULL;
@@ -623,7 +615,7 @@ int rdpma_get(struct page *page, uint64_t key)
 	fperf_end("rdma_read");
 #endif
 out:
-	ib_dma_unmap_page(dev, page_dma, PAGE_SIZE, DMA_BIDIRECTIONAL);
+	ib_dma_unmap_page(dev, page_dma, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
 
 	idr_remove(&q->queue_status_idr, msg_id);
 

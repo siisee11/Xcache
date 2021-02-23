@@ -10,6 +10,8 @@
 #include "util/hash.h"
 #include "CCEH_hybrid.h"
 
+#define EXTENT_MAX_HEIGHT 30
+
 using namespace std;
 extern size_t perfCounter;
 
@@ -84,6 +86,24 @@ CCEH::CCEH(size_t initCap)
 
 CCEH::~CCEH(void)
 { }
+
+void CCEH::Insert_extent(Key_t key ,Value_t value, uint64_t len){
+	printf("Key:%ld, len:%ld\n", key, len);
+	if(len == 0) return;
+	uint64_t head = key;
+	if(len == 1){
+		Insert(key, value);
+		Insert_extent(key+1, value, len-1);
+		return;
+	}
+	unsigned int cover_range = 1UL << (ffs(head)-1);
+	if(cover_range == 0) cover_range = 1UL << EXTENT_MAX_HEIGHT;
+	while(cover_range > len)
+		cover_range >>=1;
+	Insert(key, value);
+	Insert_extent(head+cover_range, value, len-cover_range);
+	return;
+}
 
 void CCEH::Insert(Key_t& key, Value_t value) {
 	auto key_hash = h(&key, sizeof(key));
@@ -296,6 +316,19 @@ bool CCEH::Delete(Key_t& key) {
 
 int CCEH::GetNodeID(Key_t& key) {
 	return 0;
+}
+
+Value_t CCEH::Get_extent(Key_t& key){
+	int prev = -1;
+	Value_t result = NONE;
+	for(int h=0; h<EXTENT_MAX_HEIGHT; h++){
+		Key_t target = key-(key % (1<<h));
+		if(target == prev) continue;
+		prev = target;
+		result = Get(target);
+		if(result) return result;
+	}
+	return NONE;
 }
 
 Value_t CCEH::Get(Key_t& key) {

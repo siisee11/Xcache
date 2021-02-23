@@ -177,9 +177,11 @@ class CCEH : public IHash {
 
 	int GetNodeID(Key_t&);
 	void Insert(Key_t&, Value_t);
+	void Insert_extent(Key_t, Value_t, uint64_t);
     bool InsertOnly(Key_t&, Value_t);
     bool Delete(Key_t&);
     Value_t Get(Key_t&);
+	Value_t Get_extent(Key_t&);
     Value_t FindAnyway(Key_t&);
 
     double Utilization(void);
