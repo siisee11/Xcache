@@ -23,6 +23,7 @@
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
 #define PMDFC_BLOOM_FILTER 1 
+#define PMDFC_TIME_CHECK 1
 
 //#define PMDFC_DEBUG 1
 
@@ -85,6 +86,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	int ret = -1;
 	uint64_t longkey;
 
+#ifdef PMDFC_TIME_CHECK
+	fperf_start("put_page");
+#endif
+
 #if defined(PMDFC_BLOOM_FILTER)
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
@@ -127,11 +132,18 @@ static void pmdfc_cleancache_put_page(int pool_id,
     if (put_cnt % SAMPLE_RATE == 0) {
         pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
                 (long)oid.oid[0], index, longkey);
+#ifdef PMDFC_TIME_CHECK
+		fperf_print("put_page");
+#endif
     }
     put_cnt++;
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
+#endif
+
+#ifdef PMDFC_TIME_CHECK
+		fperf_end("put_page");
 #endif
 
 #endif /* PMDFC_PUT */
@@ -147,6 +159,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	int ret;
 
     long longkey = 0;
+
+#ifdef PMDFC_TIME_CHECK
+	fperf_start("get_page");
+#endif
 
 #if defined(PMDFC_BLOOM_FILTER)
 	bool isIn = false;
@@ -190,6 +206,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	if (get_cnt % SAMPLE_RATE == 0) {
 		pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
 				(long)oid.oid[0], index, longkey);
+
+#ifdef PMDFC_TIME_CHECK
+		fperf_print("get_page");
+#endif
 	}
 	/* send Address of page */
 	ret = rdpma_get(page, longkey, 1);
@@ -199,6 +219,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: GET PAGE success\n");
+#endif
+
+#ifdef PMDFC_TIME_CHECK
+	fperf_end("get_page");
 #endif
 
 	return 0;

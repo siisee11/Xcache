@@ -18,6 +18,8 @@
 #define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1024 * 128)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
+#define KTIME_CHECK 1
+
 struct page*** vpages;
 atomic_t failedSearch;
 struct completion* comp;
@@ -83,12 +85,24 @@ int rdpma_write_message_test(void* arg){
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
 		longkey = get_longkey(key, index);
+
+#ifdef KTIME_CHECK
+		fperf_start("rdpma_put");
+#endif
 		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE);
+#ifdef KTIME_CHECK
+		fperf_end("rdpma_put");
+#endif
 		if (ret != 0)
 			failed++;
 	}
 
 	complete(my_data->comp);
+
+
+#ifdef KTIME_CHECK
+	fperf_print("rdpma_put");
+#endif
 
 	if (failed == 0) {
 		ret = 0;
@@ -97,6 +111,7 @@ int rdpma_write_message_test(void* arg){
 	}
 
 	my_data->ret = ret;
+
 
 	return ret;
 }
@@ -112,18 +127,18 @@ int rdpma_single_read_message_test(void* arg){
 	int status;
 
 	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
-	test_string = kzalloc(PAGE_SIZE * (1 << PAGE_ORDER), GFP_KERNEL);
+	test_string = kzalloc(PAGE_SIZE * BATCH_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
 	longkey = get_longkey(key, index);
 	
-	ret = rdpma_get(test_page, longkey, (1 << PAGE_ORDER));
+	ret = rdpma_get(test_page, longkey, BATCH_SIZE);
 
 	if (ret == -1){
 		printk("[ FAIL ] Searching for key (ret -1)\n");
 		result++;
 	}
-	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE * (1 << PAGE_ORDER)) != 0){
+	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE * BATCH_SIZE) != 0){
 //		printk("[ FAIL ] Searching for key\n");
 //		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
 		result++;
@@ -154,7 +169,13 @@ int rdpma_read_message_test(void* arg){
 		key = keys[tid][i];
 
 		longkey = get_longkey(key, index);
+#ifdef KTIME_CHECK
+		fperf_start("rdpma_get");
+#endif
 		ret = rdpma_get(return_page[tid], longkey, BATCH_SIZE);
+#ifdef KTIME_CHECK
+		fperf_end("rdpma_get");
+#endif
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * BATCH_SIZE) != 0){
 //			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
@@ -172,6 +193,10 @@ int rdpma_read_message_test(void* arg){
 
 	complete(my_data->comp);
 	my_data->ret = ret;
+
+#ifdef KTIME_CHECK
+	fperf_print("rdpma_get");
+#endif
 
 	return ret;
 }

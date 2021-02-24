@@ -53,6 +53,8 @@ int notfound_cnt = 0;
 
 /* performance timer */
 uint64_t rdpma_handle_write_elapsed=0;
+uint64_t rdpma_handle_write_malloc_elapsed=0;
+uint64_t rdpma_handle_write_memcpy_elapsed=0;
 uint64_t rdpma_handle_write_poll_elapsed=0;
 uint64_t rdpma_handle_read_elapsed=0;
 uint64_t rdpma_handle_read_poll_elapsed=0;
@@ -109,8 +111,10 @@ static void rdpma_print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("Write: %.3f (us), Read: %.3f (us)\n",
+	printf("Write: %.3f (malloc: %.3f, memcpy: %.3f) (us), Read: %.3f (us)\n",
 			rdpma_handle_write_elapsed/putcnt/1000.0,
+			rdpma_handle_write_malloc_elapsed/putcnt/1000.0,
+			rdpma_handle_write_memcpy_elapsed/putcnt/1000.0,
 			rdpma_handle_read_elapsed/getcnt/1000.0);
 	printf("(Poll) Write: %.3f (us), Read: %.3f [%.3f / %.3f](us)\n",
 			rdpma_handle_write_poll_elapsed/putcnt/1000.0,
@@ -200,16 +204,25 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			if(type == MSG_WRITE){
 				putcnt++;
 
+
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
+				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
-				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
-				void *save_page = malloc(PAGE_SIZE);
-				memcpy((char *)save_page, (char *)page, PAGE_SIZE);
+				void *save_page = malloc(PAGE_SIZE * num);
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &end);
+				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+				memcpy((char *)save_page, (char *)page, PAGE_SIZE * num);
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &start);
+				rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+#endif
 
-//				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
-				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
+				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+//				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
 				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
 				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
@@ -269,8 +282,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				void* value;
 				bool abort = false;
 
-//				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
-				value = (void *)gctrl->kv->GetExtent((Key_t&)*key); 
+				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
+//				value = (void *)gctrl->kv->GetExtent((Key_t&)*key); 
 
 				if(!value){
 					dprintf("Value for key[%lx] not found\n", key);
