@@ -2,7 +2,6 @@
 #include <string.h> 
 #include "circular_queue.h"
 #include "util/atomic.h"
-#define QUEUE_SIZE 10000000
 
 static volatile unsigned long Eretry =0;
 static volatile unsigned long Dretry =0;

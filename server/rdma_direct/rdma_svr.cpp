@@ -15,10 +15,9 @@
 #include <infiniband/verbs.h>
 #include <getopt.h>
 
-
+#include "circular_queue.h"
 #include "rdma_svr.h"
 #include "variables.h"
-
 
 /* option values */
 int tcp_port = -1;
@@ -44,6 +43,8 @@ static unsigned int queue_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
+queue_t *prepage_queue = NULL;
+
 /* counting values */
 int putcnt = 0;
 int getcnt = 0;
@@ -60,6 +61,7 @@ uint64_t rdpma_handle_read_elapsed=0;
 uint64_t rdpma_handle_read_poll_elapsed=0;
 uint64_t rdpma_handle_read_poll_notfound_elapsed=0;
 uint64_t rdpma_handle_read_poll_found_elapsed=0;
+uint64_t rdpma_handle_read_poll_found_memcpy_elapsed=0;
 
 #ifdef APP_DIRECT
 static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
@@ -116,10 +118,11 @@ static void rdpma_print_stats() {
 			rdpma_handle_write_malloc_elapsed/putcnt/1000.0,
 			rdpma_handle_write_memcpy_elapsed/putcnt/1000.0,
 			rdpma_handle_read_elapsed/getcnt/1000.0);
-	printf("(Poll) Write: %.3f (us), Read: %.3f [%.3f / %.3f](us)\n",
+	printf("(Poll) Write: %.3f (us), Read: %.3f [%.3f(memcpy: %.3f) / %.3f](us)\n",
 			rdpma_handle_write_poll_elapsed/putcnt/1000.0,
 			(rdpma_handle_read_poll_found_elapsed + rdpma_handle_read_poll_notfound_elapsed)/getcnt/1000.0,
 			rdpma_handle_read_poll_found_elapsed/found_cnt/1000.0,
+			rdpma_handle_read_poll_found_memcpy_elapsed/found_cnt/1000.0,
 			rdpma_handle_read_poll_notfound_elapsed/notfound_cnt/1000.0);
 
 	gctrl->kv->PrintStats();
@@ -172,6 +175,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 	struct ibv_wc wc2;
 #if defined(TIME_CHECK)
 	struct timespec start, end;
+	struct timespec memcpy_start, memcpy_end;
 #endif
 
 	while(1) {
@@ -210,7 +214,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-				void *save_page = malloc(PAGE_SIZE * num);
+//				void *save_page = malloc(PAGE_SIZE * num);
+				void *save_page = dequeue(prepage_queue);
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &end);
 				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -301,7 +306,14 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					dprintf("[ INFO ] page %s\n", (char *)value);
 
 					/* 2. Send page retrieved to client so that client can initiate RDMA READ */	
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &memcpy_start);
+#endif
 					memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
+#if defined(TIME_CHECK)
+					clock_gettime(CLOCK_MONOTONIC, &memcpy_end);
+					rdpma_handle_read_poll_found_memcpy_elapsed+= memcpy_end.tv_nsec - memcpy_start.tv_nsec + 1000000000 * (memcpy_start.tv_sec - memcpy_end.tv_sec);
+#endif
 					dprintf("[ INFO ] page %s\n", (char *)target_addr);
 
 					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
@@ -536,7 +548,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 #if 0
 	if (queue_number == 0 ) {
-		dprintf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d max_cqe=%d max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", 
+		dprintf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d \nmax_cqe=%d max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", 
 				attrs.max_qp, 
 				attrs.max_qp_wr, attrs.max_cq, attrs.max_cqe, 
 				attrs.max_qp_rd_atom, attrs.max_qp_init_rd_atom);
@@ -546,13 +558,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	}
 #endif
 
-	// the following should hold for initiator_depth:
-	// initiator_depth <= max_qp_init_rd_atom, and
-	// initiator_depth <= param->initiator_depth
 	cm_params.initiator_depth = param->initiator_depth;
-	// the following should hold for responder_resources:
-	// responder_resources <= max_qp_rd_atom, and
-	// responder_resources >= param->responder_resources
 	cm_params.responder_resources = param->responder_resources;
 	cm_params.rnr_retry_count = param->rnr_retry_count;
 	cm_params.flow_control = param->flow_control;
@@ -752,6 +758,13 @@ int main(int argc, char **argv)
 	}
 
 	nr_cpus = std::thread::hardware_concurrency();
+
+	/* Pre Malloced Page Queue */
+	prepage_queue = create_queue("prepage");
+	for (int i = 0 ; i < QUEUE_SIZE - 1; i++ ) {
+		enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
+	}
+	dprintf("[  OK  ] Prepage Queue alloced\n");
 
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(tcp_port);

@@ -93,7 +93,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
     struct ht_data *tmp;
 
 #ifdef PMDFC_TIME_CHECK
-	fperf_start("put_page");
+	ktime_t start = ktime_get();
 #endif
 
 #if defined(PMDFC_BLOOM_FILTER)
@@ -160,7 +160,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 #endif
 
 #ifdef PMDFC_TIME_CHECK
-		fperf_end("put_page");
+	fperf_save("put_page", ktime_to_ns(ktime_sub(ktime_get(), start)));
 #endif
 
 #endif /* PMDFC_PUT */
@@ -180,7 +180,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
     atomic_t found = ATOMIC_INIT(0);
 
 #ifdef PMDFC_TIME_CHECK
-	fperf_start("get_page");
+	ktime_t start = ktime_get();
 #endif
 
 #if defined(PMDFC_BLOOM_FILTER)
@@ -256,7 +256,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #endif
 
 #ifdef PMDFC_TIME_CHECK
-	fperf_end("get_page");
+	fperf_save("get_page", ktime_to_ns(ktime_sub(ktime_get(), start)));
 #endif
 
 	return 0;

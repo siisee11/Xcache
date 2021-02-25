@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include "util/common.h"
 
+#define QUEUE_SIZE 10000000
+
 //#define CAS(_p, _u, _v) (__sync_bool_compare_and_swap (_p, _u, _v))
 
 /************************************************************
