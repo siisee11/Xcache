@@ -111,7 +111,7 @@ static void rdpma_print_stats() {
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
-	printf("Write: %.3f (malloc: %.3f, memcpy: %.3f) (us), Read: %.3f (us)\n",
+	printf("Write[insert: %.3f ,malloc: %.3f, memcpy: %.3f] (us), Read: %.3f (us)\n",
 			rdpma_handle_write_elapsed/putcnt/1000.0,
 			rdpma_handle_write_malloc_elapsed/putcnt/1000.0,
 			rdpma_handle_write_memcpy_elapsed/putcnt/1000.0,
