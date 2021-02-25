@@ -16,6 +16,7 @@
 #include "tmem.h"
 #include "bloom_filter.h"
 #include "pmdfc.h"
+#include "timeperf.h"
 
 #include "rdma_op.h"
 #include "rdma_conn.h"
@@ -26,6 +27,7 @@
 #define PMDFC_REMOTIFY 1
 //#define PMDFC_BUFFERING 1
 #define PMDFC_NETWORK 1
+#define PMDFC_TIME_CHECK 1
 
 //#define PMDFC_DEBUG 1
 
@@ -90,6 +92,10 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	int ret = -1;
     struct ht_data *tmp;
 
+#ifdef PMDFC_TIME_CHECK
+	fperf_start("put_page");
+#endif
+
 #if defined(PMDFC_BLOOM_FILTER)
 	unsigned char *data = (unsigned char*)&key;
 	unsigned char *idata = (unsigned char*)&index;
@@ -143,11 +149,18 @@ static void pmdfc_cleancache_put_page(int pool_id,
     if (put_cnt % SAMPLE_RATE == 0) {
         pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%lld, roffset=%lld\n",
                 (long)oid.oid[0], index, tmp->longkey, tmp->roffset);
+#ifdef PMDFC_TIME_CHECK
+		fperf_print("put_page");
+#endif
     }
     put_cnt++;
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
+#endif
+
+#ifdef PMDFC_TIME_CHECK
+		fperf_end("put_page");
 #endif
 
 #endif /* PMDFC_PUT */
@@ -165,6 +178,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
     long longkey = 0, roffset = 0;
     struct ht_data *cur;
     atomic_t found = ATOMIC_INIT(0);
+
+#ifdef PMDFC_TIME_CHECK
+	fperf_start("get_page");
+#endif
 
 #if defined(PMDFC_BLOOM_FILTER)
 	bool isIn = false;
@@ -224,6 +241,9 @@ static int pmdfc_cleancache_get_page(int pool_id,
 			pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld, roffset=%ld\n",
 					(long)oid.oid[0], index, longkey, roffset);
 
+#ifdef PMDFC_TIME_CHECK
+			fperf_print("get_page");
+#endif
 		}
 		ret = pmdfc_rdma_read_sync(page, roffset); 
 		get_cnt++;
@@ -233,6 +253,10 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 #if defined(PMDFC_DEBUG)
 	printk(KERN_INFO "pmdfc: GET PAGE success\n");
+#endif
+
+#ifdef PMDFC_TIME_CHECK
+	fperf_end("get_page");
 #endif
 
 	return 0;
