@@ -16,6 +16,7 @@ all:
 	$(CXX) $(CFLAGS) -c -o NuMA_KV.o NuMA_KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
 	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
 	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK
+	$(CXX) $(CFLAGS) -o rdma_svr_odp rdma_svr_odp.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DODP
 
 rdma_dram:
 	#numactl -N 0,1 -m 0,1 ./rdma_svr -t 7777

@@ -39,7 +39,7 @@ static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 }
 
 static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* state, int* qid){
-	*qid = (uint32_t)(target & 0x000000ff);
+	*qid = (int)(target & 0x000000ff);
 	*state = (int)((target >> 8) & 0x0000000f);
 	*type = (int)((target >> 12) & 0x0000000f);
 	*msg_num = (int)((target >> 16) & 0x00000fff);
@@ -61,20 +61,39 @@ EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 
 static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 {
-  struct rdma_req *req =
-    container_of(wc->wr_cqe, struct rdma_req, cqe);
-  struct rdma_queue *q = cq->cq_context;
-  struct ib_device *ibdev = q->ctrl->rdev->dev;
+	struct rdma_req *req =
+		container_of(wc->wr_cqe, struct rdma_req, cqe);
+	struct rdma_queue *q = cq->cq_context;
+	struct ib_device *ibdev = q->ctrl->rdev->dev;
+	int qid, mid, type, tx_state, num;
 
-  if (unlikely(wc->status != IB_WC_SUCCESS)) {
-    pr_err("rdpma_rdma_write_done status is not success, it is=%d\n", wc->status);
-    //q->write_error = wc->status;
-  }
-  ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
+	if (unlikely(wc->status != IB_WC_SUCCESS)) {
+		pr_err("rdpma_rdma_write_done status is not success, it is=%d\n", wc->status);
+		//q->write_error = wc->status;
+	}
+	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
 
-//  pr_info_ratelimited("rdpma_rdma_write_done\n");
-  atomic_dec(&q->pending);
-  kmem_cache_free(req_cache, req);
+	 pr_info_ratelimited("rdpma_rdma_write_done\n");
+	idr_remove(&q->queue_status_idr, req->mid);
+	atomic_dec(&q->pending);
+	kmem_cache_free(req_cache, req);
+}
+
+static void rdpma_rdma_write_done_meta(struct ib_cq *cq, struct ib_wc *wc)
+{
+	struct rdma_req *req =
+		container_of(wc->wr_cqe, struct rdma_req, cqe);
+	struct rdma_queue *q = cq->cq_context;
+	struct ib_device *ibdev = q->ctrl->rdev->dev;
+
+	if (unlikely(wc->status != IB_WC_SUCCESS)) {
+		pr_err("rdpma_rdma_write_done_meta status is not success, it is=%d\n", wc->status);
+		//q->write_error = wc->status;
+	}
+	ib_dma_unmap_page(ibdev, req->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
+
+	atomic_dec(&q->pending);
+	kmem_cache_free(req_cache, req);
 }
 
 /* allocates a pmdfc rdma request, creates a dma mapping for it in
@@ -203,6 +222,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_wc wc;
 	int ne = 0;
 	int cpuid = smp_processor_id();
+	uint64_t *dma_addr;
 
 	/* get q and its infomation */
 	q = pmdfc_rdma_get_queue(cpuid, QP_WRITE_SYNC);
@@ -218,7 +238,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	}
 #endif
 
-	msg_id = 0;
+	/* thi msg_id is unique in this queue */
+	spin_lock(&q->queue_lock);
+	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
+	spin_unlock(&q->queue_lock);
 
 	/* 1. post recv */
 	ret = post_recv(q);
@@ -239,6 +262,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	if (unlikely(ret))
 		return ret;
 
+	req[0]->mid = msg_id;
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
@@ -248,9 +272,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
 	/* DMA KEY */
-	ret = get_req_for_buf(&req[1], dev, meta, sizeof(uint64_t), DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
+	req[1]->cqe.done = rdpma_rdma_write_done_meta;
 
 	BUG_ON(req[1]->dma == 0);
 
@@ -260,59 +285,27 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
 	 * to just post requests in batches */
-	/* WRITE PAGE */
-	rdma_wr[0].wr.next    = &rdma_wr[1].wr;
-	rdma_wr[0].wr.sg_list = &sge[0];
-	rdma_wr[0].wr.num_sge = 1;
-	rdma_wr[0].wr.opcode  = IB_WR_RDMA_WRITE;
-	rdma_wr[0].wr.send_flags = 0;
-	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
-	rdma_wr[0].remote_addr = q->ctrl->servermr.baseaddr + GET_PAGE_OFFSET_FROM_BASE(queue_id, msg_id);
-	rdma_wr[0].rkey = q->ctrl->servermr.key;
+
 
 	/* WRITE KEY */
 	rdma_wr[1].wr.next    = NULL;
 	rdma_wr[1].wr.sg_list = &sge[1];
 	rdma_wr[1].wr.num_sge = 1;
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
-	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
+	rdma_wr[1].wr.send_flags = 0;
+//	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
+//	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; /* XXX: rdpma_rdma_write_done_meta cause error */
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
 
 	atomic_inc(&q->pending);
-	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
+	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
 
-#if 0
-	/* send queue polling */
-	do{
-		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
-		}
-	}while(ne < 1);
-
-	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
-	}
-
-	atomic_dec(&q->pending);
-	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE * batch, DMA_TO_DEVICE); /* XXX for test */
-	ib_dma_unmap_page(dev, req[1]->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE); /* XXX for test */
-	kmem_cache_free(req_cache, req[0]);
-	kmem_cache_free(req_cache, req[1]);
-
-#endif
-
-
-#if 1
 	/* Polling recv cq here */
 	do{
 		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
@@ -327,7 +320,25 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		return 1;
 	}
 
-#endif
+	/* WRITE PAGE directly to given address */
+	dma_addr = (uint64_t *)GET_REMOTE_ADDRESS_BASE(gctrl->rdev->local_mm, queue_id, msg_id);
+	pr_info("[ INFO ] dma_addr from server= %llx (qid=%d, mid=%d)\n", *dma_addr, queue_id, msg_id);
+
+	/* WRITE PAGE */
+	rdma_wr[0].wr.next    = NULL;
+	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
+	rdma_wr[0].wr.sg_list = &sge[0];
+	rdma_wr[0].wr.num_sge = 1;
+	rdma_wr[0].wr.opcode  = IB_WR_RDMA_WRITE;
+	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED;
+	rdma_wr[0].remote_addr = *dma_addr;
+	rdma_wr[0].rkey = q->ctrl->servermr.key;
+
+	atomic_inc(&q->pending);
+	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
+	if (unlikely(ret)) {
+		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+	}
 
 out:
 
@@ -696,8 +707,8 @@ static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
 	init_attr.event_handler = pmdfc_rdma_qp_event;
 	init_attr.cap.max_send_wr = QP_MAX_SEND_WR;
 	init_attr.cap.max_recv_wr = QP_MAX_RECV_WR;
-	init_attr.cap.max_recv_sge = 2; /* XXX */
-	init_attr.cap.max_send_sge = 2; /* XXX */
+	init_attr.cap.max_recv_sge = 1; /* XXX */
+	init_attr.cap.max_send_sge = 1; /* XXX */
 	init_attr.sq_sig_type = IB_SIGNAL_REQ_WR;
 	init_attr.qp_type = IB_QPT_RC;
 	init_attr.send_cq = queue->send_cq;

@@ -51,6 +51,7 @@ int getcnt = 0;
 int found_cnt = 0;
 int notfound_cnt = 0;
 
+
 /* performance timer */
 uint64_t rdpma_handle_write_elapsed=0;
 uint64_t rdpma_handle_write_malloc_elapsed=0;
@@ -170,8 +171,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 //	int cpu = sched_getcpu();
 //	int thisNode = numa_node_of_cpu(cpu);
 	struct ibv_wc wc;
-	int ne;
 	struct ibv_wc wc2;
+	int ne;
 #if defined(TIME_CHECK)
 	struct timespec start, end;
 	struct timespec memcpy_start, memcpy_end;
@@ -194,22 +195,21 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 
 		int ret;
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
-			int qid, msg_id, type, tx_state, num;
+			int qid, mid, type, tx_state, num;
 			struct ibv_send_wr wr = {};
 			struct ibv_send_wr *bad_wr = NULL;
 			struct ibv_sge sge = {};
 
-			bit_unmask(ntohl(wc.imm_data), &num, &msg_id, &type, &tx_state, &qid);
-			dprintf("[ INFO ] On Q[%d]: qid(%d), msg_id(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
+			bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
+			dprintf("[ INFO ] On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
 
 			post_recv(queue_id);
 
 			if(type == MSG_WRITE){
 				putcnt++;
 
-
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
-				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, mid);
+				
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
@@ -219,40 +219,37 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				clock_gettime(CLOCK_MONOTONIC, &end);
 				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
-				memcpy((char *)save_page, (char *)page, PAGE_SIZE * num);
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-#endif
 
 				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
 //				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
-				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
-				dprintf("[ INFO ] page %s\n", (char *)save_page);
-
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &end);
 				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
+				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)save_page, *key);
+//				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
-#if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
-				sge.addr = 0;
-				sge.length = 0;
+
+				sge.addr = (uint64_t)&save_page;
+				sge.length = sizeof(uint64_t);
 				sge.lkey = gctrl->mr_buffer->lkey;
 
 				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
 				wr.sg_list = &sge;
-				wr.num_sge = 0;
+				wr.num_sge = 1;
 				wr.send_flags = IBV_SEND_SIGNALED;
-				wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
+				wr.wr.rdma.remote_addr = gctrl->clientmr.baseaddr + GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid);
+				wr.wr.rdma.rkey        = gctrl->clientmr.key;
+				wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
 
 				ret = ibv_post_send(q->qp, &wr, &bad_wr);
 				if(ret){
 					fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 				}
 
-				struct ibv_wc wc2;
-				int ne;
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &end);
+#endif
 				do{
 					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
 					if(ne < 0){
@@ -269,7 +266,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
-#endif 
 			} else if(type == MSG_READ) {
 				getcnt++;
 #if defined(TIME_CHECK)
@@ -277,9 +273,9 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 #endif
 //				printf("[ INFO ] received MSG_READ\n");
 
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
-				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
-				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, mid);
+				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, mid);
+				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, mid);
 				dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
 
 				/* 1. Get page address -> value */
@@ -319,7 +315,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					wr.sg_list = &sge;
 					wr.num_sge = 0;
 					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
+					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
 
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
@@ -330,7 +326,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					wr.sg_list = &sge;
 					wr.num_sge = 0;
 					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_READ_ABORTED, qid));
+					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_ABORTED, qid));
 
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 				}
@@ -483,25 +479,25 @@ static void destroy_device(struct ctrl *ctrl)
 static void create_qp(struct queue *q)
 {
 	struct ibv_qp_init_attr qp_attr = {};
+
+	struct ibv_cq* send_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
+	if(!send_cq){
+		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
+	}
 	
     struct ibv_cq* recv_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
 	if(!recv_cq){
 		fprintf(stderr, "ibv_create_cq for recv_cq failed\n");
 	}
 
-	struct ibv_cq* send_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
-	if(!send_cq){
-		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
-	}
-
 	/* XXX */
-	qp_attr.send_cq = recv_cq;
-	qp_attr.recv_cq = send_cq;
+	qp_attr.send_cq = send_cq;
+	qp_attr.recv_cq = recv_cq;
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 10;
 	qp_attr.cap.max_recv_wr = 10;
-	qp_attr.cap.max_send_sge = 2; /* XXX */
-	qp_attr.cap.max_recv_sge = 2; /* XXX */
+	qp_attr.cap.max_send_sge = 1; 
+	qp_attr.cap.max_recv_sge = 1;
 
 	TEST_NZ(rdma_create_qp(q->cm_id, q->ctrl->dev->pd, &qp_attr));
 	q->qp = q->cm_id->qp;
@@ -599,8 +595,6 @@ int on_connection(struct queue *q)
 		sge.length = sizeof(servermr);
 
 		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-
-		// TODO: poll here XXX Where?????
 
 		/* XXX: GET CLIENT MR REGION */
 		sge.addr = (uint64_t) &ctrl->clientmr;
@@ -760,7 +754,7 @@ int main(int argc, char **argv)
 
 	/* Pre Malloced Page Queue */
 	prepage_queue = create_queue("prepage");
-	for (int i = 0 ; i < QUEUE_SIZE - 1; i++ ) {
+	for (int i = 0 ; i < 10000 - 1; i++ ) {
 		enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
 	}
 	dprintf("[  OK  ] Prepage Queue alloced\n");
