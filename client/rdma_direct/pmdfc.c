@@ -22,8 +22,9 @@
 
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
-#define PMDFC_BLOOM_FILTER 1 
-#define PMDFC_TIME_CHECK 1
+//#define PMDFC_BLOOM_FILTER 1 
+//#define PMDFC_TIME_CHECK 1
+#define PMDFC_HASHTABLE 1
 
 //#define PMDFC_DEBUG 1
 
@@ -31,7 +32,6 @@
 struct dentry *pmdfc_dentry; 
 #endif
 
-//#define PMDFC_HASHTABLE
 #ifdef PMDFC_HASHTABLE
 #define BITS 22 // 16GB=4KBx4x2^20
 #define NUM_PAGES (1UL << BITS)
@@ -45,7 +45,7 @@ extern long mr_free_end;
 
 static int rdma;
 //#define SAMPLE_RATE 10000 // Per-MB
-#define SAMPLE_RATE 10000
+#define SAMPLE_RATE 100000
 static long put_cnt, get_cnt;
 
 /* bloom filter */
@@ -82,6 +82,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 {
 #if defined(PMDFC_PUT)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
+	struct ht_data *tmp;
+    struct ht_data *cur;
 
 	int ret = -1;
 	uint64_t longkey;
@@ -110,7 +112,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	BUG_ON(oid.oid[1] != 0);
 	BUG_ON(oid.oid[2] != 0);
 
-
 	ret = bloom_filter_add(bf, data, 24);
 	if ( ret < 0 )
 		pr_info("bloom_filter add fail\n");
@@ -127,6 +128,20 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
     
 	longkey = get_longkey((long)oid.oid[0], index);
+
+
+#ifdef PMDFC_HASHTABLE
+    hash_for_each_possible(hash_head, cur, h_node, longkey) {
+        if (cur->longkey == longkey) {
+			goto exists;
+        }
+    }
+
+    tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
+    tmp->longkey = get_longkey((long)oid.oid[0], index);
+    hash_add(hash_head, &tmp->h_node, tmp->longkey);
+#endif
+
 	ret = rdpma_put(page, longkey, 1);
     
     if (put_cnt % SAMPLE_RATE == 0) {
@@ -147,6 +162,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 #endif
 
 #endif /* PMDFC_PUT */
+exists:
 	return;
 }
 
@@ -157,6 +173,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #if defined(PMDFC_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	int ret;
+    struct ht_data *cur;
 
     long longkey = 0;
 
@@ -202,6 +219,18 @@ static int pmdfc_cleancache_get_page(int pool_id,
     
     longkey = get_longkey((long)oid.oid[0], index);
 
+#ifdef PMDFC_HASHTABLE
+    hash_for_each_possible(hash_head, cur, h_node, longkey) {
+        if (cur->longkey == longkey) {
+			goto exists;
+        }
+    }
+
+	goto not_exists;
+
+exists:
+#endif /* PMDFC_HASHTABLE */
+
 	/* RDMA networking */
 	if (get_cnt % SAMPLE_RATE == 0) {
 		pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
@@ -211,15 +240,12 @@ static int pmdfc_cleancache_get_page(int pool_id,
 		fperf_print("get_page");
 #endif
 	}
+
 	/* send Address of page */
 	ret = rdpma_get(page, longkey, 1);
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;
-
-#if defined(PMDFC_DEBUG)
-	printk(KERN_INFO "pmdfc: GET PAGE success\n");
-#endif
 
 #ifdef PMDFC_TIME_CHECK
 	fperf_save("get_page", ktime_to_ns(ktime_sub(ktime_get(), start)));
@@ -229,6 +255,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 
 not_exists:
 #endif  /* defined(PMDFC_GET) */
+
 	return -1;
 }
 
@@ -238,27 +265,47 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 {
 #if defined(PMDFC_FLUSH)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
+    struct ht_data *cur;
 	int status;
 
 	bool isIn = false;
 
+#ifdef PMDFC_BLOOM_FILTER
 	/* hash input data */
 	unsigned char *data = (unsigned char*)&key;
 	data[0] += index;
 	
 	bloom_filter_check(bf, data, 8, &isIn);
 
-#if defined(PMDFC_DEBUG)
-	printk(KERN_INFO "pmdfc: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
-			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
+	if (!isIn) {
+		goto out;
+	}
 #endif
+
+#ifdef PMDFC_HASHTABLE
+    hash_for_each_possible(hash_head, cur, h_node, longkey) {
+        if (cur->longkey == longkey) {
+			isIn = true;
+			break;
+        }
+    }
 
 	if (!isIn) {
 		goto out;
 	}
 
+    hash_del(&cur->h_node);
+#endif
+
 	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, 0, 0,
 		   0, &status);
+
+#if defined(PMDFC_DEBUG)
+	printk(KERN_INFO "pmdfc: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
+			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
+#endif
+
+
 out:
 	return;
 #endif

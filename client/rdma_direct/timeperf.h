@@ -55,7 +55,6 @@ inline void fperf_end(const char * str) {
 
 inline void fperf_save(const char * str, ktime_t t) {
 	int i;
-	ktime_t now;
 	struct fperf *fpp = NULL;
 	for (i = 0; i < fperf_num; ++i) {
 		if(strcmp(fperf_arr[i].str, str) == 0) {

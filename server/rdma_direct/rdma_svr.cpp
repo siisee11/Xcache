@@ -208,7 +208,6 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			if(type == MSG_WRITE){
 				putcnt++;
 
-
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
 				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
 #if defined(TIME_CHECK)
@@ -312,7 +311,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 					memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
 #if defined(TIME_CHECK)
 					clock_gettime(CLOCK_MONOTONIC, &memcpy_end);
-					rdpma_handle_read_poll_found_memcpy_elapsed+= memcpy_end.tv_nsec - memcpy_start.tv_nsec + 1000000000 * (memcpy_start.tv_sec - memcpy_end.tv_sec);
+					rdpma_handle_read_poll_found_memcpy_elapsed+= memcpy_end.tv_nsec - memcpy_start.tv_nsec + 1000000000 * (memcpy_end.tv_sec - memcpy_start.tv_sec);
 #endif
 					dprintf("[ INFO ] page %s\n", (char *)target_addr);
 
@@ -761,7 +760,7 @@ int main(int argc, char **argv)
 
 	/* Pre Malloced Page Queue */
 	prepage_queue = create_queue("prepage");
-	for (int i = 0 ; i < QUEUE_SIZE - 1; i++ ) {
+	for (int i = 0 ; i < QUEUE_SIZE/1000 - 1; i++ ) {
 		enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
 	}
 	dprintf("[  OK  ] Prepage Queue alloced\n");
