@@ -38,8 +38,9 @@ struct bitmask *kvcpubuf;
 struct bitmask *pollcpubuf;
 
 /*  Global values */
-static struct ctrl *gctrl = NULL;
+static struct ctrl **gctrl = NULL;
 static unsigned int queue_ctr = 0;
+static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
@@ -89,17 +90,6 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 	*num= (int)((target >> 28) & 0x0000000f);
 }
 
-
-inline enum qp_type get_queue_type(unsigned int idx)
-{
-	if (idx < NUM_QUEUES / 2)
-		return QP_READ_SYNC;
-	else if (idx >= NUM_QUEUES /2)
-		return QP_WRITE_SYNC;
-
-	return QP_READ_SYNC;
-}
-
 static void rdpma_print_stats() {
 	printf("\n--------------------REPORT---------------------\n");
 //	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
@@ -125,7 +115,7 @@ static void rdpma_print_stats() {
 			rdpma_handle_read_poll_found_memcpy_elapsed/found_cnt/1000.0,
 			rdpma_handle_read_poll_notfound_elapsed/notfound_cnt/1000.0);
 
-	gctrl->kv->PrintStats();
+	gctrl[0]->kv->PrintStats();
 
 	printf("--------------------FIN------------------------\n");
 }
@@ -142,7 +132,7 @@ void rdpma_indicator() {
 
 
 /* FROM RDMA_SERVER.CPP */
-int post_recv(int queue_id){
+int post_recv(int client_id, int queue_id){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
 	struct ibv_sge sge;
@@ -152,21 +142,21 @@ int post_recv(int queue_id){
 
 	sge.addr = 0;
 	sge.length = 0;
-	sge.lkey = gctrl->mr_buffer->lkey;
+	sge.lkey = gctrl[client_id]->mr_buffer->lkey;
 
 	wr.wr_id = 0;
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 	wr.next = NULL;
 
-	if(ibv_post_recv(gctrl->queues[queue_id].qp, &wr, &bad_wr)){
+	if(ibv_post_recv(gctrl[client_id]->queues[queue_id].qp, &wr, &bad_wr)){
 		fprintf(stderr, "[%s] ibv_post_recv failed\n", __func__);
 		return 1;
 	}
 	return 0;
 }
 
-static void server_recv_poll_cq(struct queue *q, int queue_id) {
+static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 //	int cpu = sched_getcpu();
 //	int thisNode = numa_node_of_cpu(cpu);
@@ -203,13 +193,13 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 			bit_unmask(ntohl(wc.imm_data), &num, &msg_id, &type, &tx_state, &qid);
 			dprintf("[ INFO ] On Q[%d]: qid(%d), msg_id(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
 
-			post_recv(queue_id);
+			post_recv(client_id, queue_id);
 
 			if(type == MSG_WRITE){
 				putcnt++;
 
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
-				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl->local_mm, qid, msg_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, msg_id);
+				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl[client_id]->local_mm, qid, msg_id);
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
@@ -225,7 +215,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
 
-				gctrl->kv->Insert(*key, (Value_t)save_page, 0, 0);
+				gctrl[client_id]->kv->Insert(*key, (Value_t)save_page, 0, 0);
 //				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
 				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
 				dprintf("[ INFO ] page %s\n", (char *)save_page);
@@ -238,7 +228,7 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 #if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
 				sge.addr = 0;
 				sge.length = 0;
-				sge.lkey = gctrl->mr_buffer->lkey;
+				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
 
 				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
 				wr.sg_list = &sge;
@@ -277,16 +267,16 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 #endif
 //				printf("[ INFO ] received MSG_READ\n");
 
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl->local_mm, qid, msg_id);
-				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
-				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl->local_mm, qid, msg_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, msg_id);
+				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, msg_id);
+				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, msg_id);
 				dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
 
 				/* 1. Get page address -> value */
 				void* value;
 				bool abort = false;
 
-				value = (void *)gctrl->kv->Get((Key_t&)*key, 0); 
+				value = (void *)gctrl[client_id]->kv->Get((Key_t&)*key, 0); 
 //				value = (void *)gctrl->kv->GetExtent((Key_t&)*key); 
 
 				if(!value){
@@ -365,8 +355,8 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 		else if ( (int)wc.opcode == IBV_WC_RECV ){
 			/* only for first connection */
 			dprintf("[ INFO ] connected. receiving memory region info.\n");
-			printf("[ INFO ] *** Client MR key=%u base vaddr=%p size=%lu ***\n", gctrl->clientmr.key, (void *)gctrl->clientmr.baseaddr
-					, gctrl->clientmr.mr_size/1024);
+			printf("[ INFO ] *** Client MR key=%u base vaddr=%p size=%lu ***\n", gctrl[client_id]->clientmr.key, (void *)gctrl[client_id]->clientmr.baseaddr
+					, gctrl[client_id]->clientmr.mr_size/1024);
 		}else{
 			fprintf(stderr, "Received a weired opcode (%d)\n", (int)wc.opcode);
 		}
@@ -387,64 +377,14 @@ static device *get_device(struct queue *q)
 		TEST_Z(dev->pd);
 
 		struct ctrl *ctrl = q->ctrl;    
-#if APP_DIRECT
-		/*
-		   if (access(pm_path, 0)) {
-		   ctrl->pop = pmemobj_create(pm_path, POBJ_LAYOUT_NAME(PM_MR), BUFFER_SIZE, 0666);
-		   if(!ctrl->pop){
-		   perror("pmemobj_create");
-		   exit(0);
-		   }
-		   } else {
-		   ctrl->pop = pmemobj_open(pm_path, POBJ_LAYOUT_NAME(PM_MR));
-		   if(!ctrl->pop){
-		   perror("pmemobj_open");
-		   exit(0);
-		   }
-		   }
-		   printf("[  OK  ] PM initialized\n");
-		   POBJ_ALLOC(ctrl->pop, &ctrl->p_mr, void, BUFFER_SIZE, NULL, NULL);
-		   ctrl->buffer = (void *)&ctrl->p_mr;
-		   */
-		struct stat sb;
-		int flag = PROT_WRITE | PROT_READ | PROT_EXEC;
 
-		if ((ctrl->fd = open(pm_path, O_RDWR|O_CREAT, 645)) < 0) {
-			perror("File Open Error");
-			exit(1);
-		}
-
-		if (fstat(ctrl->fd, &sb) < 0) {
-			perror("fstat error");
-			exit(1);
-		}
-		ctrl->buffer = mmap(0, BUFFER_SIZE, flag, MAP_SHARED, ctrl->fd, 0); //XXX
-		//memset(ctrl->buffer, 0x00, BUFFER_SIZE);
-
-		if (ctrl->buffer == MAP_FAILED) {
-			perror("mmap error");
-			exit(1);
-		}
-
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, ctrl->buffer, BUFFER_SIZE,
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ)); // XXX
-		printf("[  OK  ] PM MR initialized\n");
-#elif DAX_KMEM
+#ifdef DAX_KMEM
 		int dax_kmem_node = 3;
 		ctrl->buffer = numa_alloc_onnode(BUFFER_SIZE, dax_kmem_node); 
 		TEST_Z(ctrl->buffer);
 		printf("[  OK  ] DAX KMEM MR initialized\n");
 #else
 
-#ifdef ODP
-		/* 
-		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
-		 * addr should be 0 and length should be SIZE_MAX.
-		 */
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
-		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
-#else
 		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
 		TEST_Z(ctrl->local_mm);
 
@@ -453,7 +393,6 @@ static device *get_device(struct queue *q)
 					(void *)ctrl->local_mm,
 					LOCAL_META_REGION_SIZE,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
-#endif
 
 		dprintf("[ INFO ] registered memory region of %zu KB\n", LOCAL_META_REGION_SIZE/1024);
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
@@ -470,10 +409,6 @@ static void destroy_device(struct ctrl *ctrl)
 	TEST_Z(ctrl->dev);
 
 	ibv_dereg_mr(ctrl->mr_buffer);
-#ifdef APP_DIRECT
-	munmap(ctrl->buffer, BUFFER_SIZE);
-	close(ctrl->fd);
-#endif
 	free((void*)ctrl->local_mm);
 	ibv_dealloc_pd(ctrl->dev->pd);
 	free(ctrl->dev);
@@ -513,7 +448,14 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	struct rdma_conn_param cm_params = {};
 	struct ibv_device_attr attrs = {};
 	int queue_number = queue_ctr++;
-	struct queue *q = &gctrl->queues[queue_number];
+	int client_number = client_ctr;
+	struct queue *q = &gctrl[client_number]->queues[queue_number];
+
+	/* next client */
+	if (queue_number == NUM_QUEUES - 1) {
+		client_ctr++;
+		queue_ctr = 0;
+	}
 
 	TEST_Z(q->state == queue::INIT);
 //	printf("[ INFO ] %s\n", __FUNCTION__);
@@ -526,7 +468,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 	/* XXX : Poller start here */
 	/* Create polling thread associated with q */
-	std::thread p = std::thread( server_recv_poll_cq, q, queue_number);
+	std::thread p = std::thread( server_recv_poll_cq, q, client_number, queue_number);
 
 	// Create a cpu_set_t object representing a set of CPUs. Clear it and mark
 	// only CPU i as set.
@@ -544,18 +486,6 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 
 	TEST_NZ(ibv_query_device(dev->verbs, &attrs));
-
-#if 0
-	if (queue_number == 0 ) {
-		dprintf("[ INFO ] attrs: max_qp=%d, max_qp_wr=%d, max_cq=%d \nmax_cqe=%d max_qp_rd_atom=%d, max_qp_init_rd_atom=%d\n", 
-				attrs.max_qp, 
-				attrs.max_qp_wr, attrs.max_cq, attrs.max_cqe, 
-				attrs.max_qp_rd_atom, attrs.max_qp_init_rd_atom);
-
-		dprintf("[ INFO ] ctrl attrs: initiator_depth=%d responder_resources=%d\n", 
-				param->initiator_depth, param->responder_resources);
-	}
-#endif
 
 	cm_params.initiator_depth = param->initiator_depth;
 	cm_params.responder_resources = param->responder_resources;
@@ -659,22 +589,26 @@ void die(const char *reason)
 
 int alloc_control()
 {
-	gctrl = (struct ctrl *) malloc(sizeof(struct ctrl));
-	TEST_Z(gctrl);
-	memset(gctrl, 0, sizeof(struct ctrl));
+	NUMA_KV *kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
+	dprintf("[  OK  ] KVStore Initialized\n");
 
-	gctrl->queues = (struct queue *) malloc(sizeof(struct queue) * NUM_QUEUES);
-	TEST_Z(gctrl->queues);
-	memset(gctrl->queues, 0, sizeof(struct queue) * NUM_QUEUES);
-	for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
-		gctrl->queues[i].ctrl = gctrl;
-		gctrl->queues[i].state = queue::INIT;
-		/* XXX */
-		gctrl->queues[i].page = malloc(PAGE_SIZE);
+	gctrl = (struct ctrl **)malloc(sizeof(struct ctrl *) * NUM_CLIENT);
+	for ( unsigned int c = 0 ; c < NUM_CLIENT ; ++c) {
+		gctrl[c] = (struct ctrl *) malloc(sizeof(struct ctrl));
+		TEST_Z(gctrl[c]);
+		memset(gctrl[c], 0, sizeof(struct ctrl));
+		gctrl[c]->cid = c;
+
+		gctrl[c]->queues = (struct queue *) malloc(sizeof(struct queue) * NUM_QUEUES);
+		TEST_Z(gctrl[c]->queues);
+		memset(gctrl[c]->queues, 0, sizeof(struct queue) * NUM_QUEUES);
+		for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
+			gctrl[c]->queues[i].ctrl = gctrl[c];
+			gctrl[c]->queues[i].state = queue::INIT;
+		}
+		gctrl[c]->kv = kv;
 	}
 
-	gctrl->kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
-	dprintf("[  OK  ] KVStore Initialized\n");
 
 	return 0;
 }
@@ -777,42 +711,46 @@ int main(int argc, char **argv)
 	port = ntohs(rdma_get_src_port(listener));
 	printf("[ INFO ] listening on port %d\n", port);
 
-	for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
-//		printf("[ INFO ] waiting for queue connection: %d\n", i);
-		struct queue *q = &gctrl->queues[i];
+	std::thread i;
+	for (unsigned int c = 0; c < NUM_CLIENT; ++c) {
+		for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
+		//		printf("[ INFO ] waiting for queue connection: %d\n", i);
+			struct queue *q = &gctrl[c]->queues[i];
 
-		// handle connection requests
-		while (rdma_get_cm_event(ec, &event) == 0) {
-			struct rdma_cm_event event_copy;
+			// handle connection requests
+			while (rdma_get_cm_event(ec, &event) == 0) {
+				struct rdma_cm_event event_copy;
 
-			memcpy(&event_copy, event, sizeof(*event));
-			rdma_ack_cm_event(event);
+				memcpy(&event_copy, event, sizeof(*event));
+				rdma_ack_cm_event(event);
 
-			if (on_event(&event_copy) || q->state == queue::CONNECTED)
-				break;
+				if (on_event(&event_copy) || q->state == queue::CONNECTED)
+					break;
+			}
+
+			post_recv(c, i);
 		}
 
-		post_recv(i);
-	}
+		/* servermr post send cq need polling */
+		struct ibv_wc wc;
+		int ne;
+		do{
+			ne = ibv_poll_cq(gctrl[c]->queues[0].qp->send_cq, 1, &wc);
+			if(ne < 0){
+				fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+				return 1;
+			}
+		}while(ne < 1);
 
-	/* XXX: After all connection done. It is needed? */
-	/* servermr post send cq need polling */
-	struct ibv_wc wc;
-	int ne;
-	do{
-		ne = ibv_poll_cq(gctrl->queues[0].qp->send_cq, 1, &wc);
-		if(ne < 0){
-			fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+		if(wc.status != IBV_WC_SUCCESS){
+			fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
 			return 1;
 		}
-	}while(ne < 1);
 
-	if(wc.status != IBV_WC_SUCCESS){
-		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
-		return 1;
+		if (c == 0)
+			i = std::thread( rdpma_indicator );
 	}
 	
-	std::thread i = std::thread( rdpma_indicator );
 
 	// handle disconnects, etc.
 	while (rdma_get_cm_event(ec, &event) == 0) {
@@ -829,7 +767,9 @@ int main(int argc, char **argv)
 
 	rdma_destroy_event_channel(ec);
 	rdma_destroy_id(listener);
-	destroy_device(gctrl);
+	for (unsigned int c = 0; c < NUM_CLIENT; ++c) {
+		destroy_device(gctrl[c]);
+	}
 
 	return 0;
 }

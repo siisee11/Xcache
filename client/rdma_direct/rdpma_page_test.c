@@ -53,7 +53,6 @@ int rdpma_single_write_message_test(void* arg){
 	uint32_t key=4400, index=11111;
 	char *test_string;
 	struct page *test_page;
-	int status;
 	long longkey;
 
 	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
@@ -76,7 +75,7 @@ int rdpma_single_write_message_test(void* arg){
 int rdpma_write_message_test(void* arg){
 	struct thread_data* my_data = (struct thread_data*)arg;
 	int tid = my_data->tid;
-	int i, ret, status;
+	int i, ret;
 	uint32_t index = 0;
 	uint32_t key;
 	long longkey;
@@ -124,7 +123,6 @@ int rdpma_single_read_message_test(void* arg){
 	int result = 0;
 	struct page *test_page;
 	long longkey;
-	int status;
 
 	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
 	test_string = kzalloc(PAGE_SIZE * BATCH_SIZE, GFP_KERNEL);
@@ -163,7 +161,6 @@ int rdpma_read_message_test(void* arg){
 	int tid = my_data->tid;
 	int nfailed = 0;
 	long longkey;
-	int status;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];

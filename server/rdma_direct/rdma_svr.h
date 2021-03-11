@@ -13,9 +13,9 @@ POBJ_LAYOUT_END(PM_MR);
 
 #define PAGE_SIZE 	4096
 
-#define NUM_CLIENT 		1
-#define NUM_QUEUES 		40
-#define MAX_BATCH 		8
+#define NUM_CLIENT 		2
+#define NUM_QUEUES 		20 	/* queue per client */
+#define MAX_BATCH 		4
 #define NUM_ENTRY 		2
 #define METADATA_SIZE 	24
 
@@ -78,10 +78,6 @@ struct queue {
 		INIT,
 		CONNECTED
 	} state;
-
-	/* XXX */
-	void *page; 		/* 4096 byte */
-	uint64_t key; 	/* 64 byte */
 };
 
 struct memregion {
@@ -93,12 +89,7 @@ struct memregion {
 struct ctrl {
 	struct queue *queues;
 	struct ibv_mr *mr_buffer;
-#ifdef APP_DIRECT
-	PMEMobjpool* log_pop[NUM_NUMA];
-	PMEMobjpool* pop[NUM_NUMA];
-	TOID(void) p_mr;
-	int fd;
-#endif
+	uint64_t cid;
 	void *buffer;
 	struct device *dev;
 

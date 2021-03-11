@@ -522,16 +522,13 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 
 	switch (type) {
 		case QP_READ_SYNC:
-			if (cpuid >= numqueues / 2)
-				cpuid = cpuid - (numqueues/ 2);
 			return &gctrl->queues[cpuid];
 		case QP_WRITE_SYNC:
-			if (cpuid < numqueues / 2)
-				cpuid = cpuid + (numqueues/ 2);
-			return &gctrl->queues[cpuid];
+			return &gctrl->queues[cpuid + numcpus];
 		default:
 			BUG();
 	};
+
 }
 
 inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
@@ -539,13 +536,9 @@ inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
 {
 	switch (type) {
 		case QP_READ_SYNC:
-			if (cpuid >= numqueues / 2)
-				cpuid = cpuid - (numqueues/ 2);
 			return cpuid;
 		case QP_WRITE_SYNC:
-			if (cpuid < numqueues / 2)
-				cpuid = cpuid + (numqueues/ 2);
-			return cpuid;
+			return cpuid + numcpus;
 		default:
 			BUG();
 			return cpuid;
@@ -1201,21 +1194,14 @@ out:
 /* idx is absolute id (i.e. > than number of cpus) */
 inline enum qp_type get_queue_type(unsigned int idx)
 {
-#ifdef SINGLE_TEST
-	// just for test
-	if (idx == 0)
+	if (idx < numcpus)
 		return QP_READ_SYNC;
-	else if (idx == 1)
+	else if (idx < numcpus * 2)
 		return QP_WRITE_SYNC;
-#else
-	/* XXX */
-	if (idx < numqueues / 2)
-		return QP_READ_SYNC; // read page
-	else if (idx >= numqueues / 2)
-		return QP_WRITE_SYNC; // write page
-#endif
+
 	BUG();
 	return QP_READ_SYNC;
+
 }
 
 static int __init rdma_connection_init_module(void)
@@ -1226,7 +1212,7 @@ static int __init rdma_connection_init_module(void)
 	pr_info("[ INFO ] * RDMA BACKEND *");
 
 	numcpus = num_online_cpus();
-	//numqueues = numcpus * 3; // prefetch, read, write
+	numqueues = numcpus * 2; // read, write
 
 	req_cache = kmem_cache_create("pmdfc_req_cache", sizeof(struct rdma_req), 0,
 			SLAB_TEMPORARY | SLAB_HWCACHE_ALIGN, NULL);

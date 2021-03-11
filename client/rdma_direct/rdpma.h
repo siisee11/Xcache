@@ -11,10 +11,10 @@
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 
-#define NUM_QUEUES 			(40)
-#define MAX_BATCH 			(8) 			/* 16 get fault */
-#define NUM_ENTRY 	(2) 			/* # of Metadata per queue */
-#define METADATA_SIZE 	(24) 	 		/* [ key, remote address, batch ] */ 
+#define NUM_QUEUES 			(20) 			/* 10 CPU * 2 */
+#define MAX_BATCH 			(4) 			/* 16 get fault */
+#define NUM_ENTRY 			(2) 			/* # of Metadata per queue */
+#define METADATA_SIZE 		(24) 	 		/* [ key, remote address, batch ] */ 
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */
 #define LOCAL_META_REGION_SIZE  		(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
