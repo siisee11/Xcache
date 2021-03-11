@@ -73,7 +73,6 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
   ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
 
 //  pr_info_ratelimited("rdpma_rdma_write_done\n");
-  atomic_dec(&q->pending);
   kmem_cache_free(req_cache, req);
 }
 
@@ -282,35 +281,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
 
-	atomic_inc(&q->pending);
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
-
-#if 0
-	/* send queue polling */
-	do{
-		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
-		}
-	}while(ne < 1);
-
-	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
-	}
-
-	atomic_dec(&q->pending);
-	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE * batch, DMA_TO_DEVICE); /* XXX for test */
-	ib_dma_unmap_page(dev, req[1]->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE); /* XXX for test */
-	kmem_cache_free(req_cache, req[0]);
-	kmem_cache_free(req_cache, req[1]);
-
-#endif
-
 
 #if 1
 	/* Polling recv cq here */

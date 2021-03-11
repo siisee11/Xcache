@@ -694,7 +694,7 @@ int main(int argc, char **argv)
 
 	/* Pre Malloced Page Queue */
 	prepage_queue = create_queue("prepage");
-	for (int i = 0 ; i < QUEUE_SIZE - 1; i++ ) {
+	for (int i = 0 ; i < QUEUE_SIZE/10 - 1; i++ ) {
 		enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
 	}
 	dprintf("[  OK  ] Prepage Queue alloced\n");

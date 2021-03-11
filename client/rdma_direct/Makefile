@@ -36,7 +36,7 @@ tcptest:
 	insmod ./pmnet_testing.ko
 
 rdmatest:
-	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CLI_IP) nq=$(NQ)
+	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
 	insmod ./rdma_testing.ko
 
 unload_pmdfc_rdma_core:
