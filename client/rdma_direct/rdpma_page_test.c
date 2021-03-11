@@ -12,7 +12,7 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 8
+#define THREAD_NUM 1
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
 #define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1024 * 128)

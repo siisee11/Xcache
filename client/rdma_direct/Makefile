@@ -12,7 +12,8 @@ AS      := ${CROSS_COMPILE}as
 
 EXTRA_CFLAGS  += -g 
 
-CLI_IP="10.0.0.51"
+CLI_IP="10.0.0.101"
+CIP 	:= "$(shell sh -c "hostname -I|cut -f2 -d ' '")"
 SVR_IP="10.0.0.53"
 SVR_PORT=7777
 NQ=40 
@@ -28,7 +29,7 @@ rdma_conn:
 	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CLI_IP) nq=$(NQ)
 
 pmdfc_client:
-	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CLI_IP) nq=$(NQ)
+	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
 	insmod ./pmdfc_client.ko rdma=1
 
 tcptest:
