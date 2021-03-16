@@ -156,6 +156,16 @@ int post_recv(int client_id, int queue_id){
 	return 0;
 }
 
+static void produce_page(queue_t *q) {
+	while (true) {
+		if (count_queue(q) < QUEUE_SIZE / 2) {
+			for (int i = 0 ; i < QUEUE_SIZE/3 - 1; i++ ) {
+				enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
+			}			
+		}
+	}
+}
+
 static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 //	int cpu = sched_getcpu();
@@ -475,7 +485,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	// threads[i] would be assigned to CPU i
 	cpu_set_t cpuset;
 	CPU_ZERO(&cpuset);
-	CPU_SET(queue_number, &cpuset);
+	CPU_SET(client_number * NUM_QUEUES + queue_number, &cpuset);
 	int rc = pthread_setaffinity_np(p.native_handle(),
 			sizeof(cpu_set_t), &cpuset);
 	if (rc != 0) {
@@ -699,6 +709,8 @@ int main(int argc, char **argv)
 	}
 	dprintf("[  OK  ] Prepage Queue alloced\n");
 
+	std::thread page_producer = std::thread( produce_page, prepage_queue);
+
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(tcp_port);
 
@@ -714,7 +726,7 @@ int main(int argc, char **argv)
 	std::thread i;
 	for (unsigned int c = 0; c < NUM_CLIENT; ++c) {
 		for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
-		//		printf("[ INFO ] waiting for queue connection: %d\n", i);
+//			printf("[ INFO ] waiting for queue connection: %d\n", i);
 			struct queue *q = &gctrl[c]->queues[i];
 
 			// handle connection requests

@@ -28,7 +28,7 @@ void destroy_queue(struct queue_t* q){
 }
 
 int count_queue(struct queue_t* q){
-	printf("q->rear= %lu, q->front= %lu\n", q->rear, q->front);
+//	printf("q->rear= %lu, q->front= %lu\n", q->rear, q->front);
 	return q->rear - q->front;
 }
 

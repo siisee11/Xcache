@@ -14,6 +14,22 @@ server: pmdfc server userspace program
 This module implemented under linux kernel 5.3
 Please update kernel over 5.3
 
+## script.sh
+
+run fio job on every vm.
+$ ./script.sh all run
+
+show fio output from every vm.
+$ ./script.sh all out
+
+If you want to run only one VM, then type
+$ ./script.sh <VM_name>
+
+## virsh.sh
+
+reset all VM
+$ ./virsh.sh all reset
+
 ## Reference
 
 [In-kernel networking using tcp ip](https://github.com/abysamross/simple-linux-kernel-tcp-client-server)

@@ -198,7 +198,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
 //	int qid, mid, type, tx_state;
-	int num = 0;
 	struct ib_wc wc;
 	int ne = 0;
 	int cpuid = smp_processor_id();
