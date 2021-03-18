@@ -13,8 +13,8 @@ POBJ_LAYOUT_END(PM_MR);
 
 #define PAGE_SIZE 	4096
 
-#define NUM_CLIENT 		2
-#define NUM_QUEUES 		16 	/* queue per client (# of CPU on client * 2) */
+#define NUM_CLIENT 		6
+#define NUM_QUEUES 		8 	/* queue per client (# of CPU on client * 2) */
 #define MAX_BATCH 		4
 #define NUM_ENTRY 		2
 #define METADATA_SIZE 	24

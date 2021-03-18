@@ -1,0 +1,17 @@
+[global]
+#bs=4k
+bsrange=4k-128k
+ioengine=libaio
+iodepth=16
+size=2g
+direct=0
+time_based=0
+#runtime=20
+directory=/mnt/ssd1/fio_test/t8
+group_reporting=1
+
+[rand_read]
+thread=1
+numjobs=8
+rw=randread
+

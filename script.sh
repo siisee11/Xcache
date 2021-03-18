@@ -11,7 +11,7 @@ if [[ $1 == "all" ]]; then
 				hostname
 				echo "prepare to run"
 				sudo mount -t nfs 192.168.122.1:/nfs /nfs
-				cd /nfs/Xcache/client/rdma_direct
+				cd /nfs/Xcache/client/
 				sudo make
 				sudo make pmdfc_client
 			ENDSSH
@@ -21,7 +21,7 @@ if [[ $1 == "all" ]]; then
 		for v in $VM
 		do
 			ssh siisee11@$v vm=$v 'bash -s' <<- 'ENDSSH'
-				cd /nfs/Xcache/client/rdma_direct/fio_test
+				cd /nfs/Xcache/client/fio_test
 				sudo ./gen_cgroup.sh
 				sudo ./run_cgroup_fio.sh > out_${vm} &
 			ENDSSH
@@ -31,7 +31,7 @@ if [[ $1 == "all" ]]; then
 		for v in $VM
 		do
 			ssh siisee11@$v vm=$v 'bash -s' <<- 'ENDSSH'
-				cd /nfs/Xcache/client/rdma_direct/fio_test
+				cd /nfs/Xcache/client/fio_test
 				hostname
 				cat out_${vm}
 			ENDSSH
@@ -44,7 +44,7 @@ else
 		hostname
 		echo "prepare to run"
 		sudo mount -t nfs 192.168.122.1:/nfs /nfs
-		cd /nfs/Xcache/client/rdma_direct
+		cd /nfs/Xcache/client/
 		sudo make
 		sudo make pmdfc_client
 		cd fio_test/
