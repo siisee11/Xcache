@@ -1,18 +1,18 @@
-# PMDFC client
+# Xcache client (RDMA based)
 
-This is client kernel module.
+This is client kernel module of *Xcache*.
+Each client has to be equipped with RDMA capable device.
+
+## Prerequisite
+This module tested on linux kernel version from 5.3 to 5.6 
 
 ## How to run
 Before load this module, you must initiate server first.
 
 ```make``` to compile client module.
-```make net``` to load module.
-```make ipoib``` to load module using TCP over Infiniband fabric.
-```make rdma``` to load module using RDMA.
-
-After load module, you can test it.
-```make tcptest``` to test tcp.
-```make rdmatest``` to test rdma
+```make rdma_conn``` to load RDMA communication module.
+```make pmdfc_client``` to load module.
+```make rdmatest``` to test RDMA communication with microbenchmark.
 
 ```dmesg -w``` to watch kernel dmesg log.
 
@@ -20,14 +20,13 @@ After load module, you can test it.
 
 1. 
 This module works under memory intensive situation.
-To see its effect, run spark tpc benchmark.
+You can use cgroup to limit memory.
 
 2.
-Under testing/ directory, there is simple file copy test.
-Type `./test <number of iteration>` to run test.
-
-3.
-File I/O tester fio can be used.
+Test fio(File I/O) benchmark.
+Under fio_test/ directory, there are some scripts.
+`gen_cgroup.sh` will generate cgroup limiting memory to about 1GB.
+`run_cgroup.fio.sh' will run fio job under cgroup condition.
 
 ## Performance measure
 This module use debugfs to get system information, you can find it under /sys/kernel/debug/pmdfc
@@ -42,13 +41,16 @@ Change number of preallocated storage and size in pmdfc.h file.
 07/12/2020 	: Seperate network module and pmdfc module.
 08/18/2020 	: Develop several method for put_page.
 10/27/2020 	: Complete merging RDMA and TCP code.
+18/03/2021 	: Remove TCP code. RDMA Xcache works on multiple client.
 
 ## TODO
  - [x] ~~TCP Networking~~
  - [x] ~~CCEH integration~~
  - [x] ~~Simple copy file test~~
- - [ ] FIO test
- - [ ] NUMA awareness
+ - [x] ~~RDMA~~
+ - [x] ~~micro benchmark test~~
+ - [x] ~~fio test~~
+ - [x] ~~Multi-client support~~
  - [ ] performance optimization
 
 ## Reference

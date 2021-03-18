@@ -34,6 +34,5 @@ $ ./virsh.sh all reset
 
 [In-kernel networking using tcp ip](https://github.com/abysamross/simple-linux-kernel-tcp-client-server)
 
-[Server side codes](https://github.com/byeongkeonLee/PM_disaggregated_serverside)
-
 [How to debug own module](https://namj.be/kgdb/2020-02-21-kgdb-module/)
+

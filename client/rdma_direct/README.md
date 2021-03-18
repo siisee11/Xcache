@@ -1,6 +1,6 @@
 # RDMA Client
 
-This module targets 5.4.0-66-generic
+This module targets over 5.3
 
 ## How to
 

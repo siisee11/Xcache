@@ -1,41 +1,37 @@
 #ifndef _PMDFC_H_
 #define _PMDFC_H_
 
-#define PMDFC_MAX_STORAGE 8 			/* Number of storages */
-#define PMDFC_STORAGE_SIZE  4096 		/* Number of page per each storage */
+#include <linux/hashtable.h>
+#include <linux/atomic.h>
 
-enum pmdfc_storage_flags {
-	PS_locked,
-	PS_full, 	/* Need to be process */
-	PS_empty, 	/* Initial State */
-	PS_put, 	/* Only one PS can have this flag */
-	PS_send,
+enum{
+	MSG_WRITE_REQUEST,
+	MSG_WRITE_REQUEST_REPLY,
+	MSG_WRITE,
+	MSG_WRITE_REPLY,
+	MSG_READ_REQUEST,
+	MSG_READ_REQUEST_REPLY,
+	MSG_READ,
+	MSG_READ_REPLY
 };
 
-struct pmdfc_storage {
-	unsigned long flags;
-	void **page_storage;
-	long *key_storage;
-	unsigned int *index_storage;
-	long *roffset_storage;
-	struct mutex 	lock;
-	unsigned int 	bitmap_size;
-	unsigned long 	*bitmap;
+/* server TX messages */
+enum{				
+	TX_WRITE_BEGIN,
+	TX_WRITE_READY,
+	TX_WRITE_COMMITTED,		
+	TX_WRITE_ABORTED,
+	TX_READ_BEGIN,
+	TX_READ_READY,
+	TX_READ_COMMITTED,
+	TX_READ_ABORTED,
 };
 
-struct pmdfc_storage_cluster{
-	struct pmdfc_storage *cl_storages[PMDFC_MAX_STORAGE];
-	/* this bitmap is part of a hack for disk bitmap.. will go eventually. - zab */
-	//	unsigned long	cl_nodes_bitmap[BITS_TO_LONGS(PMDFC_MAX_STORAGE)];
-};
-
-extern struct pmdfc_storage_cluster *ps_cluster;
 
 struct ht_data {
-	u64 longkey;
-	u64 roffset;
-	struct hlist_node h_node;
+    u64 longkey;
+    u64 roffset;
+    struct hlist_node h_node;
 };
-
 
 #endif
