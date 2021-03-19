@@ -73,7 +73,7 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 	}
 	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
 
-	 pr_info_ratelimited("rdpma_rdma_write_done\n");
+	pr_info_ratelimited("rdpma_rdma_write_done mid=%d\n", req->mid);
 	idr_remove(&q->queue_status_idr, req->mid);
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
@@ -90,10 +90,13 @@ static void rdpma_rdma_write_done_meta(struct ib_cq *cq, struct ib_wc *wc)
 		pr_err("rdpma_rdma_write_done_meta status is not success, it is=%d\n", wc->status);
 		//q->write_error = wc->status;
 	}
+	pr_info_ratelimited("rdpma_rdma_write_done_meta mid=%d\n", req->mid);
+#if 0
 	ib_dma_unmap_page(ibdev, req->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
+#endif
 }
 
 /* allocates a pmdfc rdma request, creates a dma mapping for it in
@@ -276,6 +279,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	if (unlikely(ret))
 		return ret;
 	req[1]->cqe.done = rdpma_rdma_write_done_meta;
+	req[1]->mid = msg_id;
 
 	BUG_ON(req[1]->dma == 0);
 
@@ -293,8 +297,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.num_sge = 1;
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = 0;
-//	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-//	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; /* XXX: rdpma_rdma_write_done_meta cause error */
+	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
+	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; /* XXX: rdpma_rdma_write_done_meta cause error */
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
@@ -438,6 +442,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
 
+#if 0
 	/* Poll send completion queue first */
 	do{
 		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
@@ -453,6 +458,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 		ret = -1;
 		goto out;
 	}
+#endif
 
 	/* Polling recv cq here */
 	do{
@@ -1267,6 +1273,13 @@ static int __init rdma_connection_init_module(void)
 		pr_err("[ FAIL ] could not send local memory region\n");
 		ib_unregister_client(&pmdfc_rdma_ib_client);
 		return -ENODEV;
+	}
+
+	unsigned int i, j;
+	for (i = 0; i < numqueues ; i++) {
+		for (j = 0 ; j < 100 ; j++) {
+			ret = post_recv(&gctrl->queues[i]);
+		}
 	}
 
 	pr_info("[ PASS ] ctrl is ready for reqs\n");

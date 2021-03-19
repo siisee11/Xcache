@@ -786,7 +786,9 @@ int main(int argc, char **argv)
 				break;
 		}
 
-		post_recv(i);
+		for (unsigned int j = 0; j < 100; ++j) {
+			post_recv(i);
+		}
 	}
 
 	/* XXX: After all connection done. It is needed? */
