@@ -159,10 +159,8 @@ int post_recv(int queue_id){
 	wr.num_sge = 1;
 	wr.next = NULL;
 
-	if(ibv_post_recv(gctrl->queues[queue_id].qp, &wr, &bad_wr)){
-		fprintf(stderr, "[%s] ibv_post_recv failed\n", __func__);
-		return 1;
-	}
+	TEST_NZ(ibv_post_recv(gctrl->queues[queue_id].qp, &wr, &bad_wr));
+
 	return 0;
 }
 
@@ -227,7 +225,25 @@ static void server_recv_poll_cq(struct queue *q, int queue_id) {
 				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)save_page, *key);
-//				dprintf("[ INFO ] page %s\n", (char *)save_page);
+				//				dprintf("[ INFO ] page %s\n", (char *)save_page);
+				//
+
+
+				{
+					struct ibv_sge sg_list;
+					int ret;
+
+					sg_list.lkey = gctrl->mr_buffer->lkey;
+					sg_list.addr = (uintptr_t)save_page;
+					sg_list.length = PAGE_SIZE;
+
+					ret = ibv_advise_mr(gctrl->dev->pd, IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
+							IB_UVERBS_ADVISE_MR_FLAG_FLUSH,
+							&sg_list, 1);
+
+					if (ret)
+						fprintf(stderr, "Couldn't prefetch MR(%d). Continue anyway\n", ret);
+				}
 
 
 				sge.addr = (uint64_t)&save_page;
@@ -494,8 +510,8 @@ static void create_qp(struct queue *q)
 	qp_attr.send_cq = send_cq;
 	qp_attr.recv_cq = recv_cq;
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
-	qp_attr.cap.max_send_wr = 10;
-	qp_attr.cap.max_recv_wr = 10;
+	qp_attr.cap.max_send_wr = 100;
+	qp_attr.cap.max_recv_wr = 100;
 	qp_attr.cap.max_send_sge = 1; 
 	qp_attr.cap.max_recv_sge = 1;
 
@@ -754,8 +770,11 @@ int main(int argc, char **argv)
 
 	/* Pre Malloced Page Queue */
 	prepage_queue = create_queue("prepage");
-	for (int i = 0 ; i < 10000 - 1; i++ ) {
-		enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
+	for (int i = 0 ; i < 100; i++ ) {
+		char *ptr = (char *)malloc(PAGE_SIZE * 100);	
+		for (int j = 0 ; j < 100 ; j++ ) {
+			enqueue(prepage_queue, (void *)(ptr + PAGE_SIZE * j));
+		}
 	}
 	dprintf("[  OK  ] Prepage Queue alloced\n");
 
