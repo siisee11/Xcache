@@ -15,7 +15,7 @@
 #define THREAD_NUM 1
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
-#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 16)
+#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1024 * 128)
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
 #define KTIME_CHECK 1
@@ -322,7 +322,7 @@ int main(void){
 	else 
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
-//	pmdfc_rdma_print_stat();
+	pmdfc_rdma_print_stat();
 
 	ssleep(1);
 

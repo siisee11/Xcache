@@ -31,7 +31,7 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
-//#define KTIME_CHECK 1
+#define KTIME_CHECK 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -48,7 +48,9 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 
 #ifdef KTIME_CHECK
 void pmdfc_rdma_print_stat() {
-	fperf_print("rdpma_put");
+	fperf_print("send_meta");
+	fperf_print("poll_recv");
+	fperf_print("send_page");
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #else
@@ -58,6 +60,7 @@ void pmdfc_rdma_print_stat() {
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #endif
 
+int post_recv(struct rdma_queue *q);
 
 static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 {
@@ -65,7 +68,7 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 		container_of(wc->wr_cqe, struct rdma_req, cqe);
 	struct rdma_queue *q = cq->cq_context;
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
-	int qid, mid, type, tx_state, num;
+	int qid, mid, type, tx_state, num, ret;
 
 	if (unlikely(wc->status != IB_WC_SUCCESS)) {
 		pr_err("rdpma_rdma_write_done status is not success, it is=%d\n", wc->status);
@@ -75,8 +78,10 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 
 	pr_info_ratelimited("rdpma_rdma_write_done mid=%d\n", req->mid);
 	idr_remove(&q->queue_status_idr, req->mid);
-	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
+
+	ret = post_recv(q);
+	BUG_ON(ret);
 }
 
 static void rdpma_rdma_write_done_meta(struct ib_cq *cq, struct ib_wc *wc)
@@ -94,7 +99,6 @@ static void rdpma_rdma_write_done_meta(struct ib_cq *cq, struct ib_wc *wc)
 #if 0
 	ib_dma_unmap_page(ibdev, req->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 
-	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
 #endif
 }
@@ -227,6 +231,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	int cpuid = smp_processor_id();
 	uint64_t *dma_addr;
 
+#ifdef KTIME_CHECK
+	fperf_start("send_meta");
+#endif
+
 	/* get q and its infomation */
 	q = pmdfc_rdma_get_queue(cpuid, QP_WRITE_SYNC);
 	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
@@ -247,8 +255,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	spin_unlock(&q->queue_lock);
 
 	/* 1. post recv */
-	ret = post_recv(q);
-	BUG_ON(ret);
+//	ret = post_recv(q);
+//	BUG_ON(ret);
 
 	/* 2. post send */
 	/* setup imm data */
@@ -266,13 +274,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		return ret;
 
 	req[0]->mid = msg_id;
+	req[0]->cqe.done = rdpma_rdma_write_done;
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
 	sge[0].length = PAGE_SIZE * batch;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
-	req[0]->cqe.done = rdpma_rdma_write_done;
 
 	/* DMA KEY */
 	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
@@ -298,17 +306,24 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = 0;
 	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; /* XXX: rdpma_rdma_write_done_meta cause error */
+	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; 
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
 
-	atomic_inc(&q->pending);
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
+
+#ifdef KTIME_CHECK
+	fperf_end("send_meta");
+#endif
+
+#ifdef KTIME_CHECK
+	fperf_start("poll_recv");
+#endif
 
 	/* Polling recv cq here */
 	do{
@@ -324,6 +339,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		return 1;
 	}
 
+#ifdef KTIME_CHECK
+	fperf_end("poll_recv");
+#endif
+
+#ifdef KTIME_CHECK
+	fperf_start("send_page");
+#endif
 	/* WRITE PAGE directly to given address */
 	dma_addr = (uint64_t *)GET_REMOTE_ADDRESS_BASE(gctrl->rdev->local_mm, queue_id, msg_id);
 	pr_info("[ INFO ] dma_addr from server= %llx (qid=%d, mid=%d)\n", *dma_addr, queue_id, msg_id);
@@ -338,11 +360,14 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].remote_addr = *dma_addr;
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
-	atomic_inc(&q->pending);
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
+
+#ifdef KTIME_CHECK
+	fperf_end("send_page");
+#endif
 
 out:
 
@@ -568,47 +593,6 @@ inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
 			return cpuid;
 	};
 }
-
-
-#if 0
-/* -------------------------------------- Poll ------------------------------------------- */
-static int client_poll_cq(struct ib_cq* cq){
-	struct ib_wc wc;
-	int ne, i, ret;
-	uint32_t size;
-	allow_signal(SIGKILL);
-	while(1){
-		do{
-			ne = ib_poll_cq(cq, 1, &wc);
-			if(ne < 0){
-				printk(KERN_ALERT "[%s]: ib_poll_cq failed (%d)\n", __func__, ne);
-				return 1;
-			}
-		}while(ne < 1);
-
-		if(wc.status != IB_WC_SUCCESS){
-			printk(KERN_ALERT "[%s]: ib_poll_cq returned failure status (%d)\n", __func__, wc.status);
-			return 1;
-		}
-		//dprintk("[%s]: polled a work request\n", __func__);
-		post_recv();
-
-		if((int)wc.opcode == IB_WC_RECV_RDMA_WITH_IMM){
-			}
-			else if(type == MSG_WRITE_REPLY){
-			}
-			else if(type == MSG_READ_REQUEST_REPLY){
-			}
-			else{
-				printk(KERN_ALERT "[%s]: received weired type msg from remote server (%d)\n", __func__, type);
-			}
-		}
-		else{
-			printk(KERN_ALERT "[%s]: received weired opcode from remote server (%d)\n", __func__, (int)wc.opcode);
-		}
-	}
-}
-#endif
 
 
 /* -------------------------------------- RDMA_CONN.C ----------------------------------------------*/

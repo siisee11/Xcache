@@ -12,6 +12,7 @@ POBJ_LAYOUT_END(PM_MR);
 #include "NuMA_KV.h"
 
 #define PAGE_SIZE 	4096
+#define QP_MAX_RECV_WR 4096
 
 #define NUM_CLIENT 		1
 #define NUM_QUEUES 		40

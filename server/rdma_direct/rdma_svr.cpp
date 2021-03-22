@@ -164,6 +164,16 @@ int post_recv(int queue_id){
 	return 0;
 }
 
+static void produce_page(queue_t *q) {
+	while (true) {
+		if (count_queue(q) < QUEUE_SIZE / 2) {
+			for (int i = 0 ; i < QUEUE_SIZE/3 - 1; i++ ) {
+				enqueue(prepage_queue, (void *)malloc(PAGE_SIZE));
+			}			
+		}
+	}
+}
+
 static void server_recv_poll_cq(struct queue *q, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 //	int cpu = sched_getcpu();
@@ -771,12 +781,14 @@ int main(int argc, char **argv)
 	/* Pre Malloced Page Queue */
 	prepage_queue = create_queue("prepage");
 	for (int i = 0 ; i < 100; i++ ) {
-		char *ptr = (char *)malloc(PAGE_SIZE * 100);	
-		for (int j = 0 ; j < 100 ; j++ ) {
+		char *ptr = (char *)malloc(PAGE_SIZE * 100000);	
+		for (int j = 0 ; j < 100000 ; j++ ) {
 			enqueue(prepage_queue, (void *)(ptr + PAGE_SIZE * j));
 		}
 	}
 	dprintf("[  OK  ] Prepage Queue alloced\n");
+
+//	std::thread page_producer = std::thread( produce_page, prepage_queue);
 
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(tcp_port);
