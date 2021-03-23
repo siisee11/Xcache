@@ -11,9 +11,9 @@
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 
-#define NUM_QUEUES 			(20) 			/* 10 CPU * 2 */
-#define MAX_BATCH 			(4) 			/* 16 get fault */
-#define NUM_ENTRY 			(2) 			/* # of Metadata per queue */
+#define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
+#define MAX_BATCH 			(1) 			/* 16 get fault */
+#define NUM_ENTRY 			(16) 			/* # of Metadata per queue */
 #define METADATA_SIZE 		(24) 	 		/* [ key, remote address, batch ] */ 
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */
@@ -25,7 +25,7 @@
 #define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 #define GET_OFFSET_FROM_BASE(qid, mid) 				(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
-#define GET_PAGE_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
+#define GET_OFFSET_FROM_BASE_TO_PAGE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 
 enum qp_type {
 	QP_READ_SYNC,
@@ -55,6 +55,7 @@ struct rdma_req {
 	struct completion done;
 	struct list_head list;
 	struct ib_cqe cqe;
+	int mid;
 	u64 dma;
 	struct page *page;
 };

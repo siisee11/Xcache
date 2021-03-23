@@ -319,7 +319,7 @@ int main(void){
 	else 
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
-//	pmdfc_rdma_print_stat();
+	pmdfc_rdma_print_stat();
 
 	ssleep(1);
 
