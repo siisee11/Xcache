@@ -675,8 +675,8 @@ static void create_qp(struct queue *q)
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
 	}
 
-	qp_attr.send_cq = recv_cq;
-	qp_attr.recv_cq = send_cq;
+	qp_attr.send_cq = send_cq;
+	qp_attr.recv_cq = recv_cq;
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 4096;
 	qp_attr.cap.max_recv_wr = 4096;
