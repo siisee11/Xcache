@@ -664,19 +664,27 @@ static void destroy_device(struct ctrl *ctrl)
 static void create_qp(struct queue *q)
 {
 	struct ibv_qp_init_attr qp_attr = {};
-	
-    struct ibv_cq* recv_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
-	if(!recv_cq){
-		fprintf(stderr, "ibv_create_cq for recv_cq failed\n");
-	}
+	struct ibv_srq *srq;
+	struct ibv_srq_init_attr srq_init_attr;
+	 
+	memset(&srq_init_attr, 0, sizeof(srq_init_attr));
+	 
+	srq_init_attr.attr.max_wr  = 4096;
+	srq_init_attr.attr.max_sge = 2;
 
 	struct ibv_cq* send_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
 	if(!send_cq){
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
 	}
 
-	qp_attr.send_cq = recv_cq;
-	qp_attr.recv_cq = send_cq;
+	srq = ibv_create_srq(q->ctrl->dev->pd, &srq_init_attr);
+	if (!srq) {
+		fprintf(stderr, "Error, ibv_create_srq() failed\n");
+	}
+
+	qp_attr.send_cq = send_cq;
+//	qp_attr.recv_cq = recv_cq;
+	qp_attr.srq = srq;
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 4096;
 	qp_attr.cap.max_recv_wr = 4096;
