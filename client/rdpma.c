@@ -32,7 +32,7 @@ int QP_MAX_SEND_WR = 4096;
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
 //#define KTIME_CHECK 1
-#define ODP 1
+//#define ODP 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -266,9 +266,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	sge[0].length = PAGE_SIZE * batch;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
-	pr_info("yo1\n");
-
-
 	/* DMA METADATA */
 	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 	if (unlikely(ret))
@@ -284,8 +281,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
 	 * to just post requests in batches */
-
-	pr_info("yo2\n");
 
 	/* WRITE METADATA */
 	rdma_wr[1].wr.next    = NULL;
@@ -1541,7 +1536,6 @@ static int __init rdma_connection_init_module(void)
 	}
 
 	pr_info("[ PASS ] ctrl is ready for reqs\n");
-
 
 	return 0;
 }

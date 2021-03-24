@@ -44,6 +44,8 @@ static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
+struct ibv_srq *srq;
+
 queue_t *prepage_queue = NULL;
 
 /* counting values */
@@ -149,7 +151,7 @@ int post_recv(int client_id, int queue_id){
 	wr.num_sge = 1;
 	wr.next = NULL;
 
-	if(ibv_post_recv(gctrl[client_id]->queues[queue_id].qp, &wr, &bad_wr)){
+	if(ibv_post_srq_recv(gctrl[client_id]->queues[queue_id].qp->srq, &wr, &bad_wr)){
 		fprintf(stderr, "[%s] ibv_post_recv failed\n", __func__);
 		return 1;
 	}
@@ -664,22 +666,10 @@ static void destroy_device(struct ctrl *ctrl)
 static void create_qp(struct queue *q)
 {
 	struct ibv_qp_init_attr qp_attr = {};
-	struct ibv_srq *srq;
-	struct ibv_srq_init_attr srq_init_attr;
-	 
-	memset(&srq_init_attr, 0, sizeof(srq_init_attr));
-	 
-	srq_init_attr.attr.max_wr  = 4096;
-	srq_init_attr.attr.max_sge = 2;
 
 	struct ibv_cq* send_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
 	if(!send_cq){
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
-	}
-
-	srq = ibv_create_srq(q->ctrl->dev->pd, &srq_init_attr);
-	if (!srq) {
-		fprintf(stderr, "Error, ibv_create_srq() failed\n");
 	}
 
 	qp_attr.send_cq = send_cq;
@@ -710,6 +700,8 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 		queue_ctr = 0;
 	}
 
+
+
 	TEST_Z(q->state == queue::INIT);
 //	printf("[ INFO ] %s\n", __FUNCTION__);
 
@@ -717,6 +709,22 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	q->cm_id = id;
 
 	struct device *dev = get_device(q);
+
+	/* if it is first queue pair of this client */
+	if (queue_number == 0) {
+		struct ibv_srq_init_attr srq_init_attr;
+		 
+		memset(&srq_init_attr, 0, sizeof(srq_init_attr));
+		 
+		srq_init_attr.attr.max_wr  = 4096;
+		srq_init_attr.attr.max_sge = 2;
+
+		srq = ibv_create_srq(q->ctrl->dev->pd, &srq_init_attr);
+		if (!srq) {
+			fprintf(stderr, "Error, ibv_create_srq() failed\n");
+		}
+	}
+
 	create_qp(q);
 
 	/* XXX : Poller start here */
@@ -795,7 +803,7 @@ int on_connection(struct queue *q)
 		rwr.sg_list = &sge;
 		rwr.num_sge = 1;
 
-		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
+		TEST_NZ(ibv_post_srq_recv(q->qp->srq, &rwr, &bad_rwr));
 	}
 
 
