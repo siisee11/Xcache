@@ -213,11 +213,14 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 			if(type == MSG_WRITE){
 				putcnt++;
 				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
+				uint64_t* target_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
 				
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
 				void *save_page = dequeue(prepage_queue);
+				*target_addr = (uint64_t)save_page;
+
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &end);
 				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -232,7 +235,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
 				dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
 
-#if 1
+#if 0
 				/* Prefatch MR */
 				{
 					struct ibv_sge sg_list;
@@ -251,7 +254,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				}
 #endif
 
-				sge.addr = (uint64_t)&save_page;
+				sge.addr = (uint64_t)target_addr;
 				sge.length = sizeof(uint64_t);
 				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
 
@@ -629,10 +632,27 @@ static device *get_device(struct queue *q)
 		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
 		 * addr should be 0 and length should be SIZE_MAX.
 		 */
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
+//		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
-		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
-		/* prefetch local_mm here */
+//		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
+
+		/* Pre Malloced Page Queue */
+		char *ptr = (char *)malloc(LOCAL_META_REGION_SIZE + PAGE_SIZE * 100000);	
+		for (int j = 0 ; j < 100000 ; j++ ) {
+			enqueue(prepage_queue, (void *)(ptr + PAGE_SIZE * j + LOCAL_META_REGION_SIZE));
+		}
+		dprintf("[  OK  ] Prepage Queue alloced (from %lx)\n", (uint64_t)ptr);
+
+
+		ctrl->local_mm = (uint64_t)ptr;
+		TEST_Z(ctrl->local_mm);
+
+		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
+					dev->pd,
+					(void *)ctrl->local_mm,
+					LOCAL_META_REGION_SIZE + PAGE_SIZE * 100000,
+					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+
 #else
 		/* No ODP */
 		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
@@ -968,15 +988,7 @@ int main(int argc, char **argv)
 
 	nr_cpus = std::thread::hardware_concurrency();
 
-	/* Pre Malloced Page Queue */
 	prepage_queue = create_queue("prepage");
-	for (int i = 0 ; i < 100; i++ ) {
-		char *ptr = (char *)malloc(PAGE_SIZE * 100000);	
-		for (int j = 0 ; j < 100000 ; j++ ) {
-			enqueue(prepage_queue, (void *)(ptr + PAGE_SIZE * j));
-		}
-	}
-	dprintf("[  OK  ] Prepage Queue alloced\n");
 		
 //	std::thread page_producer = std::thread( produce_page, prepage_queue, 0);
 //	page_producer.detach();
