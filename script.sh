@@ -4,19 +4,21 @@ VM="zombie1 zombie2 zombie3"
 
 if [[ $1 == "all" ]]; then
 	if [[ $2 == "run" ]]; then
-		for v in $VM
-		do
-			ssh siisee11@$v 'bash -s' <<- 'ENDSSH'
-				# commands to run on remote host 
-				hostname
-				echo "prepare to run"
-				sudo mount -t nfs 192.168.122.1:/nfs /nfs
-				cd /nfs/Xcache/client/
-				sudo make
-				sudo make pmdfc_client
-			ENDSSH
+		if [[ $3 != "only" ]]; then
+			for v in $VM
+			do
+				ssh siisee11@$v 'bash -s' <<- 'ENDSSH'
+					# commands to run on remote host 
+					hostname
+					echo "prepare to run"
+					sudo mount -t nfs 192.168.122.1:/nfs /nfs
+					cd /nfs/Xcache/client/
+					sudo make
+					sudo make pmdfc_client
+				ENDSSH
 
-		done
+			done
+		fi
 
 		for v in $VM
 		do
