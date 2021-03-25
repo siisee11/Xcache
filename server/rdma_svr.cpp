@@ -44,7 +44,9 @@ static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
+#ifdef SRQ
 struct ibv_srq *srq[16]; /* 1 SRQ per Client */
+#endif
 
 queue_t *prepage_queue = NULL;
 
@@ -673,8 +675,11 @@ static void create_qp(struct queue *q, int client_number)
 	}
 
 	qp_attr.send_cq = send_cq;
-//	qp_attr.recv_cq = recv_cq;
+  #ifdef SRQ
 	qp_attr.srq = srq[client_number];
+  #else
+	qp_attr.recv_cq = recv_cq;
+  #endif
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 4096;
 	qp_attr.cap.max_recv_wr = 4096;

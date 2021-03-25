@@ -68,3 +68,4 @@ rdma_example/
 the-geek-in-the-corner/
 
 .nfs*
+out_*

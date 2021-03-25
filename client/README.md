@@ -34,6 +34,10 @@ This module use debugfs to get system information, you can find it under /sys/ke
 ## Tuning Paramenters
 Change number of preallocated storage and size in pmdfc.h file.
 
+## Defines
+ODP (rdpma.c): use ODP or not.
+KTIME_CHECK (rdpma.c): timer
+
 ## Timeline
 
 07/01/2020 	: Attach debugfs and sysfs but don't know how to use.
