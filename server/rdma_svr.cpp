@@ -44,7 +44,7 @@ static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
-struct ibv_srq *srq;
+struct ibv_srq *srq[16]; /* 1 SRQ per Client */
 
 queue_t *prepage_queue = NULL;
 
@@ -663,7 +663,7 @@ static void destroy_device(struct ctrl *ctrl)
 	ctrl->dev = NULL;
 }
 
-static void create_qp(struct queue *q)
+static void create_qp(struct queue *q, int client_number)
 {
 	struct ibv_qp_init_attr qp_attr = {};
 
@@ -674,7 +674,7 @@ static void create_qp(struct queue *q)
 
 	qp_attr.send_cq = send_cq;
 //	qp_attr.recv_cq = recv_cq;
-	qp_attr.srq = srq;
+	qp_attr.srq = srq[client_number];
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 4096;
 	qp_attr.cap.max_recv_wr = 4096;
@@ -719,13 +719,13 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 		srq_init_attr.attr.max_wr  = 4096;
 		srq_init_attr.attr.max_sge = 2;
 
-		srq = ibv_create_srq(q->ctrl->dev->pd, &srq_init_attr);
-		if (!srq) {
+		srq[client_number] = ibv_create_srq(q->ctrl->dev->pd, &srq_init_attr);
+		if (!srq[client_number]) {
 			fprintf(stderr, "Error, ibv_create_srq() failed\n");
 		}
 	}
 
-	create_qp(q);
+	create_qp(q, client_number);
 
 	/* XXX : Poller start here */
 	/* Create polling thread associated with q */
