@@ -73,7 +73,7 @@ static void benchmark_search(struct hash *h,
 	clock_gettime(CLOCK_MONOTONIC, &start);
 
 	for (index = 0 ; index < size ; index += step)
-		hotring_get(h, index, &node, &prev); 
+		hotring_get(&h, index, &node, &prev); 
 //		item_check_present(h, index);
 
 	clock_gettime(CLOCK_MONOTONIC, &finish);
@@ -81,7 +81,7 @@ static void benchmark_search(struct hash *h,
 	nsec = (finish.tv_sec - start.tv_sec) * NSEC_PER_SEC +
 	       (finish.tv_nsec - start.tv_nsec);
 
-	printv(1, "Size: %8ld, step: %8ld, search: %15lld ns\n",
+	printv(1, "Size: %8ld, step: %8ld, search   : %15lld ns\n",
 		size, step, nsec);
 }
 
@@ -129,7 +129,7 @@ void my_benchmark() {
     unsigned long indices[12] = {72, 36, 22, 37, 42, 6, 535822335, 87, 11, 16, 18, 1073741823};
 	unsigned long item[12] = {72, 36, 22, 37, 42, 6, 535822335, 87, 11, 16, 18, 1073741823};
 
-	struct hash *h = hotring_alloc(NBITS, 3);	
+	struct hash *h = hotring_alloc(NBITS, 3);
 	struct hash *new;
 
 	/* Construct Radix Tree */
@@ -158,21 +158,21 @@ void my_benchmark() {
 
 
 void benchmark() {
-	unsigned long size[] = {1 << 8, 0};
+	unsigned long size[] = {1 << 14, 0};
 //	unsigned long step[] = {1, 2, 7, 15, 63, 64, 65,
 //				128, 256, 512, 12345, 0};
-	unsigned long step[] = {1, 0};
+	unsigned long step[] = {1, 7, 0};
 	int c, s;
 
 	printv(1, "starting benchmarks\n");
 
-	my_benchmark();
-
 #if 0
+	my_benchmark();
+#endif
+
 	for (c = 0; size[c]; c++)
 		for (s = 0; step[s]; s++)
 			benchmark_size(size[c], step[s]);
-#endif
 		
 
 	printv(1, "benchmarks finished.\n");

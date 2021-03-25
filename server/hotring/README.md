@@ -24,8 +24,9 @@ hotring_delete(h, 30);
   - [ ] multi-threading
 
 ## PARAMETER
-1. NBITS : number of bits for hash value
+1. NBITS : number of bits for hash value (must higher then KBITS)
 2. INCOME_THRESHOLD : When to rehash
+3. INTERVAL : How often check statistic
 
 ## reference
 hotring papaer (https://www.usenix.org/conference/fast20/presentation/chen-jiqiang)

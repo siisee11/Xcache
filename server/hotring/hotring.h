@@ -7,8 +7,9 @@
 #include "list.h"
 #include "rcupdate.h"
 
-#define NBITS	(32)
+#define NBITS	(10)
 #define INCOME_THRESHOLD	(5)
+#define INTERVAL  10
 
 struct uint48 {
 	    uint64_t x:48;
@@ -67,9 +68,10 @@ struct item {
 
 /* hash function */
 static inline unsigned long hashCode(struct hash *h, unsigned long key, unsigned long *tag) {
-	unsigned long hash_value = key % ((unsigned long) 1 << h->n);
+	unsigned long hash_value = key % ((unsigned long) 1 << h->n );
 	*tag = hash_value % (1 << (h->n - h->k));
-	return key / (1 << (h->n - h->k));
+//	return key / (1 << (h->n - h->k)); /* XXX */
+	return hash_value / (1 << (h->n - h->k)); 
 }
 
 struct hash *hotring_alloc(unsigned long, unsigned long );

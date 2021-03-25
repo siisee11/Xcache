@@ -7,6 +7,7 @@
 #include "hotring.h"
 #include "error.h"
 
+
 __thread int nr_request = 0;
 
 struct hash *cur_hash;
@@ -51,7 +52,7 @@ hotring_alloc(unsigned long nbits, unsigned long kbits)
 	if (ret) {
 		ret->n = nbits;
 		ret->k = kbits;
-		ret->size = (1 << kbits);
+		ret->size = (1 << kbits);  /* XXX: kbit --> nbits */
 		ret->slots = (void *)calloc(ret->size, sizeof(void *));
 		for (int i = 0 ; i < ret->size ; i++) {
 			ret->slots[i] = NULL;
@@ -218,7 +219,7 @@ int hotring_get(struct hash **hashp, unsigned long key, struct hash_node **nodep
 		case GET_ACCESS_HOT:
 			return 1;
 		case GET_ACCESS_COLD:
-			if ( nr_request >= 5 ) {
+			if ( nr_request >= INTERVAL ) {
 				hotspot_shift(hashp, hashIndex);
 				nr_request = 0;
 			}
@@ -503,11 +504,12 @@ struct hash *hotring_rehash(struct hash *h)
 	int hash_tag_bits = h->n - h->k;
 	unsigned long halfTag =  (unsigned long) 1 << (hash_tag_bits - 1);
 
+	/* XXX h to new */
 	int i;
-	for (i = 0 ; i < h->size; i++){
-		if ( h->slots[i] ){
-			__hotring_get(h, (i << hash_tag_bits), &ring1_head, &ring2_tail);
-			__hotring_get(h, (i << hash_tag_bits) + halfTag , &ring2_head, &ring1_tail);
+	for (i = 0 ; i < new->size; i++){
+		if ( new->slots[i] ){
+			__hotring_get(new, (i << hash_tag_bits), &ring1_head, &ring2_tail);
+			__hotring_get(new, (i << hash_tag_bits) + halfTag , &ring2_head, &ring1_tail);
 			ring1_tail->list.next = &ring1_head->list;
 			ring2_tail->list.next = &ring2_head->list;
 		}

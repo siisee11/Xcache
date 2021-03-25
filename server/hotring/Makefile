@@ -8,7 +8,7 @@ LIBS = -lurcu
 
 OBJECTS = main.o hotring.o benchmark.o test.o
 
-TARGET = a.out
+TARGET = hotring
 
 all : $(TARGET)
 
@@ -27,4 +27,3 @@ clean :
 new : 
 	$(MAKE) clean 
 	$(MAKE) 
-
