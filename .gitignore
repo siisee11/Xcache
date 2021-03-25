@@ -69,3 +69,5 @@ the-geek-in-the-corner/
 
 .nfs*
 out_*
+rdma_svr
+rdma_svr_odp

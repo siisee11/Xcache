@@ -153,10 +153,11 @@ int post_recv(int client_id, int queue_id){
 	wr.num_sge = 1;
 	wr.next = NULL;
 
-	if(ibv_post_srq_recv(gctrl[client_id]->queues[queue_id].qp->srq, &wr, &bad_wr)){
-		fprintf(stderr, "[%s] ibv_post_recv failed\n", __func__);
-		return 1;
-	}
+#ifdef SRQ
+	TEST_NZ(ibv_post_srq_recv(gctrl[client_id]->queues[queue_id].qp->srq, &wr, &bad_wr));
+#else
+	TEST_NZ(ibv_post_recv(gctrl[client_id]->queues[queue_id].qp, &wr, &bad_wr));
+#endif
 	return 0;
 }
 
@@ -674,12 +675,16 @@ static void create_qp(struct queue *q, int client_number)
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
 	}
 
-	qp_attr.send_cq = send_cq;
+	struct ibv_cq* recv_cq = ibv_create_cq(q->cm_id->verbs, 256, NULL, NULL, 0);
+	if(!send_cq){
+		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
+	}
+
   #ifdef SRQ
 	qp_attr.srq = srq[client_number];
-  #else
-	qp_attr.recv_cq = recv_cq;
   #endif
+	qp_attr.send_cq = send_cq;
+	qp_attr.recv_cq = recv_cq;
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
 	qp_attr.cap.max_send_wr = 4096;
 	qp_attr.cap.max_recv_wr = 4096;
@@ -715,6 +720,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 	struct device *dev = get_device(q);
 
+#ifdef SRQ
 	/* if it is first queue pair of this client */
 	if (queue_number == 0) {
 		struct ibv_srq_init_attr srq_init_attr;
@@ -729,6 +735,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 			fprintf(stderr, "Error, ibv_create_srq() failed\n");
 		}
 	}
+#endif
 
 	create_qp(q, client_number);
 
@@ -808,7 +815,11 @@ int on_connection(struct queue *q)
 		rwr.sg_list = &sge;
 		rwr.num_sge = 1;
 
+#ifdef SRQ
 		TEST_NZ(ibv_post_srq_recv(q->qp->srq, &rwr, &bad_rwr));
+#else
+		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
+#endif
 	}
 
 
