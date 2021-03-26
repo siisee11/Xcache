@@ -637,8 +637,8 @@ static device *get_device(struct queue *q)
 //		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
 
 		/* Pre Malloced Page Queue */
-		char *ptr = (char *)malloc(LOCAL_META_REGION_SIZE + PAGE_SIZE * 100000);	
-		for (int j = 0 ; j < 100000 ; j++ ) {
+		char *ptr = (char *)malloc(LOCAL_META_REGION_SIZE + PAGE_SIZE * 500000);	
+		for (int j = 0 ; j < 500000 ; j++ ) {
 			enqueue(prepage_queue, (void *)(ptr + PAGE_SIZE * j + LOCAL_META_REGION_SIZE));
 		}
 		dprintf("[  OK  ] Prepage Queue alloced (from %lx)\n", (uint64_t)ptr);
@@ -650,7 +650,7 @@ static device *get_device(struct queue *q)
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
 					dev->pd,
 					(void *)ctrl->local_mm,
-					LOCAL_META_REGION_SIZE + PAGE_SIZE * 100000,
+					LOCAL_META_REGION_SIZE + PAGE_SIZE * 500000,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 
 #else
