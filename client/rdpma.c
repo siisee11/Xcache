@@ -33,6 +33,7 @@ int QP_MAX_SEND_WR = 4096;
 
 //#define KTIME_CHECK 1
 //#define ODP 1
+//#define ODPGET 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -657,7 +658,7 @@ out:
 }
 EXPORT_SYMBOL_GPL(rdpma_get);
 
-#else /* ---------------------------------------------- ODP ----------------------------------- */
+#else /* ---------------------------------------------- ODPGET ----------------------------------- */
 
 /** rdpma_get - get page from server 
  *
