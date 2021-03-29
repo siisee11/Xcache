@@ -242,10 +242,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	dev = q->ctrl->rdev->dev;
 
 	/* this msg_id is unique in this queue */
-//	spin_lock(&q->queue_lock);
-//	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
-//	spin_unlock(&q->queue_lock);
-
 	msg_id = 0;
 
 	/* 1. post recv */
@@ -395,7 +391,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	fperf_end("page_write");
 #endif
 
-#if 1
+#if 0
 	/* Polling recv cq here */
 	do{
 		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
@@ -413,7 +409,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 out:
 
-	post_recv(q);
 	post_recv(q);
 
 	return ret;

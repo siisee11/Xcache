@@ -307,7 +307,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
 
-#if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
+#if 0 /* XXX: THIS IS IN ODP BLOCK */
 				sge.addr = 0;
 				sge.length = 0;
 				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
