@@ -509,13 +509,14 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 
 				gctrl[client_id]->kv->Insert(*key, (Value_t)save_page, 0, 0);
 //				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
-				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
-				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &end);
 				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
+
+				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
+				dprintf("[ INFO ] page %s\n", (char *)save_page);
 
 #if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
 				sge.addr = 0;
@@ -532,6 +533,10 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				if(ret){
 					fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 				}
+
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &end);
+#endif
 
 				struct ibv_wc wc2;
 				int ne;

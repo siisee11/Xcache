@@ -31,6 +31,7 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
+
 #define KTIME_CHECK 1
 #define ODP 1
 #define ODPGET 1
@@ -727,7 +728,7 @@ out:
 }
 EXPORT_SYMBOL_GPL(rdpma_get);
 
-#else /* ---------------------------------------------- ODP ----------------------------------- */
+#else /* ---------------------------------------------- ODPGET ----------------------------------- */
 
 /** rdpma_get - get page from server 
  *
