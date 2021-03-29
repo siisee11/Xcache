@@ -306,6 +306,39 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
+
+#if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
+				sge.addr = 0;
+				sge.length = 0;
+				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
+
+				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
+				wr.sg_list = &sge;
+				wr.num_sge = 0;
+				wr.send_flags = IBV_SEND_SIGNALED;
+				wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
+
+				ret = ibv_post_send(q->qp, &wr, &bad_wr);
+				if(ret){
+					fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
+				}
+
+				struct ibv_wc wc2;
+				int ne;
+				do{
+					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+					if(ne < 0){
+						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+						return;
+					}
+				}while(ne < 1);
+
+				if(wc2.status != IBV_WC_SUCCESS){
+					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+					return;
+				}
+#endif
+
 				dprintf("[ INFO ] MSG_WRITE DONE\n");
 
 			/* ------------------------------------------------ MSG_READ ----------------------------------------------- */
