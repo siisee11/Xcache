@@ -31,9 +31,10 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
-//#define KTIME_CHECK 1
-//#define ODP 1
-//#define ODPGET 1
+
+#define KTIME_CHECK 1
+#define ODP 1
+#define ODPGET 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -50,7 +51,9 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 
 #ifdef KTIME_CHECK
 void pmdfc_rdma_print_stat() {
+	fperf_print("meta_write");
 	fperf_print("poll_recv");
+	fperf_print("page_write");
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #else
@@ -60,6 +63,7 @@ void pmdfc_rdma_print_stat() {
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #endif
 
+int post_recv(struct rdma_queue *q);
 
 static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 {
@@ -78,6 +82,9 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 //	spin_lock(&q->queue_lock);
 	idr_remove(&q->queue_status_idr, req->mid);
 //	spin_unlock(&q->queue_lock);
+	post_recv(q);
+	post_recv(q);
+
 #endif
 
 	kmem_cache_free(req_cache, req);
@@ -236,13 +243,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	dev = q->ctrl->rdev->dev;
 
 	/* this msg_id is unique in this queue */
-//	spin_lock(&q->queue_lock);
-	msg_id = idr_alloc(&q->queue_status_idr, q, 0, 0, GFP_ATOMIC);
-//	spin_unlock(&q->queue_lock);
+	msg_id = 0;
 
 	/* 1. post recv */
-	ret = post_recv(q);
-	BUG_ON(ret);
+//	ret = post_recv(q);
+//	BUG_ON(ret);
 
 	/* 2. post send */
 	/* setup imm data */
@@ -289,15 +294,38 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.num_sge = 1;
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; 
+//	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; 
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
+#ifdef KTIME_CHECK
+	fperf_start("meta_write");
+#endif
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
+
+	/* Poll send completion queue first */
+	do{
+		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		ret = -1;
+		goto out;
+	}
+
+#ifdef KTIME_CHECK
+	fperf_end("meta_write");
+#endif
 
 #ifdef KTIME_CHECK
 	fperf_start("poll_recv");
@@ -327,7 +355,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* WRITE PAGE */
 	rdma_wr[0].wr.next    = NULL;
-	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
+//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[0].wr.sg_list = &sge[0];
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_RDMA_WRITE;
@@ -335,12 +363,54 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].remote_addr = *dma_addr;
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
+#ifdef KTIME_CHECK
+	fperf_start("page_write");
+#endif
+
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
 
+	/* Poll send completion queue first */
+	do{
+		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		ret = -1;
+		goto out;
+	}
+
+#ifdef KTIME_CHECK
+	fperf_end("page_write");
+#endif
+
+#if 0
+	/* Polling recv cq here */
+	do{
+		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(unlikely(wc.status != IB_WC_SUCCESS)){
+		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+#endif
+
 out:
+
+	post_recv(q);
 
 	return ret;
 }
@@ -1012,6 +1082,7 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 	int ret;
 	int comp_vector = 0;
 
+#if 0
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 	/* write async, read sync */
 	if (q->qp_type == QP_WRITE_SYNC) {
@@ -1020,7 +1091,9 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 	}
 	else
 		q->send_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
+#endif
 
+	q->send_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
 	q->recv_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
 
 	if (IS_ERR(q->send_cq)) {

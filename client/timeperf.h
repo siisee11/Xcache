@@ -8,7 +8,7 @@
 #include <linux/kernel.h> 
 #include <linux/hrtimer.h> 
 
-#define MAX_FUNC 20
+#define MAX_FUNC 10
 struct fperf {
 	const char *str;
 	ktime_t elapsed;
@@ -83,7 +83,7 @@ inline void fperf_print(const char *str) {
 		}
 	}
 	if(fpp != NULL) {
-		pr_info("[ %s ]: average %lld nsec \n", str, fpp->elapsed/fpp->count);
+		pr_info("[ %s ]: average %lld usec \n", str, fpp->elapsed/fpp->count);
 	}
 }
 #endif
