@@ -31,7 +31,7 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
-//#define KTIME_CHECK 1
+#define KTIME_CHECK 1
 #define ODP 1
 #define ODPGET 1
 
@@ -50,7 +50,9 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 
 #ifdef KTIME_CHECK
 void pmdfc_rdma_print_stat() {
+	fperf_print("meta_write");
 	fperf_print("poll_recv");
+	fperf_print("page_write");
 }
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #else
@@ -60,6 +62,7 @@ void pmdfc_rdma_print_stat() {
 EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
 #endif
 
+int post_recv(struct rdma_queue *q);
 
 static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 {
@@ -78,6 +81,12 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 //	spin_lock(&q->queue_lock);
 	idr_remove(&q->queue_status_idr, req->mid);
 //	spin_unlock(&q->queue_lock);
+	post_recv(q);
+
+#ifdef KTIME_CHECK
+	fperf_end("page_write");
+	fperf_end("meta_write");
+#endif
 #endif
 
 	kmem_cache_free(req_cache, req);
@@ -241,8 +250,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 //	spin_unlock(&q->queue_lock);
 
 	/* 1. post recv */
-	ret = post_recv(q);
-	BUG_ON(ret);
+//	ret = post_recv(q);
+//	BUG_ON(ret);
 
 	/* 2. post send */
 	/* setup imm data */
@@ -300,6 +309,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	}
 
 #ifdef KTIME_CHECK
+	fperf_start("meta_write");
+#endif
+
+#ifdef KTIME_CHECK
 	fperf_start("poll_recv");
 #endif
 
@@ -339,6 +352,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
+
+#ifdef KTIME_CHECK
+	fperf_start("page_write");
+#endif
 
 out:
 

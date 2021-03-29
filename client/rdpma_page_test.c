@@ -280,6 +280,7 @@ int main(void){
 	else 
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
+#if 0
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
 		args[i]->comp = &comp[i];
@@ -319,6 +320,7 @@ int main(void){
 		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 	else 
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
+#endif
 
 	pmdfc_rdma_print_stat();
 
