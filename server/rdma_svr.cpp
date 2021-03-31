@@ -51,14 +51,11 @@ uint64_t memory_region;
 struct ibv_srq *srq[16]; /* 1 SRQ per Client */
 #endif
 
-queue_t *prepage_queue = NULL;
-
 /* counting values */
 int putcnt = 0;
 int getcnt = 0;
 int found_cnt = 0;
 int notfound_cnt = 0;
-
 
 /* performance timer */
 uint64_t rdpma_handle_write_elapsed=0;
@@ -166,36 +163,367 @@ int post_recv(int client_id, int queue_id){
 	return 0;
 }
 
-static void produce_page(queue_t *q, int client_id) {
-	while (true) {
-		if (count_queue(q) < QUEUE_SIZE / 2) {
-			char *ptr = (char *)malloc(PAGE_SIZE * 100000);
-			for (int i = 0 ; i < 100000; i++ ) {
-				enqueue(q, (void *)(ptr + PAGE_SIZE * i));
-			}			
+
+static void process_write(struct queue *q, int cid, int qid, int mid){
+	struct ibv_send_wr wr = {};
+	struct ibv_send_wr *bad_wr = NULL;
+	struct ibv_sge sge = {};
+	int ret;
+#if defined(TIME_CHECK)
+	struct timespec start, end;
+#endif
+
+	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl[cid]->local_mm, qid, mid);
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + PAGE_SIZE * page_offset++);
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+	memcpy((char *)save_page, (char *)page, PAGE_SIZE);
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+#endif
+	gctrl[cid]->kv->Insert(*key, (Value_t)save_page, 0, 0);
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+
+	dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
+	dprintf("[ INFO ] page %s\n", (char *)save_page);
+
+#if 1 /* XXX: if this block is commented, some client message ignored */
+	sge.addr = 0;
+	sge.length = 0;
+	sge.lkey = gctrl[cid]->mr_buffer->lkey;
+
+	wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
+	wr.sg_list = &sge;
+	wr.num_sge = 0;
+	wr.send_flags = IBV_SEND_SIGNALED;
+	wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
+
+	ret = ibv_post_send(q->qp, &wr, &bad_wr);
+	if(ret){
+		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
+	}
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+#endif
+	{
+		struct ibv_wc wc2;
+		int ne;
+		do{
+			ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+			if(ne < 0){
+				fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+				return;
+			}
+		}while(ne < 1);
+
+		if(wc2.status != IBV_WC_SUCCESS){
+			fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+			return;
 		}
 	}
+#endif
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+#endif
 }
 
-#ifdef ODP
-static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
-	std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	struct ibv_wc wc;
-	struct ibv_wc wc2;
-	int ne;
+static void process_read(struct queue *q, int cid, int qid, int mid){
+	struct ibv_send_wr wr = {};
+	struct ibv_send_wr *bad_wr = NULL;
+	struct ibv_sge sge = {};
 #if defined(TIME_CHECK)
 	struct timespec start, end;
 	struct timespec memcpy_start, memcpy_end;
-	struct timespec poll_start, poll_end;
-	int isFirst = 1;
 #endif
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
+	uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
+	dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
+
+	/* 1. Get page address -> value */
+	void* value;
+	bool abort = false;
+
+	value = (void *)gctrl[cid]->kv->Get((Key_t&)*key, 0); 
+
+	if(!value){
+		dprintf("Value for key[%lx] not found\n", key);
+		abort = true;
+	}
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+
+	if( !abort ) {
+		found_cnt++;
+		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, *key);
+		dprintf("[ INFO ] page %s\n", (char *)value);
+
+		/* 2. Send page retrieved to client so that client can initiate RDMA READ */	
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &memcpy_start);
+#endif
+		memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &memcpy_end);
+		rdpma_handle_read_poll_found_memcpy_elapsed+= memcpy_end.tv_nsec - memcpy_start.tv_nsec + 1000000000 * (memcpy_end.tv_sec - memcpy_start.tv_sec);
+#endif
+		dprintf("[ INFO ] page %s\n", (char *)target_addr);
+
+		wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+		wr.sg_list = &sge;
+		wr.num_sge = 0;
+		wr.send_flags = IBV_SEND_SIGNALED;
+		wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
+
+		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+
+	} else {
+		notfound_cnt++;
+
+		wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+		wr.sg_list = &sge;
+		wr.num_sge = 0;
+		wr.send_flags = IBV_SEND_SIGNALED;
+		wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_ABORTED, qid));
+
+		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+	}
+
+	{
+		struct ibv_wc wc2;
+		int ne;
+		do{
+			ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+			if(ne < 0){
+				fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+				return;
+			}
+		}while(ne < 1);
+
+		if(wc2.status != IBV_WC_SUCCESS){
+			fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+			return;
+		}
+	}
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	if (abort) {
+		rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+	} else {
+		rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+	}
+#endif
+}
+
+
+
+static void process_write_odp(struct queue *q, int cid, int qid, int mid){
+	struct ibv_wc wc2;
+	int ne, ret;
+	struct ibv_send_wr wr = {};
+	struct ibv_send_wr *bad_wr = NULL;
+	struct ibv_sge sge = {};
+#if defined(TIME_CHECK)
+	struct timespec start, end;
+#endif
+	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t* target_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + PAGE_SIZE * page_offset++);
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+	*target_addr = (uint64_t)save_page;
+
+#if ODP
+	/* Prefatch MR */
+	{
+		struct ibv_sge sg_list;
+
+		sg_list.lkey = gctrl[cid]->mr_buffer->lkey;
+		sg_list.addr = (uintptr_t)save_page;
+		sg_list.length = PAGE_SIZE;
+
+		ret = ibv_advise_mr(gctrl[cid]->dev->pd, IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
+				IB_UVERBS_ADVISE_MR_FLAG_FLUSH,
+				&sg_list, 1);
+
+		if (ret)
+			fprintf(stderr, "Couldn't prefetch MR(%d). Continue anyway\n", ret);
+	}
+#endif
+
+	sge.addr = (uint64_t)target_addr;
+	sge.length = sizeof(uint64_t);
+	sge.lkey = gctrl[cid]->mr_buffer->lkey;
+
+	wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
+	wr.sg_list = &sge;
+	wr.num_sge = 1;
+	wr.send_flags = IBV_SEND_SIGNALED;
+	wr.wr.rdma.remote_addr = gctrl[cid]->clientmr.baseaddr + GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid);
+	wr.wr.rdma.rkey        = gctrl[cid]->clientmr.key;
+	wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
+
+	ret = ibv_post_send(q->qp, &wr, &bad_wr);
+	if(ret){
+		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
+	}
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+	gctrl[cid]->kv->Insert(*key, (Value_t)save_page, 0, 0);
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+	dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
+	dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+#endif
+	do{
+		ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+		if(ne < 0){
+			fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+			return;
+		}
+	}while(ne < 1);
+
+	if(wc2.status != IBV_WC_SUCCESS){
+		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+		return;
+	}
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+#endif
+}
+
+static void process_read_odp(struct queue *q, int cid, int qid, int mid){
+	struct ibv_wc wc2;
+	int ne;
+	struct ibv_send_wr wr = {};
+	struct ibv_send_wr *bad_wr = NULL;
+	struct ibv_sge sge = {};
+#if defined(TIME_CHECK)
+	struct timespec start, end;
+#endif
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+
+	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
+	dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
+
+	/* 1. Get page address -> value */
+	void* value;
+	bool abort = false;
+
+	value = (void *)gctrl[cid]->kv->Get((Key_t&)*key, 0); 
+
+	if(!value){
+		dprintf("Value for key[%lx] not found\n", key);
+		abort = true;
+	}
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+
+	if( !abort ) {
+		found_cnt++;
+		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, *key);
+		dprintf("[ INFO ] page %s\n", (char *)value);
+
+		/* 2. Send page retrieved to client memory directly */	
+		sge.addr = (uint64_t)value;
+		sge.length = PAGE_SIZE;
+		sge.lkey = gctrl[cid]->mr_buffer->lkey;
+
+		wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
+		wr.sg_list = &sge;
+		wr.num_sge = 1;
+		wr.send_flags = IBV_SEND_SIGNALED;
+		wr.wr.rdma.remote_addr = *remote_addr;
+		wr.wr.rdma.rkey        = gctrl[cid]->clientmr.key;
+		wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
+
+		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+	} else {
+		notfound_cnt++;
+
+		wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+		wr.sg_list = &sge;
+		wr.num_sge = 0;
+		wr.send_flags = IBV_SEND_SIGNALED;
+		wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_ABORTED, qid));
+
+		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+	}
+
+	do{
+		ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
+		if(ne < 0){
+			fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+			return;
+		}
+	}while(ne < 1);
+
+	if(wc2.status != IBV_WC_SUCCESS){
+		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
+		return;
+	}
+
+#if defined(TIME_CHECK)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	if (abort) {
+		rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+	} else {
+		rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
+	}
+#endif
+
+}
+
+
+static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
+	std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	struct ibv_wc wc;
+	int ne;
 
 	while(1) {
 		ne = 0;
-#ifdef TIME_CHECK
-		if (!isFirst)
-			clock_gettime(CLOCK_MONOTONIC, &poll_start);
-#endif
 		do{
 			ne += ibv_poll_cq(q->qp->recv_cq, 1, &wc);
 			if(ne < 0){
@@ -204,256 +532,13 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 			}
 		}while(ne < 1);
 
-#ifdef TIME_CHECK
-		if (!isFirst){
-			clock_gettime(CLOCK_MONOTONIC, &poll_end);
-			rdpma_handle_recv_poll_elapsed += poll_end.tv_nsec - poll_start.tv_nsec + 1000000000 * (poll_end.tv_sec - poll_start.tv_sec);
-		}
-		isFirst = 0;
-#endif
-
 		if(wc.status != IBV_WC_SUCCESS){
 			fprintf(stderr, "Failed status %s (%d)\n", ibv_wc_status_str(wc.status), wc.status);
 			die("Failed status");
 		}
 
-		int ret;
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
 			int qid, mid, type, tx_state, num;
-			struct ibv_send_wr wr = {};
-			struct ibv_send_wr *bad_wr = NULL;
-			struct ibv_sge sge = {};
-
-			bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
-			dprintf("[ INFO ] On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
-
-
-			if(type == MSG_WRITE){
-				putcnt++;
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
-				uint64_t* target_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
-				
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-#endif
-//				void *save_page = dequeue(prepage_queue);
-				void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[client_id]->local_mm) + PAGE_SIZE * page_offset++);
-				*target_addr = (uint64_t)save_page;
-
-				sge.addr = (uint64_t)target_addr;
-				sge.length = sizeof(uint64_t);
-				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
-
-				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
-				wr.sg_list = &sge;
-				wr.num_sge = 1;
-				wr.send_flags = IBV_SEND_SIGNALED;
-				wr.wr.rdma.remote_addr = gctrl[client_id]->clientmr.baseaddr + GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid);
-				wr.wr.rdma.rkey        = gctrl[client_id]->clientmr.key;
-				wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
-
-				ret = ibv_post_send(q->qp, &wr, &bad_wr);
-				if(ret){
-					fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
-				}
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-
-				gctrl[client_id]->kv->Insert(*key, (Value_t)save_page, 0, 0);
-//				gctrl[client_id]->kv->InsertExtent(*key, (Value_t)save_page, num);
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-				dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
-				dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
-
-#if 1
-				/* Prefatch MR */
-				{
-					struct ibv_sge sg_list;
-					int ret;
-
-					sg_list.lkey = gctrl[client_id]->mr_buffer->lkey;
-					sg_list.addr = (uintptr_t)save_page;
-					sg_list.length = PAGE_SIZE;
-
-					ret = ibv_advise_mr(gctrl[client_id]->dev->pd, IBV_ADVISE_MR_ADVICE_PREFETCH_WRITE,
-							IB_UVERBS_ADVISE_MR_FLAG_FLUSH,
-							&sg_list, 1);
-
-					if (ret)
-						fprintf(stderr, "Couldn't prefetch MR(%d). Continue anyway\n", ret);
-				}
-#endif
-
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-#endif
-				do{
-					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
-					if(ne < 0){
-						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-						return;
-					}
-				}while(ne < 1);
-
-				if(wc2.status != IBV_WC_SUCCESS){
-					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
-					return;
-				}
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-#endif
-
-				dprintf("[ INFO ] MSG_WRITE DONE (%d)\n", putcnt);
-
-			/* ------------------------------------------------ MSG_READ ----------------------------------------------- */
-			} else if(type == MSG_READ) {
-				getcnt++;
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-#endif
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
-				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
-				uint64_t target_addr = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl[client_id]->local_mm, qid, mid);
-
-				/* 1. Get page address -> value */
-				void* value;
-				bool abort = false;
-
-				value = (void *)gctrl[client_id]->kv->Get((Key_t&)*key, 0); 
-//				value = (void *)gctrl[client_id]->kv->GetExtent((Key_t&)*key); 
-
-				if(!value){
-					dprintf("Value for key[%lx] not found\n", key);
-					abort = true;
-				}
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-
-				if( !abort ) {
-					found_cnt++;
-					dprintf("[ INFO ] page %s, key %lx Searched\n", (char *)value, *key);
-					dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
-					dprintf("[ INFO ] page address %lx\n", (uint64_t)value);
-
-					/* 2. Send page retrieved to client so that client can initiate RDMA READ */	
-#if defined(TIME_CHECK)
-					clock_gettime(CLOCK_MONOTONIC, &memcpy_start);
-#endif
-					memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
-#if defined(TIME_CHECK)
-					clock_gettime(CLOCK_MONOTONIC, &memcpy_end);
-					rdpma_handle_read_poll_found_memcpy_elapsed+= memcpy_end.tv_nsec - memcpy_start.tv_nsec + 1000000000 * (memcpy_start.tv_sec - memcpy_end.tv_sec);
-#endif
-					sge.addr = (uint64_t)value;
-					sge.length = PAGE_SIZE;
-					sge.lkey = gctrl[client_id]->mr_buffer->lkey;
-
-					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
-					wr.sg_list = &sge;
-//					wr.num_sge = 1;
-					wr.num_sge = 0;
-					wr.send_flags = IBV_SEND_SIGNALED;
-//					wr.wr.rdma.remote_addr = *remote_addr;
-//					wr.wr.rdma.rkey        = gctrl[client_id]->clientmr.key;
-					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
-
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-
-				} else {
-					notfound_cnt++;
-
-					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-					wr.sg_list = &sge;
-					wr.num_sge = 0;
-					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_ABORTED, qid));
-
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-				}
-
-				do{
-					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
-					if(ne < 0){
-						fprintf(stderr, "[%s] ibv_poll_cq wc2 failed\n", __func__);
-						return;
-					}
-				}while(ne < 1);
-
-				if(wc2.status != IBV_WC_SUCCESS){
-					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
-					return;
-				}
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				if (abort) {
-					rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-				} else {
-					rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-				}
-#endif
-			}
-
-			post_recv(client_id, queue_id); /* XXX */
-		}
-		else if((int)wc.opcode == IBV_WC_RDMA_READ){
-			dprintf("[%s]: received WC_RDMA_READ\n", __func__);
-			/* the client is reading data from read region*/
-		}
-		else if ( (int)wc.opcode == IBV_WC_RECV ){
-			/* only for first connection */
-			dprintf("[ INFO ] connected. receiving memory region info.\n");
-			printf("[ INFO ] *** Client MR key=%u base vaddr=%p size=%lu ***\n", gctrl[client_id]->clientmr.key, (void *)gctrl[client_id]->clientmr.baseaddr
-					, gctrl[client_id]->clientmr.mr_size/1024);
-		}else{
-			fprintf(stderr, "Received a weired opcode (%d)\n", (int)wc.opcode);
-		}
-	}
-}
-
-#else  /* ODP --------------------------------------------------------------------- */
-static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
-	std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	struct ibv_wc wc;
-	struct ibv_wc wc2;
-	int ne;
-#if defined(TIME_CHECK)
-	struct timespec start, end;
-	struct timespec memcpy_start, memcpy_end;
-#endif
-
-	while(1) {
-		ne = 0;
-		do{
-			ne += ibv_poll_cq(q->qp->recv_cq, 1, &wc);
-			if(ne < 0){
-				fprintf(stderr, "ibv_poll_cq failed %d\n", ne);
-				die("ibv_poll_cq failed");
-			}
-		}while(ne < 1);
-
-		if(wc.status != IBV_WC_SUCCESS){
-			fprintf(stderr, "Failed status %s (%d)\n", ibv_wc_status_str(wc.status), wc.status);
-			die("Failed status");
-		}
-
-		int ret;
-		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
-			int qid, mid, type, tx_state, num;
-			struct ibv_send_wr wr = {};
-			struct ibv_send_wr *bad_wr = NULL;
-			struct ibv_sge sge = {};
 
 			bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
 			dprintf("[ INFO ] On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
@@ -462,153 +547,17 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 
 			if(type == MSG_WRITE){
 				putcnt++;
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
-				uint64_t* target_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
-				
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
+#ifdef NORMALPUT
+				process_write(q, client_id, qid, mid);
+#elif BIGMRPUT 
+				process_write_odp(q, client_id, qid, mid);
 #endif
-//				void *save_page = dequeue(prepage_queue);
-				void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[client_id]->local_mm) + PAGE_SIZE * page_offset++);
-				*target_addr = (uint64_t)save_page;
-
-				sge.addr = (uint64_t)target_addr;
-				sge.length = sizeof(uint64_t);
-				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
-
-				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
-				wr.sg_list = &sge;
-				wr.num_sge = 1;
-				wr.send_flags = IBV_SEND_SIGNALED;
-				wr.wr.rdma.remote_addr = gctrl[client_id]->clientmr.baseaddr + GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid);
-				wr.wr.rdma.rkey        = gctrl[client_id]->clientmr.key;
-				wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
-
-				ret = ibv_post_send(q->qp, &wr, &bad_wr);
-				if(ret){
-					fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
-				}
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-
-				gctrl[client_id]->kv->Insert(*key, (Value_t)save_page, 0, 0);
-//				gctrl[client_id]->kv->InsertExtent(*key, (Value_t)save_page, num);
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-				dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
-				dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-#endif
-				do{
-					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
-					if(ne < 0){
-						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-						return;
-					}
-				}while(ne < 1);
-
-				if(wc2.status != IBV_WC_SUCCESS){
-					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
-					return;
-				}
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-#endif
-
-				dprintf("[ INFO ] MSG_WRITE DONE (%d)\n", putcnt);
 			} else if(type == MSG_READ) {
 				getcnt++;
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-#endif
-//				printf("[ INFO ] received MSG_READ\n");
-
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
-				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
-				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
-				dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
-
-				/* 1. Get page address -> value */
-				void* value;
-				bool abort = false;
-
-				value = (void *)gctrl[client_id]->kv->Get((Key_t&)*key, 0); 
-//				value = (void *)gctrl->kv->GetExtent((Key_t&)*key); 
-
-				if(!value){
-					dprintf("Value for key[%lx] not found\n", key);
-					abort = true;
-				}
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-
-				if( !abort ) {
-					found_cnt++;
-					dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, *key);
-					dprintf("[ INFO ] page %s\n", (char *)value);
-
-					/* 2. Send page retrieved to client so that client can initiate RDMA READ */	
-#if defined(TIME_CHECK)
-					clock_gettime(CLOCK_MONOTONIC, &memcpy_start);
-#endif
-					memcpy((char *)target_addr, (char *)value, PAGE_SIZE);
-#if defined(TIME_CHECK)
-					clock_gettime(CLOCK_MONOTONIC, &memcpy_end);
-					rdpma_handle_read_poll_found_memcpy_elapsed+= memcpy_end.tv_nsec - memcpy_start.tv_nsec + 1000000000 * (memcpy_end.tv_sec - memcpy_start.tv_sec);
-#endif
-					dprintf("[ INFO ] page %s\n", (char *)target_addr);
-
-					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-					wr.sg_list = &sge;
-					wr.num_sge = 0;
-					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
-
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-
-				} else {
-					notfound_cnt++;
-
-					wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-					wr.sg_list = &sge;
-					wr.num_sge = 0;
-					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_ABORTED, qid));
-
-					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
-				}
-
-				do{
-					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
-					if(ne < 0){
-						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-						return;
-					}
-				}while(ne < 1);
-
-				if(wc2.status != IBV_WC_SUCCESS){
-					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
-					return;
-				}
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				if (abort) {
-					rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-				} else {
-					rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-				}
+#ifdef NORMALGET
+				process_read(q, client_id, qid, mid);
+#elif BIGMRGET
+				process_read_odp(q, client_id, qid, mid);
 #endif
 			}
 		}
@@ -626,7 +575,6 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 		}
 	}
 }
-#endif
 
 
 static device *get_device(struct queue *q)
@@ -654,9 +602,6 @@ static device *get_device(struct queue *q)
 		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
 
 #else
-
-		/* No ODP */
-//		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
 		ctrl->local_mm = memory_region;
 		TEST_Z(ctrl->local_mm);
 
@@ -701,9 +646,9 @@ static void create_qp(struct queue *q, int client_number)
 		fprintf(stderr, "ibv_create_cq for send_cq failed\n");
 	}
 
-  #ifdef SRQ
+#ifdef SRQ
 	qp_attr.srq = srq[client_number];
-  #endif
+#endif
 	qp_attr.send_cq = send_cq;
 	qp_attr.recv_cq = recv_cq;
 	qp_attr.qp_type = IBV_QPT_RC; /* XXX */ 
@@ -808,7 +753,6 @@ int on_connection(struct queue *q)
 
 		printf("[ INFO ] connected. sending memory region info.\n");
 		printf("[ INFO ] *** Server MR key=%u base vaddr=%lx size=%d ***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, LOCAL_META_REGION_SIZE/1024);
-		/* XXX: base vaddr: (nil) why??  -> because of ODP */
 
 		servermr.baseaddr = (uint64_t) ctrl->local_mm;
 		servermr.key  = ctrl->mr_buffer->rkey;
@@ -987,13 +931,9 @@ int main(int argc, char **argv)
 
 	nr_cpus = std::thread::hardware_concurrency();
 
-	prepage_queue = create_queue("prepage");
 		
 	memory_region = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
 	printf("[ INFO ] malloc memory region of %zu MB\n", (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
-
-//	std::thread page_producer = std::thread( produce_page, prepage_queue, 0);
-//	page_producer.detach();
 
 
 	addr.sin_family = AF_INET;

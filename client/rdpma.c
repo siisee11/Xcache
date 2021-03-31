@@ -32,7 +32,10 @@ int QP_MAX_SEND_WR = 4096;
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
 //#define KTIME_CHECK 1 	/* Detail time check */
-#define BIGMR 1
+#define BIGMRPUT 1
+#define BIGMRGET 1
+//#define NORMALPUT 1
+//#define NORMALGET 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -204,9 +207,9 @@ int post_recv(struct rdma_queue *q){
 }
 
 
-#ifdef BIGMR
+#ifdef BIGMRPUT
 /** rdpma_put - put page into server
- *  ODP defined.
+ *  BIGMR defined.
  */
 int rdpma_put(struct page *page, uint64_t key, int batch)
 {
@@ -385,10 +388,11 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rdpma_put);
+#endif
 
-#else /* ------------------------------------- ODP ----------------------------------- */
+#ifdef NORMALPUT /* ------------------------------------- NORMAL ----------------------------------- */
 /** rdpma_put - put page into server
- *  ODP not defined
+ *  NORMAL DEFINED
  */
 int rdpma_put(struct page *page, uint64_t key, int batch)
 {
@@ -412,20 +416,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev;
 
-#if 0
-	/* Protect from overrun */
-	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
-		BUG_ON(inflight > QP_MAX_SEND_WR);
-		poll_target(q, 2048);
-		pr_info_ratelimited("[ WARN ] back pressure writes");
-	}
-#endif
-
 	msg_id = 0;
-
-	/* 1. post recv */
-	ret = post_recv(q);
-	BUG_ON(ret);
 
 	/* 2. post send */
 	/* setup imm data */
@@ -469,7 +460,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_RDMA_WRITE;
 	rdma_wr[0].wr.send_flags = 0;
-	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
+//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[0].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE_TO_PAGE(queue_id, msg_id);
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
@@ -479,7 +470,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.num_sge = 1;
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
+//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
@@ -488,6 +479,22 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+	}
+
+	/* Poll send completion queue first */
+	do{
+		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		ret = -1;
+		goto out;
 	}
 
 #if 1
@@ -508,6 +515,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 
 out:
+	ret = post_recv(q);
+	BUG_ON(ret);
 
 	return ret;
 }
@@ -515,7 +524,7 @@ EXPORT_SYMBOL_GPL(rdpma_put);
 #endif
 
 
-#ifdef ODPGET
+#ifdef ODP
 /** rdpma_get - get page from server 
  *
  * return -1 if failed
@@ -660,11 +669,151 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rdpma_get);
+#endif
 
-#else /* ---------------------------------------------- ODPGET ----------------------------------- */
-
+#ifdef BIGMRGET/* ---------------------------------------------- BIGMR ----------------------------------- */
 /** rdpma_get - get page from server 
  *
+ * BIGMR defined
+ * return -1 if failed
+ */
+int rdpma_get(struct page *page, uint64_t key, int batch)
+{
+	struct rdma_queue *q;
+	struct ib_device *dev;
+	struct ib_sge sge = { };
+	struct ib_rdma_wr rdma_wr = {};
+	const struct ib_send_wr *bad_wr;
+	int msg_id;
+	uint64_t imm;
+	int cpuid = smp_processor_id();
+	int queue_id;
+	uint64_t *addr, *raddr;
+	uint64_t dma_addr;
+	uint64_t page_dma;
+	struct ib_wc wc;
+	int ret, ne = 0;
+	int qid, mid, type, tx_state;
+	uint32_t num;
+	struct rdpma_metadata *meta;
+	struct rdma_req *req[2];
+
+	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+
+	/* get q and its infomation */
+	q = pmdfc_rdma_get_queue(cpuid, QP_READ_SYNC);
+	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_READ_SYNC);
+	dev = q->ctrl->rdev->dev;
+
+	msg_id = 0;
+
+
+	/* setup imm data */
+	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
+
+	/* DMA PAGE */
+	ret = get_req_for_page(&req[0], dev, page, batch, DMA_FROM_DEVICE);
+	if (unlikely(ret))
+		return ret;
+
+	BUG_ON(req[0]->dma == 0);
+
+	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	meta->key = key;
+	meta->batch = batch;
+	meta->raddr = req[0]->dma;
+
+//	pr_info("[ INFO ] WRITE(page %p) meta { key=%llx, raddr=%llx }\n", req[0]->page, meta->key, meta->raddr);
+//	pr_info("[ INFO ] queue_id=%d, msg_id=%d\n", queue_id, msg_id);
+
+	/* DMA METADATA */
+	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
+	if (unlikely(ret))
+		return ret;
+
+	BUG_ON(req[1]->dma == 0);
+
+	sge.addr = req[1]->dma;
+	sge.length = sizeof(struct rdpma_metadata);
+	sge.lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+	/* RDMA_WRITE metadata */
+	rdma_wr.wr.next    = NULL;
+	rdma_wr.wr.sg_list = &sge;
+	rdma_wr.wr.num_sge = 1;
+	rdma_wr.wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
+	rdma_wr.wr.send_flags = IB_SEND_SIGNALED;
+	rdma_wr.wr.ex.imm_data = imm;
+	rdma_wr.remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
+	rdma_wr.rkey = q->ctrl->servermr.key;
+
+	ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
+	if (unlikely(ret)) {
+		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+	}
+
+	/* Poll send completion queue first */
+	do{
+		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		ret = -1;
+		goto out;
+	}
+
+
+	/* Polling recv cq here */
+	do{
+		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(unlikely(wc.status != IB_WC_SUCCESS)){
+		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+
+		ret = -1;
+		goto out;
+	}
+
+	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
+	//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
+
+	if ( tx_state == TX_READ_ABORTED ) {
+		ret = -1;
+	} else {
+		ret = 0;
+	}
+
+out:
+	ret = post_recv(q);
+	BUG_ON(ret);
+
+	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
+	ib_dma_unmap_page(dev, req[1]->dma, sizeof(struct rdpma_metadata), DMA_BIDIRECTIONAL);
+
+	kmem_cache_free(req_cache, req[0]);
+	kmem_cache_free(req_cache, req[1]);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(rdpma_get);
+#endif
+
+#ifdef NORMALGET /* ---------------------------------------------- NORMAL ----------------------------------- */
+/** rdpma_get - get page from server 
+ *
+ * BIGMR defined
  * return -1 if failed
  */
 int rdpma_get(struct page *page, uint64_t key, int batch)
@@ -694,11 +843,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	dev = q->ctrl->rdev->dev;
 
 	msg_id = 0;
-
-	/* 1. post recv page first to reduce RNR */
-	//	ret = begin_recv(q, page);
-
-	/* 2. post send key */
 
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
@@ -835,8 +979,6 @@ out:
 	BUG_ON(ret);
 
 	ib_dma_unmap_page(dev, page_dma, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
-
-	idr_remove(&q->queue_status_idr, msg_id);
 
 	return ret;
 }

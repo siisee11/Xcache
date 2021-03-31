@@ -1,9 +1,15 @@
 # Server side code
 
 It is userspace program saving page contents into Persistent Memory.
-It communicate with clients kernel module (xCache client).
+It communicate with clients kernel module (Xcache client).
 
 PM server use CCEH and hotring as page content storage.
+
+## Defines
+NORMALPUT : PUT requires only one RTT, but memcpy overhead engaged.
+NORMALGET : GET requires 2RTT and also memcpy.
+BIGMRPUT  : No memcpy overhead but 2RTTs.
+BIGMRGET  : No memcpy overhead with 1RTT.
 
 ## Hyperparameter
 rdma_svr.h : NUM_QUEUES
