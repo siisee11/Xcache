@@ -31,10 +31,8 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
-
-#define KTIME_CHECK 1
-#define ODP 1
-#define ODPGET 1
+//#define KTIME_CHECK 1 	/* Detail time check */
+#define BIGMR 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -77,15 +75,6 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 		//q->write_error = wc->status;
 	}
 	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
-
-#ifdef ODP
-//	spin_lock(&q->queue_lock);
-	idr_remove(&q->queue_status_idr, req->mid);
-//	spin_unlock(&q->queue_lock);
-	post_recv(q);
-	post_recv(q);
-
-#endif
 
 	kmem_cache_free(req_cache, req);
 }
@@ -215,7 +204,7 @@ int post_recv(struct rdma_queue *q){
 }
 
 
-#ifdef ODP
+#ifdef BIGMR
 /** rdpma_put - put page into server
  *  ODP defined.
  */
@@ -245,11 +234,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	/* this msg_id is unique in this queue */
 	msg_id = 0;
 
-	/* 1. post recv */
-//	ret = post_recv(q);
-//	BUG_ON(ret);
-
-	/* 2. post send */
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
 
@@ -294,7 +278,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.num_sge = 1;
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-//	rdma_wr[1].wr.wr_cqe  = &req[1]->cqe; 
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
@@ -304,21 +287,21 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
-		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+		pr_err("[ FAIL ] ib_post_send meta failed: %d\n", ret);
 	}
 
 	/* Poll send completion queue first */
 	do{
 		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
 		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			printk(KERN_ALERT "[%s]: ib_poll_cq (send meta) failed\n", __func__);
 			ret = -1;
 			goto out;
 		}
 	}while(ne < 1);
 
 	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		printk(KERN_ALERT "[%s]: sending request(meta) failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		ret = -1;
 		goto out;
 	}
@@ -335,7 +318,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	do{
 		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
 		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			printk(KERN_ALERT "[%s]: ib_poll_cq (recv) failed\n", __func__);
 			return 1;
 		}
 	}while(ne < 1);
@@ -355,7 +338,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* WRITE PAGE */
 	rdma_wr[0].wr.next    = NULL;
-//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[0].wr.sg_list = &sge[0];
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_RDMA_WRITE;
@@ -369,21 +351,21 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
-		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+		pr_err("[ FAIL ] ib_post_send page failed: %d\n", ret);
 	}
 
 	/* Poll send completion queue first */
 	do{
 		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
 		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			printk(KERN_ALERT "[%s]: ib_poll_cq (send page) failed\n", __func__);
 			ret = -1;
 			goto out;
 		}
 	}while(ne < 1);
 
 	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		printk(KERN_ALERT "[%s]: sending request(page) failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		ret = -1;
 		goto out;
 	}
@@ -392,23 +374,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	fperf_end("page_write");
 #endif
 
-#if 0
-	/* Polling recv cq here */
-	do{
-		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
-		}
-	}while(ne < 1);
-
-	if(unlikely(wc.status != IB_WC_SUCCESS)){
-		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
-	}
-#endif
-
 out:
+	ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, PAGE_SIZE, DMA_TO_DEVICE);
+	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
+	kmem_cache_free(req_cache, req[0]);
+	kmem_cache_free(req_cache, req[1]);
 
 	post_recv(q);
 
@@ -679,43 +649,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	} else {
 		ret = 0;
 	}
-
-#if 1
-	sge.addr = req[0]->dma;
-	sge.length = PAGE_SIZE * batch;
-	sge.lkey = q->ctrl->rdev->pd->local_dma_lkey;
-
-	rdma_wr.wr.next    = NULL;
-	rdma_wr.wr.sg_list = &sge;
-	rdma_wr.wr.num_sge = 1;
-	rdma_wr.wr.opcode  = IB_WR_RDMA_READ;
-	rdma_wr.wr.send_flags = IB_SEND_SIGNALED;
-	rdma_wr.remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE_TO_PAGE(queue_id, msg_id);
-	rdma_wr.rkey = q->ctrl->servermr.key;
-
-	ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
-	if (unlikely(ret)) {
-		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
-	}
-
-	/* Poll send completion queue first */
-	do{
-		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
-		if(ne < 0){
-			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			ret = -1;
-			goto out;
-		}
-	}while(ne < 1);
-
-	if(wc.status != IB_WC_SUCCESS){
-		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		ret = -1;
-		goto out;
-	}
-
-#endif
-
 	
 out:
 	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE, DMA_FROM_DEVICE);
@@ -761,12 +694,9 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	dev = q->ctrl->rdev->dev;
 
 	msg_id = 0;
-	BUG_ON(msg_id >= 64);
 
 	/* 1. post recv page first to reduce RNR */
 	//	ret = begin_recv(q, page);
-	ret = post_recv(q);
-	BUG_ON(ret);
 
 	/* 2. post send key */
 
@@ -901,6 +831,9 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	}
 
 out:
+	ret = post_recv(q);
+	BUG_ON(ret);
+
 	ib_dma_unmap_page(dev, page_dma, PAGE_SIZE * batch, DMA_BIDIRECTIONAL);
 
 	idr_remove(&q->queue_status_idr, msg_id);

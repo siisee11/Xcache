@@ -45,7 +45,7 @@ extern long mr_free_end;
 
 static int rdma;
 //#define SAMPLE_RATE 10000 // Per-MB
-#define SAMPLE_RATE 100000
+#define SAMPLE_RATE 1000000
 static long put_cnt, get_cnt;
 
 /* bloom filter */

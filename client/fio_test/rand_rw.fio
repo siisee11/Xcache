@@ -2,14 +2,13 @@
 bs=4k
 ioengine=libaio
 iodepth=16
-size=${SIZE}
+size=512m
 direct=0
 time_based=0
 #runtime=20
-directory=${DIR}
+directory=/fio/1GBx8
 group_reporting=1
 
 [rand_rw]
-thread=${NUMJOBS}
+numjobs=8
 rw=randrw
-

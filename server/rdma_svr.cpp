@@ -44,6 +44,9 @@ static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
+std::atomic<uint64_t> page_offset(0);
+uint64_t memory_region;
+
 #ifdef SRQ
 struct ibv_srq *srq[16]; /* 1 SRQ per Client */
 #endif
@@ -233,7 +236,8 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-				void *save_page = dequeue(prepage_queue);
+//				void *save_page = dequeue(prepage_queue);
+				void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[client_id]->local_mm) + PAGE_SIZE * page_offset++);
 				*target_addr = (uint64_t)save_page;
 
 				sge.addr = (uint64_t)target_addr;
@@ -267,7 +271,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
 				dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
 
-#if 0
+#if 1
 				/* Prefatch MR */
 				{
 					struct ibv_sge sg_list;
@@ -307,39 +311,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
 
-#if 0 /* XXX: THIS IS IN ODP BLOCK */
-				sge.addr = 0;
-				sge.length = 0;
-				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
-
-				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
-				wr.sg_list = &sge;
-				wr.num_sge = 0;
-				wr.send_flags = IBV_SEND_SIGNALED;
-				wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
-
-				ret = ibv_post_send(q->qp, &wr, &bad_wr);
-				if(ret){
-					fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
-				}
-
-				struct ibv_wc wc2;
-				int ne;
-				do{
-					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
-					if(ne < 0){
-						fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
-						return;
-					}
-				}while(ne < 1);
-
-				if(wc2.status != IBV_WC_SUCCESS){
-					fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc2.status), wc2.status);
-					return;
-				}
-#endif
-
-				dprintf("[ INFO ] MSG_WRITE DONE\n");
+				dprintf("[ INFO ] MSG_WRITE DONE (%d)\n", putcnt);
 
 			/* ------------------------------------------------ MSG_READ ----------------------------------------------- */
 			} else if(type == MSG_READ) {
@@ -478,56 +450,39 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 
 		int ret;
 		if((int)wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
-			int qid, msg_id, type, tx_state, num;
+			int qid, mid, type, tx_state, num;
 			struct ibv_send_wr wr = {};
 			struct ibv_send_wr *bad_wr = NULL;
 			struct ibv_sge sge = {};
 
-			bit_unmask(ntohl(wc.imm_data), &num, &msg_id, &type, &tx_state, &qid);
-			dprintf("[ INFO ] On Q[%d]: qid(%d), msg_id(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, msg_id, type, tx_state, num);
+			bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
+			dprintf("[ INFO ] On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
 
 			post_recv(client_id, queue_id);
 
 			if(type == MSG_WRITE){
 				putcnt++;
-
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, msg_id);
-				uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl[client_id]->local_mm, qid, msg_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
+				uint64_t* target_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
+				
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-				void *save_page = dequeue(prepage_queue);
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-				memcpy((char *)save_page, (char *)page, PAGE_SIZE * num);
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &start);
-				rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
-#endif
+//				void *save_page = dequeue(prepage_queue);
+				void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[client_id]->local_mm) + PAGE_SIZE * page_offset++);
+				*target_addr = (uint64_t)save_page;
 
-				gctrl[client_id]->kv->Insert(*key, (Value_t)save_page, 0, 0);
-//				gctrl->kv->InsertExtent(*key, (Value_t)save_page, num);
-
-#if defined(TIME_CHECK)
-				clock_gettime(CLOCK_MONOTONIC, &end);
-				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-
-				dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
-				dprintf("[ INFO ] page %s\n", (char *)save_page);
-
-#if 1 /* XXX: if this block is commented, Client polling get slow down. Why? */
-				sge.addr = 0;
-				sge.length = 0;
+				sge.addr = (uint64_t)target_addr;
+				sge.length = sizeof(uint64_t);
 				sge.lkey = gctrl[client_id]->mr_buffer->lkey;
 
 				wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
 				wr.sg_list = &sge;
-				wr.num_sge = 0;
+				wr.num_sge = 1;
 				wr.send_flags = IBV_SEND_SIGNALED;
-				wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
+				wr.wr.rdma.remote_addr = gctrl[client_id]->clientmr.baseaddr + GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid);
+				wr.wr.rdma.rkey        = gctrl[client_id]->clientmr.key;
+				wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
 
 				ret = ibv_post_send(q->qp, &wr, &bad_wr);
 				if(ret){
@@ -536,10 +491,21 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 
 #if defined(TIME_CHECK)
 				clock_gettime(CLOCK_MONOTONIC, &end);
+				rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-				struct ibv_wc wc2;
-				int ne;
+				gctrl[client_id]->kv->Insert(*key, (Value_t)save_page, 0, 0);
+//				gctrl[client_id]->kv->InsertExtent(*key, (Value_t)save_page, num);
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &end);
+				rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+				dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
+				dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
+
+#if defined(TIME_CHECK)
+				clock_gettime(CLOCK_MONOTONIC, &end);
+#endif
 				do{
 					ne = ibv_poll_cq(q->qp->send_cq, 1, &wc2);
 					if(ne < 0){
@@ -556,7 +522,8 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				rdpma_handle_write_poll_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
-#endif 
+
+				dprintf("[ INFO ] MSG_WRITE DONE (%d)\n", putcnt);
 			} else if(type == MSG_READ) {
 				getcnt++;
 #if defined(TIME_CHECK)
@@ -564,9 +531,9 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 #endif
 //				printf("[ INFO ] received MSG_READ\n");
 
-				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, msg_id);
-				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, msg_id);
-				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, msg_id);
+				uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, qid, mid);
+				uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
+				uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[client_id]->local_mm, qid, mid);
 				dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
 
 				/* 1. Get page address -> value */
@@ -606,7 +573,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 					wr.sg_list = &sge;
 					wr.num_sge = 0;
 					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
+					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
 
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
@@ -617,7 +584,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 					wr.sg_list = &sge;
 					wr.num_sge = 0;
 					wr.send_flags = IBV_SEND_SIGNALED;
-					wr.imm_data = htonl(bit_mask(0, msg_id, MSG_READ_REPLY, TX_READ_ABORTED, qid));
+					wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_ABORTED, qid));
 
 					TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 				}
@@ -676,48 +643,27 @@ static device *get_device(struct queue *q)
 
 		struct ctrl *ctrl = q->ctrl;    
 
-#ifdef DAX_KMEM
-		int dax_kmem_node = 3;
-		ctrl->buffer = numa_alloc_onnode(BUFFER_SIZE, dax_kmem_node); 
-		TEST_Z(ctrl->buffer);
-		printf("[  OK  ] DAX KMEM MR initialized\n");
-#else
 
 #ifdef ODP
 		/* 
 		 * To create an implicit ODP MR, IBV_ACCESS_ON_DEMAND should be set, 
 		 * addr should be 0 and length should be SIZE_MAX.
 		 */
-//		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
+		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
-//		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
-
-		/* Pre Malloced Page Queue */
-		char *ptr = (char *)malloc(LOCAL_META_REGION_SIZE + PAGE_SIZE * 500000);	
-		for (int j = 0 ; j < 500000 ; j++ ) {
-			enqueue(prepage_queue, (void *)(ptr + PAGE_SIZE * j + LOCAL_META_REGION_SIZE));
-		}
-		dprintf("[  OK  ] Prepage Queue alloced (from %lx)\n", (uint64_t)ptr);
-
-
-		ctrl->local_mm = (uint64_t)ptr;
-		TEST_Z(ctrl->local_mm);
-
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
-					dev->pd,
-					(void *)ctrl->local_mm,
-					LOCAL_META_REGION_SIZE + PAGE_SIZE * 500000,
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
 
 #else
+
 		/* No ODP */
-		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
+//		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
+		ctrl->local_mm = memory_region;
 		TEST_Z(ctrl->local_mm);
 
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
 					dev->pd,
 					(void *)ctrl->local_mm,
-					LOCAL_META_REGION_SIZE,
+					LOCAL_META_REGION_SIZE + BUFFER_SIZE,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 #endif
 
@@ -725,7 +671,6 @@ static device *get_device(struct queue *q)
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
 		printf("[  OK  ] MEMORY MODE DRAM MR initialized\n");
 		q->ctrl->dev = dev;
-#endif
 	}
 
 	return q->ctrl->dev;
@@ -785,8 +730,6 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 		client_ctr++;
 		queue_ctr = 0;
 	}
-
-
 
 	TEST_Z(q->state == queue::INIT);
 //	printf("[ INFO ] %s\n", __FUNCTION__);
@@ -1046,6 +989,9 @@ int main(int argc, char **argv)
 
 	prepage_queue = create_queue("prepage");
 		
+	memory_region = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
+	printf("[ INFO ] malloc memory region of %zu MB\n", (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
+
 //	std::thread page_producer = std::thread( produce_page, prepage_queue, 0);
 //	page_producer.detach();
 

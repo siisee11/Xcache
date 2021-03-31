@@ -1,20 +1,20 @@
 [global]
-#bs=4k
-bsrange=4k-128k
+bs=128k
+#bsrange=4k-128k
 ioengine=libaio
 iodepth=16
 #size=${SIZE}
 size=512m
+#size=1g
 direct=0
 time_based=0
 #runtime=20
 directory=/fio/1GBx8
-startdelay=5
+startdelay=2
 group_reporting=1
 
 [seq_read]
-thread=1
+#thread=1
 #numjobs=${NUMJOBS}
 numjobs=8
 rw=read
-

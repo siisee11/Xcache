@@ -30,12 +30,12 @@ POBJ_LAYOUT_END(PM_MR);
 #define GET_LOCAL_PAGE_REGION(addr, qid, mid) 	(addr + NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 #define GET_OFFSET_FROM_BASE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 8)
-
+#define GET_FREE_PAGE_REGION(addr)  (addr + LOCAL_META_REGION_SIZE)
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
-//const size_t BUFFER_SIZE = ((1UL << 30) * 16);
+const size_t BUFFER_SIZE = ((1UL << 30) * 10);
 
 enum{
 	MSG_WRITE_REQUEST,
