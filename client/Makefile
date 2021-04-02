@@ -30,7 +30,11 @@ rdma_conn:
 
 pmdfc_client:
 	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
-	insmod ./pmdfc_client.ko rdma=1
+	insmod ./pmdfc_client.ko 
+
+pmdfc_client_onesided:
+	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
+	insmod ./pmdfc_client.ko onesided=1
 
 tcptest:
 	insmod ./pmnet_testing.ko

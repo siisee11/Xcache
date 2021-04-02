@@ -43,7 +43,7 @@ DEFINE_HASHTABLE(hash_head, BITS);
 atomic_long_t mr_free_start;
 extern long mr_free_end;
 
-static int rdma;
+static int onesided;
 //#define SAMPLE_RATE 10000 // Per-MB
 #define SAMPLE_RATE 1000000
 static long put_cnt, get_cnt;
@@ -139,11 +139,15 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
     tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
     tmp->longkey = get_longkey((long)oid.oid[0], index);
+    tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
     hash_add(hash_head, &tmp->h_node, tmp->longkey);
 #endif
 
-	ret = rdpma_put(page, longkey, 1);
-    
+	if (onesided) 
+		ret = rdpma_put_onesided(page, tmp->roffset, 1);
+	else
+		ret = rdpma_put(page, longkey, 1);
+
     if (put_cnt % SAMPLE_RATE == 0) {
         pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
                 (long)oid.oid[0], index, longkey);
@@ -175,7 +179,7 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	int ret;
     struct ht_data *cur;
 
-    long longkey = 0;
+    long longkey = 0, roffset = 0;
 
 #ifdef PMDFC_TIME_CHECK
 	ktime_t start = ktime_get();
@@ -222,6 +226,8 @@ static int pmdfc_cleancache_get_page(int pool_id,
 #ifdef PMDFC_HASHTABLE
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
         if (cur->longkey == longkey) {
+			if (onesided)
+				roffset = cur->roffset;
 			goto exists;
         }
     }
@@ -231,18 +237,21 @@ static int pmdfc_cleancache_get_page(int pool_id,
 exists:
 #endif /* PMDFC_HASHTABLE */
 
-	/* RDMA networking */
 	if (get_cnt % SAMPLE_RATE == 0) {
 		pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
 				(long)oid.oid[0], index, longkey);
-
 #ifdef PMDFC_TIME_CHECK
 		fperf_print("get_page");
 #endif
 	}
 
+
+	if (onesided) 
+		ret = rdpma_get_onesided(page, roffset, 1);
+	else
+		ret = rdpma_get(page, longkey, 1);
+
 	/* send Address of page */
-	ret = rdpma_get(page, longkey, 1);
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;
@@ -414,7 +423,7 @@ static int __init pmdfc_init(void)
 #endif
 
 	pr_info("Hostname: \tapache1\n");
-	pr_info("Transport: \t%s\n", rdma ? "rdma" : "tcp");
+	pr_info("Transport: \t%s\n", "rdma");
 
 #if defined(PMDFC_BLOOM_FILTER)
 	/* initialize bloom filter */
@@ -462,7 +471,7 @@ static void pmdfc_exit(void)
 #endif
 }
 
-module_param(rdma, int, 0);
+module_param(onesided, int, 0);
 
 module_init(pmdfc_init);
 module_exit(pmdfc_exit);

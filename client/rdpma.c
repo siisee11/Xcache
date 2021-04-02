@@ -74,11 +74,31 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
 
 	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("rdpma_rdma_write_done status is not success, it is=%d\n", wc->status);
+		pr_err("[ FAIL ] pmdfc_rdma_write_done status is not success, it is=%d\n", wc->status);
 		//q->write_error = wc->status;
 	}
 	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
 
+	atomic_dec(&q->pending);
+	kmem_cache_free(req_cache, req);
+}
+
+static void rdpma_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
+{
+	struct rdma_req *req =
+		container_of(wc->wr_cqe, struct rdma_req, cqe);
+	struct rdma_queue *q = cq->cq_context;
+	struct ib_device *ibdev = q->ctrl->rdev->dev;
+
+	if (unlikely(wc->status != IB_WC_SUCCESS))
+		pr_err("[ FAIL ] rdpma_rdma_read_done status is not success, it is=%d\n", wc->status);
+
+	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_FROM_DEVICE);
+
+	SetPageUptodate(req->page);
+	unlock_page(req->page);
+	complete(&req->done);
+	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
 }
 
@@ -99,6 +119,40 @@ static void rdpma_rdma_write_done_meta(struct ib_cq *cq, struct ib_wc *wc)
 	kmem_cache_free(req_cache, req);
 #endif
 }
+
+static inline int rdpma_post_rdma(struct rdma_queue *q, struct rdma_req *qe,
+		struct ib_sge *sge, u64 roffset, enum ib_wr_opcode op)
+{
+	const struct ib_send_wr *bad_wr;
+	struct ib_rdma_wr rdma_wr = {};
+	int ret;
+
+	BUG_ON(qe->dma == 0);
+
+	sge->addr = qe->dma;
+	sge->length = PAGE_SIZE;
+	sge->lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+	/* TODO: add a chain of WR, we already have a list so should be easy
+	 * to just post requests in batches */
+	rdma_wr.wr.next    = NULL;
+	rdma_wr.wr.wr_cqe  = &qe->cqe;
+	rdma_wr.wr.sg_list = sge;
+	rdma_wr.wr.num_sge = 1;
+	rdma_wr.wr.opcode  = op;
+	rdma_wr.wr.send_flags = IB_SEND_SIGNALED;
+	rdma_wr.remote_addr = q->ctrl->servermr.baseaddr + roffset;
+	rdma_wr.rkey = q->ctrl->servermr.key;
+
+	atomic_inc(&q->pending);
+	ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
+	if (unlikely(ret)) {
+		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+	}
+
+	return ret;
+}
+
 
 /* allocates a pmdfc rdma request, creates a dma mapping for it in
  * req->dma, and synchronizes the dma mapping in the direction of
@@ -174,12 +228,26 @@ static inline int poll_target(struct rdma_queue *q, int target)
 
 	while (completed < target && atomic_read(&q->pending) > 0) {
 		spin_lock_irqsave(&q->cq_lock, flags);
-		completed += ib_process_cq_direct(q->recv_cq, target - completed);
+		completed += ib_process_cq_direct(q->send_cq, target - completed);
 		spin_unlock_irqrestore(&q->cq_lock, flags);
 		cpu_relax();
 	}
 
 	return completed;
+}
+
+static inline int drain_queue(struct rdma_queue *q)
+{
+	unsigned long flags;
+
+	while (atomic_read(&q->pending) > 0) {
+		spin_lock_irqsave(&q->cq_lock, flags);
+		ib_process_cq_direct(q->qp->send_cq, 16);
+		spin_unlock_irqrestore(&q->cq_lock, flags);
+		cpu_relax();
+	}
+
+	return 1;
 }
 
 /* post simple RR */
@@ -230,8 +298,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	uint64_t *dma_addr;
 
 	/* get q and its infomation */
-	q = pmdfc_rdma_get_queue(cpuid, QP_WRITE_SYNC);
-	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
+	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev;
 
 	/* this msg_id is unique in this queue */
@@ -337,7 +405,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* WRITE PAGE directly to given address */
 	dma_addr = (uint64_t *)GET_REMOTE_ADDRESS_BASE(gctrl->rdev->local_mm, queue_id, msg_id);
-//	pr_info("[ INFO ] dma_addr from server= %llx (qid=%d, mid=%d)\n", *dma_addr, queue_id, msg_id);
+	//	pr_info("[ INFO ] dma_addr from server= %llx (qid=%d, mid=%d)\n", *dma_addr, queue_id, msg_id);
 
 	/* WRITE PAGE */
 	rdma_wr[0].wr.next    = NULL;
@@ -412,8 +480,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	int cpuid = smp_processor_id();
 
 	/* get q and its infomation */
-	q = pmdfc_rdma_get_queue(cpuid, QP_WRITE_SYNC);
-	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
+	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev;
 
 	msg_id = 0;
@@ -460,7 +528,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_RDMA_WRITE;
 	rdma_wr[0].wr.send_flags = 0;
-//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
+	//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[0].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE_TO_PAGE(queue_id, msg_id);
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
@@ -470,7 +538,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.num_sge = 1;
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE_WITH_IMM;
 	rdma_wr[1].wr.send_flags = IB_SEND_SIGNALED;
-//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
+	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[1].wr.ex.imm_data = imm;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
@@ -523,6 +591,42 @@ out:
 EXPORT_SYMBOL_GPL(rdpma_put);
 #endif
 
+int rdpma_put_onesided(struct page *page, u64 roffset, int batch)
+{
+	struct rdma_queue *q;
+	struct rdma_req *req;
+	struct ib_device *dev;
+	struct ib_sge sge = {};
+	int ret, inflight;
+
+	q = rdpma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
+	dev = q->ctrl->rdev->dev;
+
+#if 0
+	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
+		BUG_ON(inflight > QP_MAX_SEND_WR);
+		poll_target(q, 2048);
+		pr_info_ratelimited("[ WARN ] back pressure writes");
+	}
+#endif
+
+	ret = get_req_for_page(&req, dev, page, batch, DMA_TO_DEVICE);
+	if (unlikely(ret))
+		return ret;
+
+	req->cqe.done = rdpma_rdma_write_done;
+	ret = rdpma_post_rdma(q, req, &sge, roffset, IB_WR_RDMA_WRITE);
+
+	BUG_ON(ret);
+	drain_queue(q);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(rdpma_put_onesided);
+
+
+
+/* -------------------------------------- GET -------------------------- */
+
 
 #ifdef ODP
 /** rdpma_get - get page from server 
@@ -552,8 +656,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 
 	/* get q and its infomation */
-	q = pmdfc_rdma_get_queue(cpuid, QP_READ_SYNC);
-	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_READ_SYNC);
+	q = rdpma_get_queue(cpuid, QP_READ_SYNC);
+	queue_id = rdpma_get_queue_id(cpuid, QP_READ_SYNC);
 	dev = q->ctrl->rdev->dev;
 
 	/* thi msg_id is unique in this queue */
@@ -585,8 +689,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	meta->batch = batch;
 	meta->raddr = req[0]->dma;
 
-//	pr_info("[ INFO ] WRITE(page %p) meta { key=%llx, raddr=%llx }\n", req[0]->page, meta->key, meta->raddr);
-//	pr_info("[ INFO ] queue_id=%d, msg_id=%d\n", queue_id, msg_id);
+	//	pr_info("[ INFO ] WRITE(page %p) meta { key=%llx, raddr=%llx }\n", req[0]->page, meta->key, meta->raddr);
+	//	pr_info("[ INFO ] queue_id=%d, msg_id=%d\n", queue_id, msg_id);
 
 	/* DMA METADATA */
 	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
@@ -650,7 +754,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	}
 
 	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
-//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
+	//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
 	if ( tx_state == TX_READ_ABORTED ) {
 		ret = -1;
@@ -658,13 +762,13 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	} else {
 		ret = 0;
 	}
-	
+
 out:
 	ib_dma_unmap_page(dev, req[0]->dma, PAGE_SIZE, DMA_FROM_DEVICE);
 
-//	spin_lock(&q->queue_lock);
+	//	spin_lock(&q->queue_lock);
 	idr_remove(&q->queue_status_idr, msg_id);
-//	spin_unlock(&q->queue_lock);
+	//	spin_unlock(&q->queue_lock);
 
 	return ret;
 }
@@ -701,8 +805,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 
 	/* get q and its infomation */
-	q = pmdfc_rdma_get_queue(cpuid, QP_READ_SYNC);
-	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_READ_SYNC);
+	q = rdpma_get_queue(cpuid, QP_READ_SYNC);
+	queue_id = rdpma_get_queue_id(cpuid, QP_READ_SYNC);
 	dev = q->ctrl->rdev->dev;
 
 	msg_id = 0;
@@ -723,8 +827,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	meta->batch = batch;
 	meta->raddr = req[0]->dma;
 
-//	pr_info("[ INFO ] WRITE(page %p) meta { key=%llx, raddr=%llx }\n", req[0]->page, meta->key, meta->raddr);
-//	pr_info("[ INFO ] queue_id=%d, msg_id=%d\n", queue_id, msg_id);
+	//	pr_info("[ INFO ] WRITE(page %p) meta { key=%llx, raddr=%llx }\n", req[0]->page, meta->key, meta->raddr);
+	//	pr_info("[ INFO ] queue_id=%d, msg_id=%d\n", queue_id, msg_id);
 
 	/* DMA METADATA */
 	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
@@ -838,8 +942,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 
 	/* get q and its infomation */
-	q = pmdfc_rdma_get_queue(cpuid, QP_READ_SYNC);
-	queue_id = pmdfc_rdma_get_queue_id(cpuid, QP_READ_SYNC);
+	q = rdpma_get_queue(cpuid, QP_READ_SYNC);
+	queue_id = rdpma_get_queue_id(cpuid, QP_READ_SYNC);
 	dev = q->ctrl->rdev->dev;
 
 	msg_id = 0;
@@ -985,8 +1089,39 @@ out:
 EXPORT_SYMBOL_GPL(rdpma_get);
 #endif
 
+int rdpma_get_onesided(struct page *page, u64 roffset, int batch)
+{
+	struct rdma_queue *q;
+	struct rdma_req *req;
+	struct ib_device *dev;
+	struct ib_sge sge = {};
+	int ret, inflight;
 
-inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
+	q = rdpma_get_queue(smp_processor_id(), QP_READ_SYNC);
+	dev = q->ctrl->rdev->dev;
+
+	/* back pressure in-flight reads, can't send more than
+	 * QP_MAX_SEND_WR at a time */
+	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR) {
+		BUG_ON(inflight > QP_MAX_SEND_WR); /* only valid case is == */
+		//poll_target(q, 8);
+		poll_target(q, 2048);
+		pr_info_ratelimited("[ WARN ] back pressure happened on reads");
+	}
+
+	ret = get_req_for_page(&req, dev, page, batch, DMA_TO_DEVICE);
+	if (unlikely(ret))
+		return ret;
+
+	req->cqe.done = rdpma_rdma_read_done;
+	ret = rdpma_post_rdma(q, req, &sge, roffset, IB_WR_RDMA_READ);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(rdpma_get_onesided);
+
+
+inline struct rdma_queue *rdpma_get_queue(unsigned int cpuid,
 		enum qp_type type)
 {
 	BUG_ON(gctrl == NULL);
@@ -1002,7 +1137,7 @@ inline struct rdma_queue *pmdfc_rdma_get_queue(unsigned int cpuid,
 
 }
 
-inline int pmdfc_rdma_get_queue_id(unsigned int cpuid,
+inline int rdpma_get_queue_id(unsigned int cpuid,
 		enum qp_type type)
 {
 	switch (type) {
@@ -1157,17 +1292,7 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 	int ret;
 	int comp_vector = 0;
 
-#if 0
-	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
-	/* write async, read sync */
-	if (q->qp_type == QP_WRITE_SYNC) {
-		q->send_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES,
-				comp_vector, IB_POLL_SOFTIRQ);
-	}
-	else
-		q->send_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
-#endif
-
+	/* Both send and recv completion queue type are IB_POLL_DIRECT */
 	q->send_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
 	q->recv_cq = ib_alloc_cq(ibdev, q, CQ_NUM_CQES, comp_vector, IB_POLL_DIRECT);
 

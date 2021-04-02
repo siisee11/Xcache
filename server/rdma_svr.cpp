@@ -45,7 +45,6 @@ unsigned int nr_cpus;
 std::atomic<bool> done(false);
 
 std::atomic<uint64_t> page_offset(0);
-uint64_t memory_region;
 
 #ifdef SRQ
 struct ibv_srq *srq[16]; /* 1 SRQ per Client */
@@ -336,8 +335,6 @@ static void process_read(struct queue *q, int cid, int qid, int mid){
 #endif
 }
 
-
-
 static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 	struct ibv_wc wc2;
 	int ne, ret;
@@ -360,7 +357,7 @@ static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 #endif
 	*target_addr = (uint64_t)save_page;
 
-#if ODP
+#ifdef ODP
 	/* Prefatch MR */
 	{
 		struct ibv_sge sg_list;
@@ -599,10 +596,18 @@ static device *get_device(struct queue *q)
 		 */
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr( dev->pd, NULL, (uint64_t)-1, \
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_ON_DEMAND));
-		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
+		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
+#elif ONESIDED
+		ctrl->local_mm = (uint64_t)malloc(BUFFER_SIZE);
+		TEST_Z(ctrl->local_mm);
 
+		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
+					dev->pd,
+					(void *)ctrl->local_mm,
+					BUFFER_SIZE,
+					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 #else
-		ctrl->local_mm = memory_region;
+		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
 		TEST_Z(ctrl->local_mm);
 
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
@@ -611,8 +616,7 @@ static device *get_device(struct queue *q)
 					LOCAL_META_REGION_SIZE + BUFFER_SIZE,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 #endif
-
-		dprintf("[ INFO ] registered memory region of %zu KB\n", LOCAL_META_REGION_SIZE/1024);
+		dprintf("[ INFO ] registered memory region of %zu MB\n", (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
 		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
 		printf("[  OK  ] MEMORY MODE DRAM MR initialized\n");
 		q->ctrl->dev = dev;
@@ -703,6 +707,8 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 	create_qp(q, client_number);
 
+
+#ifndef ONESIDED
 	/* XXX : Poller start here */
 	/* Create polling thread associated with q */
 	std::thread p = std::thread( server_recv_poll_cq, q, client_number, queue_number);
@@ -722,7 +728,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	}
 
 	p.detach();
-
+#endif
 
 	TEST_NZ(ibv_query_device(dev->verbs, &attrs));
 
@@ -768,9 +774,8 @@ int on_connection(struct queue *q)
 
 		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
 
-		// TODO: poll here XXX Where?????
-
-		/* XXX: GET CLIENT MR REGION */
+#ifndef ONESIDED
+		/* GET CLIENT MR REGION */
 		sge.addr = (uint64_t) &ctrl->clientmr;
 		sge.length = sizeof(struct memregion);
 		sge.lkey = ctrl->mr_buffer->lkey;
@@ -783,6 +788,7 @@ int on_connection(struct queue *q)
 #else
 		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
 #endif
+#endif /* ndef ONESIDED */
 	}
 
 
@@ -932,8 +938,6 @@ int main(int argc, char **argv)
 	nr_cpus = std::thread::hardware_concurrency();
 
 		
-	memory_region = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
-	printf("[ INFO ] malloc memory region of %zu MB\n", (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
 
 
 	addr.sin_family = AF_INET;
@@ -987,9 +991,10 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-
+#ifndef ONESIDED
 		if (c == 0)
 			i = std::thread( rdpma_indicator );
+#endif
 	}
 
 	// handle disconnects, etc.

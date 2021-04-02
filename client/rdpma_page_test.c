@@ -20,7 +20,7 @@
 
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
-#define KTIME_CHECK 1
+//#define KTIME_CHECK 1
 
 struct page*** vpages;
 atomic_t failedSearch;

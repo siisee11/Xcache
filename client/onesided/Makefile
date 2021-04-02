@@ -12,7 +12,7 @@ AS      := ${CROSS_COMPILE}as
 
 EXTRA_CFLAGS  += -g 
 
-CLI_IP="10.0.0.51"
+CLI_IP="10.0.0.101"
 SVR_IP="10.0.0.53"
 SVR_PORT=7777
 #NQ=2 # for test, R:W=1:1

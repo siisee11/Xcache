@@ -108,11 +108,13 @@ struct pmdfc_rdma_ctrl {
 	};
 };
 
-struct rdma_queue *pmdfc_rdma_get_queue(unsigned int idx, enum qp_type type);
-int pmdfc_rdma_get_queue_id(unsigned int idx, enum qp_type type);
+struct rdma_queue *rdpma_get_queue(unsigned int idx, enum qp_type type);
+int rdpma_get_queue_id(unsigned int idx, enum qp_type type);
 
 int rdpma_get(struct page *page, uint64_t, int);
+int rdpma_get_onesided(struct page *page, uint64_t, int);
 int rdpma_put(struct page *page, uint64_t, int);
+int rdpma_put_onesided(struct page *page, uint64_t, int);
 int pmdfc_rdma_poll_load(int cpu);
 void pmdfc_rdma_print_stat(void);
 enum qp_type get_queue_type(unsigned int idx);
