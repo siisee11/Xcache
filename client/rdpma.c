@@ -32,9 +32,9 @@ int QP_MAX_SEND_WR = 4096;
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
 //#define KTIME_CHECK 1 	/* Detail time check */
-#define BIGMRPUT 1
+//#define BIGMRPUT 1
 #define BIGMRGET 1
-//#define NORMALPUT 1
+#define NORMALPUT 1
 //#define NORMALGET 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){

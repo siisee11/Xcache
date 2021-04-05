@@ -14,7 +14,6 @@
 #include <asm/delay.h>
 
 #include "tmem.h"
-#include "bloom_filter.h"
 #include "pmdfc.h"
 #include "timeperf.h"
 
@@ -22,7 +21,6 @@
 
 #define PMDFC_PUT 1
 #define PMDFC_GET 1
-//#define PMDFC_BLOOM_FILTER 1 
 //#define PMDFC_TIME_CHECK 1
 #define PMDFC_HASHTABLE 1
 
@@ -47,10 +45,6 @@ static int onesided;
 //#define SAMPLE_RATE 10000 // Per-MB
 #define SAMPLE_RATE 1000000
 static long put_cnt, get_cnt;
-
-/* bloom filter */
-/* TODO: is it thread safe? */
-struct bloom_filter *bf;
 
 /* list, lock and condition variables */
 static LIST_HEAD(page_list_head);
@@ -92,30 +86,6 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	ktime_t start = ktime_get();
 #endif
 
-#if defined(PMDFC_BLOOM_FILTER)
-	unsigned char *data = (unsigned char*)&key;
-	unsigned char *idata = (unsigned char*)&index;
-
-	/* Here is irq disabled context */
-	BUG_ON(!irqs_disabled());
-
-	/* bloom filter hash input data */
-	data[4] = idata[0];
-	data[5] = idata[1];
-	data[6] = idata[2];
-	data[7] = idata[3];
-
-	if ( pool_id < 0 ) 
-		return;
-
-	/* Check whether oid.oid[1] use */
-	BUG_ON(oid.oid[1] != 0);
-	BUG_ON(oid.oid[2] != 0);
-
-	ret = bloom_filter_add(bf, data, 24);
-	if ( ret < 0 )
-		pr_info("bloom_filter add fail\n");
-#endif
 
 
 #if defined(PMDFC_DEBUG)
@@ -185,36 +155,6 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	ktime_t start = ktime_get();
 #endif
 
-#if defined(PMDFC_BLOOM_FILTER)
-	bool isIn = false;
-
-	/* hash input data */
-	unsigned char *data = (unsigned char*)&key;
-	unsigned char *idata = (unsigned char*)&index;
-
-	data[4] = idata[0];
-	data[5] = idata[1];
-	data[6] = idata[2];
-	data[7] = idata[3];
-
-	/* Check whether oid.oid[1] use */
-	BUG_ON(oid.oid[1] != 0);
-	BUG_ON(oid.oid[2] != 0);
-
-	BUG_ON(page == NULL);
-
-	/* page is in or not? */
-	bloom_filter_check(bf, data, 24, &isIn);
-
-	pmdfc_total_gets++;
-
-	/* This page is not exist in PM */
-	if ( !isIn )
-		goto not_exists;
-
-	pmdfc_actual_gets++;
-#endif
-
 #if defined(PMDFC_DEBUG)
 	/* Send get request and receive page */
 	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
@@ -278,18 +218,6 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 	int status;
 
 	bool isIn = false;
-
-#ifdef PMDFC_BLOOM_FILTER
-	/* hash input data */
-	unsigned char *data = (unsigned char*)&key;
-	data[0] += index;
-	
-	bloom_filter_check(bf, data, 8, &isIn);
-
-	if (!isIn) {
-		goto out;
-	}
-#endif
 
 #ifdef PMDFC_HASHTABLE
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
@@ -377,27 +305,6 @@ static int pmdfc_cleancache_register_ops(void)
 	return ret;
 }
 
-#if defined(PMDFC_BLOOM_FILTER)
-static int bloom_filter_init(void)
-{
-//	bf = bloom_filter_new(12364167);
-	bf = bloom_filter_new(10000000);
-	bloom_filter_add_hash_alg(bf, "md5");
-	bloom_filter_add_hash_alg(bf, "sha1");
-	bloom_filter_add_hash_alg(bf, "sha224");
-#if 0
-	bloom_filter_add_hash_alg(bf, "sha256");
-	bloom_filter_add_hash_alg(bf, "sha384");
-	bloom_filter_add_hash_alg(bf, "ccm");
-	bloom_filter_add_hash_alg(bf, "rsa");
-	bloom_filter_add_hash_alg(bf, "crc32c");
-	bloom_filter_add_hash_alg(bf, "jitterentropy_rng");
-#endif
-
-	return 0;
-}
-#endif
-
 void pmdfc_debugfs_exit(void)
 {
 	debugfs_remove_recursive(pmdfc_dentry);
@@ -425,12 +332,6 @@ static int __init pmdfc_init(void)
 	pr_info("Hostname: \tapache1\n");
 	pr_info("Transport: \t%s\n", "rdma");
 
-#if defined(PMDFC_BLOOM_FILTER)
-	/* initialize bloom filter */
-	bloom_filter_init();
-	pr_info("[  OK  ] bloom filter initialized\n");
-#endif
-    
 #ifdef PMDFC_HASHTABLE
     hash_init(hash_head);
     pr_info("[ OK ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
@@ -464,10 +365,6 @@ static void pmdfc_exit(void)
 {
 #if defined(PMDFC_DEBUG_FS)
 	pmdfc_debugfs_exit();
-#endif
-
-#if defined(PMDFC_BLOOM_FILTER)
-	bloom_filter_unref(bf);
 #endif
 }
 

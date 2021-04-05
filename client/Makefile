@@ -2,7 +2,7 @@ CONFIG_MODULE_SIG=n
 obj-m := pmdfc_client.o pmdfc_rdma_core.o rdma_testing.o
 
 pmdfc_rdma_core-objs := rdpma.o
-pmdfc_client-objs := pmdfc.o bloom_filter.o
+pmdfc_client-objs := pmdfc.o
 rdma_testing-objs := rdpma_page_test.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
