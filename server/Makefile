@@ -9,7 +9,7 @@ LIBS := -lrdmacm -libverbs -lpthread -lpmemobj -lnuma  -lpmem
 CXX := g++
 INCLUDES=-I./
 
-APPS := rdma_svr rdma_svr_odp rdma_svr_bigmr
+APPS := rdma_svr rdma_svr_odp rdma_svr_bigmr rdma_svr_mix rdma_svr_mix_srq rdma_svr_onesided
 
 all:
 	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE

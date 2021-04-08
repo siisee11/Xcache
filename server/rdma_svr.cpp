@@ -173,6 +173,7 @@ static void process_write(struct queue *q, int cid, int qid, int mid){
 #endif
 
 	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t local_key = *key;
 	uint64_t page = (uint64_t)GET_LOCAL_PAGE_REGION(gctrl[cid]->local_mm, qid, mid);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
@@ -181,19 +182,20 @@ static void process_write(struct queue *q, int cid, int qid, int mid){
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+	clock_gettime(CLOCK_MONOTONIC, &end);
 #endif
 	memcpy((char *)save_page, (char *)page, PAGE_SIZE);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
-	gctrl[cid]->kv->Insert(*key, (Value_t)save_page, 0, 0);
+	gctrl[cid]->kv->Insert(local_key, (Value_t)save_page, 0, 0);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-	dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, *key);
+	dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, local_key);
 	dprintf("[ INFO ] page %s\n", (char *)save_page);
 
 #if 1 /* XXX: if this block is commented, some client message ignored */
@@ -252,15 +254,16 @@ static void process_read(struct queue *q, int cid, int qid, int mid){
 	clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
 	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t local_key = *key;
 	uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
 	uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
-	dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
+	dprintf("[ INFO ] key= %lx, remote address= %lx\n", local_key, *remote_addr);
 
 	/* 1. Get page address -> value */
 	void* value;
 	bool abort = false;
 
-	value = (void *)gctrl[cid]->kv->Get((Key_t&)*key, 0); 
+	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key, 0); 
 
 	if(!value){
 		dprintf("Value for key[%lx] not found\n", key);
@@ -274,7 +277,7 @@ static void process_read(struct queue *q, int cid, int qid, int mid){
 
 	if( !abort ) {
 		found_cnt++;
-		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, *key);
+		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, local_key);
 		dprintf("[ INFO ] page %s\n", (char *)value);
 
 		/* 2. Send page retrieved to client so that client can initiate RDMA READ */	
@@ -345,6 +348,7 @@ static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 	struct timespec start, end;
 #endif
 	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t local_key = *key;
 	uint64_t* target_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
 
 #if defined(TIME_CHECK)
@@ -395,13 +399,13 @@ static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-	gctrl[cid]->kv->Insert(*key, (Value_t)save_page, 0, 0);
+	gctrl[cid]->kv->Insert(local_key, (Value_t)save_page, 0, 0);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
-	dprintf("[ INFO ] MSG_WRITE page %s, key %lx Inserted\n", (char *)save_page, *key);
-	dprintf("[ INFO ] page addresss %lx\n", (uint64_t)save_page);
+	dprintf("[ INFO ] MSG_WRITE page %lx, local_key %lx Inserted\n", (uint64_t)save_page, local_key);
+	dprintf("[ INFO ] page content %s\n", (char *)save_page);
 
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
@@ -439,17 +443,19 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 #endif
 
 	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
+	uint64_t local_key = *key;
 	uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
-	dprintf("[ INFO ] key= %lx, remote address= %lx\n", *key, *remote_addr);
+	uint64_t local_remote_addr = *remote_addr;
+	dprintf("[ INFO ] key= %lx, remote address= %lx\n", local_key, local_remote_addr);
 
 	/* 1. Get page address -> value */
 	void* value;
 	bool abort = false;
 
-	value = (void *)gctrl[cid]->kv->Get((Key_t&)*key, 0); 
+	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key, 0); 
 
 	if(!value){
-		dprintf("Value for key[%lx] not found\n", key);
+		dprintf("Value for key[%lx] not found\n", local_key);
 		abort = true;
 	}
 
@@ -458,9 +464,9 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 	rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-	if( !abort ) {
+	if( value ) {
 		found_cnt++;
-		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, *key);
+		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, local_key);
 		dprintf("[ INFO ] page %s\n", (char *)value);
 
 		/* 2. Send page retrieved to client memory directly */	
@@ -472,7 +478,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 		wr.sg_list = &sge;
 		wr.num_sge = 1;
 		wr.send_flags = IBV_SEND_SIGNALED;
-		wr.wr.rdma.remote_addr = *remote_addr;
+		wr.wr.rdma.remote_addr = local_remote_addr;
 		wr.wr.rdma.rkey        = gctrl[cid]->clientmr.key;
 		wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_READ_COMMITTED, qid));
 
@@ -504,7 +510,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
-	if (abort) {
+	if (value) {
 		rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 	} else {
 		rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
@@ -689,7 +695,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	struct device *dev = get_device(q);
 
 #ifdef SRQ
-	/* if it is first queue pair of this client */
+	/* if it is first queue pair of this client, create SRQ(Shared Recv Queue) */
 	if (queue_number == 0) {
 		struct ibv_srq_init_attr srq_init_attr;
 		 
@@ -707,12 +713,12 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 
 	create_qp(q, client_number);
 
-
 #ifndef ONESIDED
 	/* XXX : Poller start here */
 	/* Create polling thread associated with q */
 	std::thread p = std::thread( server_recv_poll_cq, q, client_number, queue_number);
 
+#if 0
 	/*
 	 * Create a cpu_set_t object representing a set of CPUs. Clear it and mark
 	 * only CPU i as set.
@@ -726,6 +732,7 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	if (rc != 0) {
 		fprintf(stderr, "Error calling pthread_setaffinity_np\n");
 	}
+#endif
 
 	p.detach();
 #endif
@@ -937,9 +944,6 @@ int main(int argc, char **argv)
 
 	nr_cpus = std::thread::hardware_concurrency();
 
-		
-
-
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(tcp_port);
 
@@ -974,6 +978,7 @@ int main(int argc, char **argv)
 				post_recv(c, i);
 			}
 		}
+		printf("[ INFO ] queue connection estabilished for client #%u.\n", c);
 
 		/* servermr post send cq need polling */
 		struct ibv_wc wc;
