@@ -274,8 +274,8 @@ static int pmdfc_cleancache_init_fs(size_t pagesize)
 {
 	static atomic_t pool_id = ATOMIC_INIT(0);
 
-	printk(KERN_INFO "pmdfc: INIT FS\n");
 	atomic_inc(&pool_id);
+	printk(KERN_INFO "[ INFO ] pmdfc: INIT FS (pool_id=%d)\n", atomic_read(&pool_id));
 
 	return atomic_read(&pool_id);
 }
@@ -331,10 +331,11 @@ static int __init pmdfc_init(void)
 
 	pr_info("Hostname: \tapache1\n");
 	pr_info("Transport: \t%s\n", "rdma");
-
+	pr_info("Method:   \t%s\n", onesided? "onesided" : "twosided");
+	
 #ifdef PMDFC_HASHTABLE
     hash_init(hash_head);
-    pr_info("[ OK ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
+    pr_info("[  OK  ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
             BITS, NUM_PAGES);
 #endif
 

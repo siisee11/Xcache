@@ -1,12 +1,12 @@
 [global]
-bs=4k
+bs=128k
 ioengine=libaio
 iodepth=16
 size=512m
 direct=0
 time_based=0
 #runtime=20
-directory=/fio/1GBx8
+directory=/scratch-ssd/fio/1GBx8
 group_reporting=1
 
 [rand_rw]

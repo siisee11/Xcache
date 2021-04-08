@@ -1,5 +1,5 @@
 [global]
-bs=4k
+bs=128k
 #bsrange=4k-128k
 ioengine=libaio
 iodepth=16
@@ -8,7 +8,7 @@ size=1G
 direct=0
 time_based=0
 #runtime=20
-directory=/fio/1GBx8
+directory=/scratch-ssd/fio/1GBx8
 group_reporting=1
 invalidate=0
 

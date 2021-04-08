@@ -16,7 +16,7 @@ CLI_IP="10.0.0.101"
 CIP 	:= "$(shell sh -c "hostname -I|cut -f2 -d ' '")"
 SVR_IP="10.0.0.53"
 SVR_PORT=7777
-NQ=20 
+NQ=8
 
 #default: prepare modules
 default: modules

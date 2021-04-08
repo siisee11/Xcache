@@ -8,8 +8,9 @@
 
 struct pmdfc_rdma_ctrl *gctrl;
 static int serverport;
-int numqueues;
-int numcpus;
+unsigned int numqueues;
+unsigned int numcpus;
+unsigned int cpuperqueue;
 static char serverip[INET_ADDRSTRLEN];
 static char clientip[INET_ADDRSTRLEN];
 struct kmem_cache *req_cache;
@@ -32,9 +33,9 @@ int QP_MAX_SEND_WR = 4096;
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
 //#define KTIME_CHECK 1 	/* Detail time check */
-//#define BIGMRPUT 1
+#define BIGMRPUT 1
 #define BIGMRGET 1
-#define NORMALPUT 1
+//#define NORMALPUT 1
 //#define NORMALGET 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
@@ -100,24 +101,6 @@ static void rdpma_rdma_read_done(struct ib_cq *cq, struct ib_wc *wc)
 	complete(&req->done);
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
-}
-
-static void rdpma_rdma_write_done_meta(struct ib_cq *cq, struct ib_wc *wc)
-{
-	struct rdma_req *req =
-		container_of(wc->wr_cqe, struct rdma_req, cqe);
-	struct rdma_queue *q = cq->cq_context;
-	struct ib_device *ibdev = q->ctrl->rdev->dev;
-
-	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("rdpma_rdma_write_done_meta status is not success, it is=%d\n", wc->status);
-		//q->write_error = wc->status;
-	}
-#if 0
-	pr_info_ratelimited("rdpma_rdma_write_done_meta mid=%d\n", req->mid);
-	ib_dma_unmap_page(ibdev, req->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
-	kmem_cache_free(req_cache, req);
-#endif
 }
 
 static inline int rdpma_post_rdma(struct rdma_queue *q, struct rdma_req *qe,
@@ -331,13 +314,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
-	req[1]->cqe.done = rdpma_rdma_write_done_meta;
-	req[1]->mid = msg_id;
 
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = sizeof(struct rdpma_metadata);
+	sge[1].length = 16;
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -425,7 +406,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		pr_err("[ FAIL ] ib_post_send page failed: %d\n", ret);
 	}
 
-	/* Poll send completion queue first */
+	/* Poll send completion queue */
 	do{
 		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
 		if(ne < 0){
@@ -436,6 +417,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	}while(ne < 1);
 
 	if(wc.status != IB_WC_SUCCESS){
+		pr_info("[ INFO ] dma_addr from server= %llx (qid=%d, mid=%d)\n", *dma_addr, queue_id, msg_id);
 		printk(KERN_ALERT "[%s]: sending request(page) failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		ret = -1;
 		goto out;
@@ -468,7 +450,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct rdma_req *req[2];
 	struct ib_device *dev;
 	struct ib_sge sge[2];
-	int ret, inflight;
+	int ret;
 	uint32_t imm;
 	struct rdpma_metadata *meta;
 	const struct ib_send_wr *bad_wr;
@@ -517,7 +499,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = sizeof(struct rdpma_metadata);
+	sge[1].length = 16;  /* XXX */
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -602,13 +584,11 @@ int rdpma_put_onesided(struct page *page, u64 roffset, int batch)
 	q = rdpma_get_queue(smp_processor_id(), QP_WRITE_SYNC);
 	dev = q->ctrl->rdev->dev;
 
-#if 0
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR - 8) {
 		BUG_ON(inflight > QP_MAX_SEND_WR);
 		poll_target(q, 2048);
 		pr_info_ratelimited("[ WARN ] back pressure writes");
 	}
-#endif
 
 	ret = get_req_for_page(&req, dev, page, batch, DMA_TO_DEVICE);
 	if (unlikely(ret))
@@ -696,8 +676,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	ret = get_req_for_buf(&req[1], dev, meta, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
-	req[1]->cqe.done = rdpma_rdma_write_done_meta;
-	req[1]->mid = msg_id;
 
 	BUG_ON(req[1]->dma == 0);
 
@@ -792,9 +770,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	uint64_t imm;
 	int cpuid = smp_processor_id();
 	int queue_id;
-	uint64_t *addr, *raddr;
-	uint64_t dma_addr;
-	uint64_t page_dma;
 	struct ib_wc wc;
 	int ret, ne = 0;
 	int qid, mid, type, tx_state;
@@ -810,7 +785,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	dev = q->ctrl->rdev->dev;
 
 	msg_id = 0;
-
 
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
@@ -1104,7 +1078,6 @@ int rdpma_get_onesided(struct page *page, u64 roffset, int batch)
 	 * QP_MAX_SEND_WR at a time */
 	while ((inflight = atomic_read(&q->pending)) >= QP_MAX_SEND_WR) {
 		BUG_ON(inflight > QP_MAX_SEND_WR); /* only valid case is == */
-		//poll_target(q, 8);
 		poll_target(q, 2048);
 		pr_info_ratelimited("[ WARN ] back pressure happened on reads");
 	}
@@ -1116,6 +1089,9 @@ int rdpma_get_onesided(struct page *page, u64 roffset, int batch)
 	req->cqe.done = rdpma_rdma_read_done;
 	ret = rdpma_post_rdma(q, req, &sge, roffset, IB_WR_RDMA_READ);
 
+	BUG_ON(ret);
+	drain_queue(q);
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rdpma_get_onesided);
@@ -1125,12 +1101,13 @@ inline struct rdma_queue *rdpma_get_queue(unsigned int cpuid,
 		enum qp_type type)
 {
 	BUG_ON(gctrl == NULL);
+	cpuid = cpuid % (numqueues / 2);
 
 	switch (type) {
 		case QP_READ_SYNC:
 			return &gctrl->queues[cpuid];
 		case QP_WRITE_SYNC:
-			return &gctrl->queues[cpuid + numcpus];
+			return &gctrl->queues[cpuid + (numqueues/2)];
 		default:
 			BUG();
 	};
@@ -1140,11 +1117,13 @@ inline struct rdma_queue *rdpma_get_queue(unsigned int cpuid,
 inline int rdpma_get_queue_id(unsigned int cpuid,
 		enum qp_type type)
 {
+	cpuid = cpuid % (numqueues / 2);
+
 	switch (type) {
 		case QP_READ_SYNC:
 			return cpuid;
 		case QP_WRITE_SYNC:
-			return cpuid + numcpus;
+			return cpuid + (numqueues/2);
 		default:
 			BUG();
 			return cpuid;
@@ -1751,9 +1730,9 @@ out:
 /* idx is absolute id (i.e. > than number of cpus) */
 inline enum qp_type get_queue_type(unsigned int idx)
 {
-	if (idx < numcpus)
+	if (idx < numqueues / 2)
 		return QP_READ_SYNC;
-	else if (idx < numcpus * 2)
+	else if (idx < numqueues)
 		return QP_WRITE_SYNC;
 
 	BUG();
@@ -1770,7 +1749,8 @@ static int __init rdma_connection_init_module(void)
 	pr_info("[ INFO ] * RDMA BACKEND *");
 
 	numcpus = num_online_cpus();
-	numqueues = numcpus * 2; // read, write
+//	numqueues = numcpus * 2; // read, write
+	cpuperqueue = numcpus / (numqueues / 2);   // 40 cpu / (8 queues / 2 type of queue)
 
 	req_cache = kmem_cache_create("pmdfc_req_cache", sizeof(struct rdma_req), 0,
 			SLAB_TEMPORARY | SLAB_HWCACHE_ALIGN, NULL);

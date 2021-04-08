@@ -12,13 +12,22 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 1
+#define THREAD_NUM 4
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
 
-#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 1000000)
+#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 250000)
 
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
+
+//#define ONESIDED 1
+
+#ifdef ONESIDED
+#define BITS 22 // 16GB=4KBx4x2^20
+#define NUM_PAGES (1UL << BITS)
+#define REMOTE_BUF_SIZE (PAGE_SIZE * NUM_PAGES)
+DEFINE_HASHTABLE(hash_head, BITS);
+#endif
 
 //#define KTIME_CHECK 1
 
@@ -82,6 +91,7 @@ int rdpma_write_message_test(void* arg){
 	uint32_t key;
 	long longkey;
 	int failed = 0;
+    struct ht_data *cur, *tmp;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
@@ -90,7 +100,21 @@ int rdpma_write_message_test(void* arg){
 #ifdef KTIME_CHECK
 		fperf_start("rdpma_put");
 #endif
+
+
+#ifdef ONESIDED
+		tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
+		tmp->longkey = longkey;
+		tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
+		hash_add(hash_head, &tmp->h_node, tmp->longkey);
+
+		ret = rdpma_put_onesided(vpages[tid][i], tmp->roffset, BATCH_SIZE);
+
+#else  /* ONESIDED */
 		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE);
+#endif /* ONESIDED */
+
+
 #ifdef KTIME_CHECK
 		fperf_end("rdpma_put");
 #endif
@@ -162,7 +186,8 @@ int rdpma_read_message_test(void* arg){
 	uint32_t key, index = 0;
 	int tid = my_data->tid;
 	int nfailed = 0;
-	long longkey;
+    struct ht_data *cur;
+	long longkey, roffset;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
@@ -171,13 +196,27 @@ int rdpma_read_message_test(void* arg){
 #ifdef KTIME_CHECK
 		fperf_start("rdpma_get");
 #endif
+
+#ifdef ONESIDED
+		hash_for_each_possible(hash_head, cur, h_node, longkey) {
+			if (cur->longkey == longkey) {
+				roffset = cur->roffset;
+				goto exists;
+			}
+		}
+
+exists:
+		ret = rdpma_get_onesided(return_page[tid], roffset, BATCH_SIZE);
+#else
 		ret = rdpma_get(return_page[tid], longkey, BATCH_SIZE);
+#endif
+
 #ifdef KTIME_CHECK
 		fperf_end("rdpma_get");
 #endif
 
 		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * BATCH_SIZE) != 0){
-//			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 			nfailed++;
 		}
 	}
@@ -237,10 +276,12 @@ int main(void){
 	else
 		pr_info("[ FAIL ] complete write thread functions: time( %llu ) usec, %d failed ", elapsed, ret);
 
-	if (elapsed/1000/1000 != 0)
+	if (elapsed/1000/1000 != 0) {
 		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
-	else  {
-		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed));
+		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", ITERATIONS/(elapsed/1000/1000));
+	} else  {
+		pr_info("[ PASS ] Throughput: %lld (KB/msec)\n", (TOTAL_CAPACITY/1024)/(elapsed/1000));
+		pr_info("[ PASS ] IOPS: %lld (Operation/msec)\n", ITERATIONS/(elapsed/1000));
 	}
 	
 	ssleep(1);
@@ -465,6 +506,12 @@ static int __init init_test_module(void){
 		return -1;
 	}
 	ssleep(1);
+
+#ifdef ONESIDED
+    hash_init(hash_head);
+    pr_info("[  OK  ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
+            BITS, NUM_PAGES);
+#endif
 
 	ret = main();
 	if(ret){

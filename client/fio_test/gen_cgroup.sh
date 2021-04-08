@@ -22,7 +22,4 @@ else
 fi
 
 #echo 536870912 > /dev/cgroup/memory/test_process/memory.limit_in_bytes    # 0.5GB
-
 #echo 18001 > /dev/cgroup/memory/test_process/tasks
-
-
