@@ -37,6 +37,7 @@ int QP_MAX_SEND_WR = 4096;
 #define BIGMRGET 1
 //#define NORMALPUT 1
 //#define NORMALGET 1
+//#define TWOSIDED 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -257,6 +258,137 @@ int post_recv(struct rdma_queue *q){
 	return 0;
 }
 
+#ifdef TWOSIDED
+/** rdpma_put - put page into server
+ *  TWOSIDED (SEND/RECV) defined.
+ */
+int rdpma_put(struct page *page, uint64_t key, int batch)
+{
+	struct rdma_queue *q;
+	struct rdma_req *req[2];
+	struct ib_device *dev;
+	struct ib_sge sge[2];
+	int ret;
+	uint32_t imm;
+	struct rdpma_metadata *meta;
+	const struct ib_send_wr *bad_wr;
+	struct ib_rdma_wr rdma_wr[2] = {};
+	int queue_id, msg_id;
+	//	int qid, mid, type, tx_state;
+	struct ib_wc wc;
+	int ne = 0;
+	int cpuid = smp_processor_id();
+
+	/* get q and its infomation */
+	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
+	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	dev = q->ctrl->rdev->dev;
+
+	msg_id = 0;
+
+	/* 2. post send */
+	/* setup imm data */
+	imm = htonl(bit_mask(batch, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
+
+	memset(sge, 0, sizeof(struct ib_sge) * 2);
+
+	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	meta->key = key;
+	meta->batch = batch;
+
+	/* DMA PAGE */
+	ret = get_req_for_page(&req[0], dev, page, batch, DMA_TO_DEVICE);
+	if (unlikely(ret))
+		return ret;
+
+	BUG_ON(req[0]->dma == 0);
+
+	sge[0].addr = req[0]->dma;
+	sge[0].length = PAGE_SIZE * batch;
+	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+	req[0]->cqe.done = rdpma_rdma_write_done;
+
+	/* DMA KEY */
+	ret = get_req_for_buf(&req[1], dev, meta, sizeof(uint64_t), DMA_TO_DEVICE);
+	if (unlikely(ret))
+		return ret;
+
+	BUG_ON(req[1]->dma == 0);
+
+	sge[1].addr = req[1]->dma;
+	sge[1].length = 16;  /* XXX */
+	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+	/* TODO: add a chain of WR, we already have a list so should be easy
+	 * to just post requests in batches */
+
+	/* WRITE KEY */
+	rdma_wr[1].wr.next    = &rdma_wr[0].wr;
+	rdma_wr[1].wr.sg_list = &sge[1];
+	rdma_wr[1].wr.num_sge = 1;
+	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE;
+	rdma_wr[1].wr.send_flags = 0;
+	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
+	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
+	rdma_wr[1].rkey = q->ctrl->servermr.key;
+
+	/* WRITE PAGE */
+	rdma_wr[0].wr.next    = NULL;
+	rdma_wr[0].wr.sg_list = &sge[0];
+	rdma_wr[0].wr.num_sge = 1;
+	rdma_wr[0].wr.opcode  = IB_WR_SEND_WITH_IMM;
+	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED;
+	rdma_wr[0].wr.ex.imm_data = imm;
+	//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
+
+	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
+	if (unlikely(ret)) {
+		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+	}
+
+	/* Poll send completion queue first */
+	do{
+		ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			ret = -1;
+			goto out;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IB_WC_SUCCESS){
+		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		ret = -1;
+		goto out;
+	}
+
+#if 1
+	/* Polling recv cq here */
+	do{
+		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
+		if(ne < 0){
+			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+			return 1;
+		}
+	}while(ne < 1);
+
+	if(unlikely(wc.status != IB_WC_SUCCESS)){
+		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+		return 1;
+	}
+
+#endif
+
+out:
+	ret = post_recv(q);
+	BUG_ON(ret);
+
+	return ret;
+
+}
+EXPORT_SYMBOL_GPL(rdpma_put);
+#endif
 
 #ifdef BIGMRPUT
 /** rdpma_put - put page into server
@@ -753,10 +885,10 @@ out:
 EXPORT_SYMBOL_GPL(rdpma_get);
 #endif
 
-#ifdef BIGMRGET/* ---------------------------------------------- BIGMR ----------------------------------- */
+#if defined(BIGMRGET) || defined(TWOSIDED)
 /** rdpma_get - get page from server 
  *
- * BIGMR defined
+ * BIGMR or TWOSIDED defined
  * return -1 if failed
  */
 int rdpma_get(struct page *page, uint64_t key, int batch)
