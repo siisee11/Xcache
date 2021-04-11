@@ -12,7 +12,7 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 4
+#define THREAD_NUM 1
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
 
@@ -20,7 +20,7 @@
 
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
-//#define ONESIDED 1
+#define ONESIDED 1
 
 #ifdef ONESIDED
 #define BITS 22 // 16GB=4KBx4x2^20
@@ -187,7 +187,7 @@ int rdpma_read_message_test(void* arg){
 	int tid = my_data->tid;
 	int nfailed = 0;
     struct ht_data *cur;
-	long longkey, roffset;
+	long longkey, roffset = 0;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
