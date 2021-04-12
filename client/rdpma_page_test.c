@@ -12,15 +12,16 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 1
+#define THREAD_NUM 8
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
+#define NUMPAGES 1000000
 
-#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * THREAD_NUM * 250000)
+#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * NUMPAGES)
 
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
 
-#define ONESIDED 1
+//#define ONESIDED 1
 
 #ifdef ONESIDED
 #define BITS 22 // 16GB=4KBx4x2^20
@@ -278,10 +279,10 @@ int main(void){
 
 	if (elapsed/1000/1000 != 0) {
 		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
-		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", ITERATIONS/(elapsed/1000/1000));
+		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", NUMPAGES/(elapsed/1000/1000));
 	} else  {
 		pr_info("[ PASS ] Throughput: %lld (KB/msec)\n", (TOTAL_CAPACITY/1024)/(elapsed/1000));
-		pr_info("[ PASS ] IOPS: %lld (Operation/msec)\n", ITERATIONS/(elapsed/1000));
+		pr_info("[ PASS ] IOPS: %lld (Operation/msec)\n", NUMPAGES/(elapsed/1000));
 	}
 	
 	ssleep(1);
@@ -318,9 +319,10 @@ int main(void){
 	else
 		pr_info("[ FAIL ] complete read thread functions: time( %llu ) usec, %d failed \n", elapsed, ret);
 
-	if (elapsed/1000/1000 != 0)
+	if (elapsed/1000/1000 != 0) {
 		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
-	else 
+		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", NUMPAGES/(elapsed/1000/1000));
+	} else 
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
 #if 0
