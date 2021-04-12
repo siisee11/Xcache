@@ -555,7 +555,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 	rdpma_handle_read_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-	if( value ) {
+	if( !abort ) {
 		found_cnt++;
 		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, local_key);
 		dprintf("[ INFO ] page %s\n", (char *)value);
@@ -601,7 +601,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
-	if (value) {
+	if ( abort ) {
 		rdpma_handle_read_poll_notfound_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 	} else {
 		rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);

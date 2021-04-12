@@ -15,12 +15,12 @@ all:
 	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
 	$(CXX) $(CFLAGS) -c -o NuMA_KV.o NuMA_KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
 	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
-	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DNORMALPUT -DNORMALGET
-	$(CXX) $(CFLAGS) -o rdma_svr_bigmr rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DBIGMRPUT -DBIGMRGET
+
+mix:
+	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
+	$(CXX) $(CFLAGS) -c -o NuMA_KV.o NuMA_KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
+	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
 	$(CXX) $(CFLAGS) -o rdma_svr_mix rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DNORMALPUT -DBIGMRGET
-	$(CXX) $(CFLAGS) -o rdma_svr_odp rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DODP -DBIGMRPUT -DBIGMRGET
-	$(CXX) $(CFLAGS) -o rdma_svr_onesided rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DONESIDED
-	$(CXX) $(CFLAGS) -o rdma_svr_twosided rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 bigmr:
 	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
