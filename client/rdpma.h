@@ -13,7 +13,7 @@
 
 #define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
 #define MAX_BATCH 			(1) 			/* 16 get fault */
-#define NUM_ENTRY 			(1) 			/* # of Metadata per queue */
+#define NUM_ENTRY 			(16) 			/* # of Metadata per queue */
 #define METADATA_SIZE 		(24) 	 		/* [ key, remote address, batch ] */ 
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */

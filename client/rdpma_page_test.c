@@ -12,7 +12,7 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 8
+#define THREAD_NUM 4
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
 #define NUMPAGES 1000000
