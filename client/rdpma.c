@@ -282,9 +282,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	/* get q and its infomation */
 	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
 	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
-
-	msg_id = 0;
 
 	/* 2. post send */
 	/* setup imm data */
@@ -317,7 +316,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = 16;  /* XXX */
+	sge[1].length = 8;  /* XXX */
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -332,15 +331,15 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
-
+	
 	/* WRITE PAGE */
 	rdma_wr[0].wr.next    = NULL;
 	rdma_wr[0].wr.sg_list = &sge[0];
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_SEND_WITH_IMM;
-	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED;
+	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED | IB_SEND_FENCE;
 	rdma_wr[0].wr.ex.imm_data = imm;
-	//	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
+	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
@@ -914,9 +913,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	/* get q and its infomation */
 	q = rdpma_get_queue(cpuid, QP_READ_SYNC);
 	queue_id = rdpma_get_queue_id(cpuid, QP_READ_SYNC);
+	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
-
-	msg_id = 0;
 
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
