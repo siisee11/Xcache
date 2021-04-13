@@ -94,6 +94,10 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 	*num= (int)((target >> 28) & 0x0000000f);
 }
 
+static uint64_t longkeyToKey(uint64_t longkey) {
+	return longkey >> 32;
+}
+
 static void rdpma_print_stats() {
 	printf("\n--------------------REPORT---------------------\n");
 //	printf("SAMPLE RATE [1/%d]\n", SAMPLE_RATE);
@@ -163,17 +167,17 @@ int post_recv(int client_id, int queue_id){
 int post_recv_with_addr(uint64_t addr, int client_id, int queue_id){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
-	struct ibv_sge sge;
+	struct ibv_sge sge[1];
 
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
 	memset(&sge, 0, sizeof(struct ibv_sge));
 
-	sge.addr = addr;
-	sge.length = PAGE_SIZE;
-	sge.lkey = gctrl[client_id]->mr_buffer->lkey;
+	sge[0].addr = addr;
+	sge[0].length = 4096;
+	sge[0].lkey = gctrl[client_id]->mr_buffer->lkey;
 
 	wr.wr_id = addr;
-	wr.sg_list = &sge;
+	wr.sg_list = &sge[0];
 	wr.num_sge = 1;
 	wr.next = NULL;
 
@@ -204,8 +208,12 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
-	dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", target, local_key);
+	dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", target, longkeyToKey(local_key));
 	dprintf("[ INFO ] page %s\n", (char *)target);
+
+	if ( atoi((char *)target) != longkeyToKey(local_key) ) {
+		printf("[ FAIL ] key %ld (decimal) Inserted, but page %s\n", longkeyToKey(local_key), (char *)target);
+	}
 
 #if 1 /* XXX: if this block is commented, some client message ignored */
 	sge.addr = 0;
@@ -286,7 +294,7 @@ static void process_write(struct queue *q, int cid, int qid, int mid){
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
 
-	dprintf("[ INFO ] MSG_WRITE page %lx, key %lx Inserted\n", (uint64_t)page, local_key);
+	dprintf("[ INFO ] MSG_WRITE page %lx, key %ld Inserted\n", (uint64_t)page, longkeyToKey(local_key));
 	dprintf("[ INFO ] page %s\n", (char *)save_page);
 
 #if 1 /* XXX: if this block is commented, some client message ignored */
@@ -348,7 +356,7 @@ static void process_read(struct queue *q, int cid, int qid, int mid){
 	uint64_t local_key = *key;
 	uint64_t* remote_addr = (uint64_t*)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
 	uint64_t target_addr = (uint64_t)GET_REMOTE_ADDRESS_BASE(gctrl[cid]->local_mm, qid, mid);
-	dprintf("[ INFO ] key= %lx, remote address= %lx\n", local_key, *remote_addr);
+	dprintf("[ INFO ] key= %ld (decimal), remote address= %lx\n", longkeyToKey(local_key), *remote_addr);
 
 	/* 1. Get page address -> value */
 	void* value;
@@ -495,7 +503,7 @@ static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
 #endif
-	dprintf("[ INFO ] MSG_WRITE page %lx, local_key %lx Inserted\n", (uint64_t)save_page, local_key);
+	dprintf("[ INFO ] MSG_WRITE page %lx, local_key %ld (decimal) Inserted\n", (uint64_t)save_page, longkeyToKey(local_key));
 	dprintf("[ INFO ] page content %s\n", (char *)save_page);
 
 #if defined(TIME_CHECK)
@@ -546,7 +554,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key, 0); 
 
 	if(!value){
-		dprintf("Value for key[%lx] not found\n", local_key);
+		dprintf("Value for key[%ld] not found\n", longkeyToKey(local_key));
 		abort = true;
 	}
 
@@ -557,8 +565,12 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 
 	if( !abort ) {
 		found_cnt++;
-		dprintf("[ INFO ] page %lx, key %lx Searched\n", (uint64_t)value, local_key);
+		dprintf("[ INFO ] page %lx, key %ld Searched\n", (uint64_t)value, longkeyToKey(local_key));
 		dprintf("[ INFO ] page %s\n", (char *)value);
+
+		if ( atoi((char *)value) != longkeyToKey(local_key) ) {
+			printf("[ FAIL ] key %ld (decimal) searched, but page %s\n", longkeyToKey(local_key), (char *)value);
+		}
 
 		/* 2. Send page retrieved to client memory directly */	
 		sge.addr = (uint64_t)value;
