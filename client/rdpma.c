@@ -274,7 +274,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
-	//	int qid, mid, type, tx_state;
 	struct ib_wc wc;
 	int ne = 0;
 	int cpuid = smp_processor_id();
@@ -284,6 +283,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
+
+//	pr_info("[ INFO ] cpuid =%d, queue_id =%d, msg_id =%d, key =%u\n", cpuid, queue_id, msg_id, key>>32);
 
 	/* 2. post send */
 	/* setup imm data */
@@ -303,7 +304,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
-	sge[0].length = PAGE_SIZE * batch;
+	sge[0].length = PAGE_SIZE;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
@@ -333,14 +334,16 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 	
 	/* WRITE PAGE */
+	rdma_wr[0].wr.wr_id   = msg_id;
 	rdma_wr[0].wr.next    = NULL;
 	rdma_wr[0].wr.sg_list = &sge[0];
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_SEND_WITH_IMM;
-	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED | IB_SEND_FENCE;
+	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED;
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
+	spin_lock(&q->queue_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -355,6 +358,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 			goto out;
 		}
 	}while(ne < 1);
+
+#if 0
+	if (msg_id != (int)wc.wr_id )
+		printk(KERN_ALERT "[%s]: Catch other completion(msg_id: %lu, wr_id: %lu)\n", __func__, msg_id, wc.wr_id);
+#endif
 
 	if(wc.status != IB_WC_SUCCESS){
 		printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
@@ -380,6 +388,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 
 out:
+	spin_unlock(&q->queue_lock); /* UNLOCK HERE */
 	ret = post_recv(q);
 	BUG_ON(ret);
 

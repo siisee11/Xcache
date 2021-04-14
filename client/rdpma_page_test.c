@@ -17,6 +17,9 @@
 #define BATCH_SIZE (1 << PAGE_ORDER)
 #define NUMPAGES 1000000
 
+#define PUTTEST 1
+//#define GETTEST 
+
 #define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * NUMPAGES)
 
 #define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
@@ -112,6 +115,8 @@ int rdpma_write_message_test(void* arg){
 		ret = rdpma_put_onesided(vpages[tid][i], tmp->roffset, BATCH_SIZE);
 
 #else  /* ONESIDED */
+		if ( simple_strtol(page_address(vpages[tid][i]), NULL, 10) != longkey >> 32)
+			pr_info("wrong parameter for rdpma_put\n");
 		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE);
 #endif /* ONESIDED */
 
@@ -286,7 +291,7 @@ int main(void){
 	}
 	
 	ssleep(1);
-
+#ifdef GETTEST
 	ret = 0;
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
@@ -325,6 +330,7 @@ int main(void){
 	} else 
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 
+#endif
 #if 0
 	for(i=0; i<THREAD_NUM; i++){
 		reinit_completion(&comp[i]);
