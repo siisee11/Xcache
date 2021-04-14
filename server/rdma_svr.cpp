@@ -211,9 +211,11 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", target, longkeyToKey(local_key));
 	dprintf("[ INFO ] page %s\n", (char *)target);
 
+#if 0
 	if ( atoi((char *)target) != longkeyToKey(local_key) ) {
-		printf("[ FAIL ] key %ld (decimal) Inserted, but page %s\n", longkeyToKey(local_key), (char *)target);
+		printf("[ FAIL ] (C:%d,Q:%d,M:%d, key %ld (decimal) Inserted, but page %s\n", cid, qid, mid, longkeyToKey(local_key), (char *)target);
 	}
+#endif
 
 #if 1 /* XXX: if this block is commented, some client message ignored */
 	sge.addr = 0;
@@ -568,9 +570,11 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 		dprintf("[ INFO ] page %lx, key %ld Searched\n", (uint64_t)value, longkeyToKey(local_key));
 		dprintf("[ INFO ] page %s\n", (char *)value);
 
+#if 0
 		if ( atoi((char *)value) != longkeyToKey(local_key) ) {
 			printf("[ FAIL ] key %ld (decimal) searched, but page %s\n", longkeyToKey(local_key), (char *)value);
 		}
+#endif
 
 		/* 2. Send page retrieved to client memory directly */	
 		sge.addr = (uint64_t)value;
@@ -679,7 +683,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				int qid, mid, type, tx_state, num;
 
 				bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
-				dprintf("[ INFO ] On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
+				dprintf("[ INFO ] IBV_WC_RECV On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
 
 				process_write_twosided(q, wc.wr_id, client_id, qid, mid);
 			}
@@ -834,7 +838,6 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	/* Create polling thread associated with q */
 	std::thread p = std::thread( server_recv_poll_cq, q, client_number, queue_number);
 
-#if 0
 	/*
 	 * Create a cpu_set_t object representing a set of CPUs. Clear it and mark
 	 * only CPU i as set.
@@ -848,7 +851,6 @@ int on_connect_request(struct rdma_cm_id *id, struct rdma_conn_param *param)
 	if (rc != 0) {
 		fprintf(stderr, "Error calling pthread_setaffinity_np\n");
 	}
-#endif
 
 	p.detach();
 #endif
