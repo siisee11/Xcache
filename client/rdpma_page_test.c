@@ -18,7 +18,7 @@
 #define NUMPAGES 1000000
 
 #define PUTTEST 1
-//#define GETTEST 
+#define GETTEST 1
 
 #define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * NUMPAGES)
 

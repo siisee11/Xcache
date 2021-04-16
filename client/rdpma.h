@@ -11,6 +11,8 @@
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 
+#define NUM_LOCKS 			(10)
+
 #define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
 #define MAX_BATCH 			(1) 			/* 16 get fault */
 #define NUM_ENTRY 			(8) 			/* # of Metadata per queue */
@@ -26,6 +28,7 @@
 #define GET_OFFSET_FROM_BASE(qid, mid) 				(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid)
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_OFFSET_FROM_BASE_TO_PAGE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
+
 
 enum qp_type {
 	QP_READ_SYNC,
@@ -81,7 +84,8 @@ struct rdma_queue {
 	int success;
 	struct page *page;
 	struct idr 		queue_status_idr;
-	spinlock_t		queue_lock;
+	spinlock_t		queue_lock[NUM_LOCKS];  /* fine grained lock */
+	spinlock_t		global_lock;
 };
 
 struct pmdfc_rdma_memregion {

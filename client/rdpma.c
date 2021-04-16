@@ -33,11 +33,11 @@ int QP_MAX_SEND_WR = 4096;
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
 //#define KTIME_CHECK 1 	/* Detail time check */
-//#define BIGMRPUT 1
-//#define BIGMRGET 1
+#define BIGMRPUT 1
+#define BIGMRGET 1
 //#define NORMALPUT 1
 //#define NORMALGET 1
-#define TWOSIDED 1
+//#define TWOSIDED 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -343,7 +343,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
-	spin_lock(&q->queue_lock); /** LOCK HERE */
+//	spin_lock(&q->queue_lock[msg_id]); /** LOCK HERE */
+	spin_lock(&q->global_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -388,12 +389,12 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 
 out:
-	spin_unlock(&q->queue_lock); /* UNLOCK HERE */
+//	spin_unlock(&q->queue_lock[msg_id]); /* UNLOCK HERE */
+	spin_unlock(&q->global_lock); /* UNLOCK HERE */
 	ret = post_recv(q);
 	BUG_ON(ret);
 
 	return ret;
-
 }
 EXPORT_SYMBOL_GPL(rdpma_put);
 #endif
@@ -423,10 +424,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	/* get q and its infomation */
 	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
 	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
-
-	/* this msg_id is unique in this queue */
-	msg_id = 0;
 
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
@@ -477,6 +476,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #ifdef KTIME_CHECK
 	fperf_start("meta_write");
 #endif
+	spin_lock(&q->global_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send meta failed: %d\n", ret);
@@ -568,6 +568,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 
 out:
+	spin_unlock(&q->global_lock); /** LOCK HERE */
 	ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, PAGE_SIZE, DMA_TO_DEVICE);
 	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(struct rdpma_metadata), DMA_TO_DEVICE);
 	kmem_cache_free(req_cache, req[0]);
@@ -604,9 +605,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	/* get q and its infomation */
 	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
 	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
+	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
-
-	msg_id = 0;
 
 	/* 2. post send */
 	/* setup imm data */
@@ -666,6 +666,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
 
+	spin_lock(&q->global_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -705,6 +706,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 
 out:
+	spin_unlock(&q->global_lock); /** LOCK HERE */
 	ret = post_recv(q);
 	BUG_ON(ret);
 
@@ -964,6 +966,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	rdma_wr.remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
 	rdma_wr.rkey = q->ctrl->servermr.key;
 
+//	spin_lock(&q->queue_lock[msg_id]); /** LOCK HERE */
+	spin_lock(&q->global_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -1013,6 +1017,8 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	}
 
 out:
+//	spin_unlock(&q->queue_lock[msg_id]); /** LOCK HERE */
+	spin_unlock(&q->global_lock); /** LOCK HERE */
 	ret = post_recv(q);
 	BUG_ON(ret);
 
@@ -1558,6 +1564,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 {
 	struct rdma_queue *queue;
 	int ret;
+	int i;
 
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
@@ -1567,7 +1574,11 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	idr_init(&queue->queue_status_idr);
 	atomic_set(&queue->pending, 0);
 	spin_lock_init(&queue->cq_lock);
-	spin_lock_init(&queue->queue_lock);
+
+	for (i = 0 ; i < NUM_LOCKS; i++) {
+		spin_lock_init(&queue->queue_lock[i]);
+	}
+	spin_lock_init(&queue->global_lock);
 	queue->qp_type = get_queue_type(idx);
 
 	queue->cm_id = rdma_create_id(&init_net, pmdfc_rdma_cm_handler, queue,
