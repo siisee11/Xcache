@@ -23,7 +23,7 @@ module_param_named(nq, numqueues, int, 0644);
 module_param_string(sip, serverip, INET_ADDRSTRLEN, 0644);
 module_param_string(cip, clientip, INET_ADDRSTRLEN, 0644);
 
-#define CONNECTION_TIMEOUT_MS 60000
+#define CONNECTION_TIMEOUT_MS 600000 /* XXX: 60000 -> 600000 */
 #define QP_QUEUE_DEPTH 256
 /* we don't really use recv wrs, so any small number should do */
 #define QP_MAX_RECV_WR 4096
@@ -33,11 +33,11 @@ int QP_MAX_SEND_WR = 4096;
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
 //#define KTIME_CHECK 1 	/* Detail time check */
-#define BIGMRPUT 1
-#define BIGMRGET 1
+//#define BIGMRPUT 1
+//#define BIGMRGET 1
 //#define NORMALPUT 1
 //#define NORMALGET 1
-//#define TWOSIDED 1
+#define TWOSIDED 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -1807,9 +1807,9 @@ static int pmdfc_rdma_post_send(struct rdma_queue *q, struct rdma_req *qe,
 }
 
 inline static void pmdfc_rdma_wait_completion(struct ib_cq *cq,
-		struct rdma_req *qe)
+		struct rdma_req *qe, int delay)
 {
-	ndelay(1000);
+	ndelay(delay);
 	while (!completion_done(&qe->done)) {
 		ndelay(250);
 		ib_process_cq_direct(cq, 1);
@@ -1838,7 +1838,7 @@ static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe, 1000);
 
 out_free_qe:
 	kmem_cache_free(req_cache, qe);
@@ -1868,7 +1868,7 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe, 1000);
 
 out_free_qe:
 	kmem_cache_free(req_cache, qe);
