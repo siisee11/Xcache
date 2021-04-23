@@ -286,10 +286,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	int buf_id = atomic_read(&q->nr_buffered);
 	atomic_inc(&q->nr_buffered);
-	if (buf_id < 3) {
-		memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
-		q->keys[buf_id] = key;
+	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
+	q->keys[buf_id] = key;
 
+	if (buf_id < 3) {
 		return 0;
 	}
 
@@ -402,6 +402,8 @@ out:
 	spin_unlock(&q->global_lock); /* UNLOCK HERE */
 	ret = post_recv(q);
 	BUG_ON(ret);
+
+	atomic_read(&q->nr_buffered, 0);
 
 	return ret;
 }
