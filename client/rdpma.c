@@ -284,6 +284,15 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
 
+	int buf_id = atomic_read(&q->nr_buffered);
+	atomic_inc(&q->nr_buffered);
+	if (buf_id < 3) {
+		memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
+		q->keys[buf_id] = key;
+
+		return 0;
+	}
+
 //	pr_info("[ INFO ] cpuid =%d, queue_id =%d, msg_id =%d, key =%u\n", cpuid, queue_id, msg_id, key>>32);
 
 	/* 2. post send */
@@ -297,27 +306,27 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	meta->batch = batch;
 
 	/* DMA PAGE */
-	ret = get_req_for_page(&req[0], dev, page, batch, DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[0], dev, q->buffer, PAGE_SIZE * 4, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
-	sge[0].length = PAGE_SIZE;
+	sge[0].length = PAGE_SIZE * 4;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
 	/* DMA KEY */
-	ret = get_req_for_buf(&req[1], dev, meta, sizeof(uint64_t), DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * 4, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = 8;  /* XXX */
+	sge[1].length = 32;  /* XXX */
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -1573,6 +1582,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	init_completion(&queue->cm_done);
 	idr_init(&queue->queue_status_idr);
 	atomic_set(&queue->pending, 0);
+	atomic_set(&queue->nr_buffered, 0);
 	spin_lock_init(&queue->cq_lock);
 
 	for (i = 0 ; i < NUM_LOCKS; i++) {

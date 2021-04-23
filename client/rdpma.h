@@ -16,7 +16,7 @@
 #define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
 #define MAX_BATCH 			(1) 			/* 16 get fault */
 #define NUM_ENTRY 			(8) 			/* # of Metadata per queue */
-#define METADATA_SIZE 		(24) 	 		/* [ key, batch , remote address] */ 
+#define METADATA_SIZE 		(32) 	 		/* [ key * 4 ] */ 
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */
 #define LOCAL_META_REGION_SIZE  		(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
@@ -83,6 +83,9 @@ struct rdma_queue {
 	/* XXX*/
 	int success;
 	struct page *page;
+	char buffer[PAGE_SIZE * 4];   /* batching 4 pages */
+	uint64_t keys[4];   /* batching 4 keys*/
+	atomic_t nr_buffered;
 	struct idr 		queue_status_idr;
 	spinlock_t		queue_lock[NUM_LOCKS];  /* fine grained lock */
 	spinlock_t		global_lock;

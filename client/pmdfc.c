@@ -109,7 +109,8 @@ static void pmdfc_cleancache_put_page(int pool_id,
 
     tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
     tmp->longkey = get_longkey((long)oid.oid[0], index);
-    tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
+	if (onesided)
+		tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
     hash_add(hash_head, &tmp->h_node, tmp->longkey);
 #endif
 
