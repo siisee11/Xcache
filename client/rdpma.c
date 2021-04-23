@@ -403,7 +403,7 @@ out:
 	ret = post_recv(q);
 	BUG_ON(ret);
 
-	atomic_read(&q->nr_buffered, 0);
+	atomic_set(&q->nr_buffered, 0);
 
 	return ret;
 }
