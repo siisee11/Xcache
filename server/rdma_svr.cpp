@@ -690,7 +690,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 			else {
 				/* only for first connection */
 				dprintf("[ INFO ] connected. receiving memory region info.\n");
-				printf("[ INFO ] *** Client MR key=%u base vaddr=%p size=%lu ***\n", gctrl[client_id]->clientmr.key, (void *)gctrl[client_id]->clientmr.baseaddr
+				printf("[ INFO ] *** Client MR key=%u base vaddr=%p size=%lu (KB) ***\n", gctrl[client_id]->clientmr.key, (void *)gctrl[client_id]->clientmr.baseaddr
 						, gctrl[client_id]->clientmr.mr_size/1024);
 			}
 		}else{
@@ -883,11 +883,11 @@ int on_connection(struct queue *q)
 		struct memregion servermr = {};
 
 		printf("[ INFO ] connected. sending memory region info.\n");
-		printf("[ INFO ] *** Server MR key=%u base vaddr=%lx size=%d ***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, LOCAL_META_REGION_SIZE/1024);
+		printf("[ INFO ] *** Server MR key=%u base vaddr=%lx size=%d (MB)***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
 
 		servermr.baseaddr = (uint64_t) ctrl->local_mm;
 		servermr.key  = ctrl->mr_buffer->rkey;
-		servermr.mr_size  = LOCAL_META_REGION_SIZE;
+		servermr.mr_size  = LOCAL_META_REGION_SIZE + BUFFER_SIZE;
 
 		wr.opcode = IBV_WR_SEND;
 		wr.sg_list = &sge;

@@ -35,6 +35,7 @@ POBJ_LAYOUT_END(PM_MR);
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
+//const size_t BUFFER_SIZE = ((1UL << 30) * 200);
 const size_t BUFFER_SIZE = ((1UL << 30) * 10);
 
 enum{
