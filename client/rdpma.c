@@ -277,6 +277,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_wc wc;
 	int ne = 0;
 	int cpuid = smp_processor_id();
+	int buf_id;
 
 	/* get q and its infomation */
 	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
@@ -284,12 +285,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
 
-	int buf_id = atomic_read(&q->nr_buffered);
-	atomic_inc(&q->nr_buffered);
+	spin_lock(&q->global_lock); /** LOCK HERE */
+	buf_id = atomic_fetch_add(1,&q->nr_buffered);
 	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
 	q->keys[buf_id] = key;
 
 	if (buf_id < 3) {
+		spin_unlock(&q->global_lock); /** LOCK HERE */
 		return 0;
 	}
 
@@ -353,7 +355,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
 //	spin_lock(&q->queue_lock[msg_id]); /** LOCK HERE */
-	spin_lock(&q->global_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
