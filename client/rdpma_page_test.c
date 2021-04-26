@@ -12,7 +12,7 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 8
+#define THREAD_NUM 4
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
 #define NUMPAGES 1000000
@@ -221,8 +221,13 @@ exists:
 		fperf_end("rdpma_get");
 #endif
 
-		if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * BATCH_SIZE) != 0){
-			printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+		if ( ret == 0 ) {
+			if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * BATCH_SIZE) != 0){
+				printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
+				nfailed++;
+			}
+		}
+		else {
 			nfailed++;
 		}
 	}

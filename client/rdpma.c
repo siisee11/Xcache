@@ -911,7 +911,7 @@ EXPORT_SYMBOL_GPL(rdpma_get);
 /** rdpma_get - get page from server 
  *
  * BIGMR or TWOSIDED defined
- * return -1 if failed
+ * return 0 if succeeds 
  */
 int rdpma_get(struct page *page, uint64_t key, int batch)
 {
