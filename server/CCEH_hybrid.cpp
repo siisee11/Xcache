@@ -144,6 +144,8 @@ RETRY:
 		auto loc = (y + i) % Segment::kNumSlot;
 		auto _key = target->_[loc].key;
 		/* validity check for entry keys */
+		// pattern이 일치하지 않거나, INVALID한 곳에 새로운 key value를 추가할 수 있음.
+		// SENTINEL 인 곳에는 추가 불가.
 		if((((h(&target->_[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-target->local_depth)) != pattern) || (target->_[loc].key == INVALID)) && (target->_[loc].key != SENTINEL)){
 			if(CAS(&target->_[loc].key, &_key, SENTINEL)){
 				target->_[loc].value = value;
@@ -154,6 +156,14 @@ RETRY:
 				target->unlock();
 				return;
 			}
+		}
+
+		// XXX: Update
+		if (_key == key) {
+			target->_[loc].value = value;
+			clflush((char*)&target->_[loc], sizeof(Pair));
+			target->unlock();
+			return;
 		}
 	}
 
