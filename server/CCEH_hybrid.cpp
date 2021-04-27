@@ -149,9 +149,9 @@ RETRY:
 
 		if(
 				(
-				 ((h(&target->_[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-target->local_depth)) != pattern) 
-				 || (target->_[loc].key == INVALID)
-				 || (target->_[loc].key == _key) /* Overwrite */
+					((h(&target->_[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-target->local_depth)) != pattern) 
+					|| (target->_[loc].key == INVALID)
+//					|| (target->_[loc].key == _key) /* Overwrite */
 				) 
 				&& (target->_[loc].key != SENTINEL)
 		  ){
