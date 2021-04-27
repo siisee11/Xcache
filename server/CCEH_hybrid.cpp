@@ -146,7 +146,15 @@ RETRY:
 		/* validity check for entry keys */
 		// pattern이 일치하지 않거나, INVALID한 곳에 새로운 key value를 추가할 수 있음.
 		// SENTINEL 인 곳에는 추가 불가.
-		if((((h(&target->_[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-target->local_depth)) != pattern) || (target->_[loc].key == INVALID)) && (target->_[loc].key != SENTINEL)){
+		if(
+				(
+				 ((hash_funcs[0](&D_RO(target)->bucket[loc].key, sizeof(Key_t), f_seed) >> (8*sizeof(f_hash)-target_local_depth)) != pattern) 
+				 || (D_RO(target)->bucket[loc].key == INVALID)
+				 || (D_RO(target)->bucket[loc].key == key) /* Overwrite */
+				) 
+				&& (D_RO(target)->bucket[loc].key != SENTINEL)
+		  ){
+			// 아래 CAS가 무슨 의미?
 			if(CAS(&target->_[loc].key, &_key, SENTINEL)){
 				target->_[loc].value = value;
 				mfence();
@@ -156,14 +164,6 @@ RETRY:
 				target->unlock();
 				return;
 			}
-		}
-
-		// XXX: Update
-		if (_key == key) {
-			target->_[loc].value = value;
-			clflush((char*)&target->_[loc], sizeof(Pair));
-			target->unlock();
-			return;
 		}
 	}
 
