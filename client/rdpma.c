@@ -270,7 +270,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_sge sge[2];
 	int ret;
 	uint32_t imm;
-	struct rdpma_metadata *meta;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
@@ -286,7 +285,8 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	dev = q->ctrl->rdev->dev;
 
 	spin_lock(&q->global_lock); /** LOCK HERE */
-	buf_id = atomic_fetch_add(1,&q->nr_buffered);
+	buf_id = atomic_fetch_add(1, &q->nr_buffered);
+	BUG_ON(buf_id > 3);
 	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
 	q->keys[buf_id] = key;
 
@@ -302,10 +302,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	imm = htonl(bit_mask(batch, msg_id, MSG_WRITE, TX_WRITE_BEGIN, queue_id));
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
-
-	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
-	meta->key = key;
-	meta->batch = batch;
 
 	/* DMA PAGE */
 	ret = get_req_for_buf(&req[0], dev, q->buffer, PAGE_SIZE * 4, DMA_TO_DEVICE);
@@ -328,12 +324,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = 32;  /* XXX */
+	sge[1].length = sizeof(uint64_t) * 4;  /* XXX */
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
 	 * to just post requests in batches */
 
+#if 0
 	/* WRITE KEY */
 	rdma_wr[1].wr.next    = &rdma_wr[0].wr;
 	rdma_wr[1].wr.sg_list = &sge[1];
@@ -341,21 +338,22 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE;
 	rdma_wr[1].wr.send_flags = 0;
 	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
-	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
+	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id); // msg_id 이부분 문제?
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
+#endif
 	
 	/* WRITE PAGE */
 	rdma_wr[0].wr.wr_id   = msg_id;
 	rdma_wr[0].wr.next    = NULL;
-	rdma_wr[0].wr.sg_list = &sge[0];
-	rdma_wr[0].wr.num_sge = 1;
+	rdma_wr[0].wr.sg_list = sge;
+	rdma_wr[0].wr.num_sge = 2;
 	rdma_wr[0].wr.opcode  = IB_WR_SEND_WITH_IMM;
 	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED;
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
 //	spin_lock(&q->queue_lock[msg_id]); /** LOCK HERE */
-	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
+	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
@@ -400,11 +398,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 out:
 //	spin_unlock(&q->queue_lock[msg_id]); /* UNLOCK HERE */
+	atomic_set(&q->nr_buffered, 0);
 	spin_unlock(&q->global_lock); /* UNLOCK HERE */
 	ret = post_recv(q);
 	BUG_ON(ret);
-
-	atomic_set(&q->nr_buffered, 0);
 
 	return ret;
 }
@@ -1001,7 +998,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 		goto out;
 	}
 
-
 	/* Polling recv cq here */
 	do{
 		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
@@ -1022,11 +1018,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
 	//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
-	if ( tx_state == TX_READ_ABORTED ) {
-		ret = -1;
-	} else {
-		ret = 0;
-	}
 
 out:
 //	spin_unlock(&q->queue_lock[msg_id]); /** LOCK HERE */
@@ -1039,6 +1030,12 @@ out:
 
 	kmem_cache_free(req_cache, req[0]);
 	kmem_cache_free(req_cache, req[1]);
+
+	if ( tx_state == TX_READ_ABORTED ) {
+		ret = -1;
+	} else {
+		ret = 0;
+	}
 
 	return ret;
 }
