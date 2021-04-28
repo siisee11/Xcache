@@ -65,6 +65,11 @@ struct rdma_req {
 
 struct pmdfc_rdma_ctrl;
 
+struct combined_buffer {
+	char buffer[PAGE_SIZE * 4];
+	uint64_t keys[4];
+};
+
 struct rdma_queue {
 	struct ib_qp *qp;
 	struct ib_cq *send_cq;
@@ -83,6 +88,7 @@ struct rdma_queue {
 	/* XXX*/
 	int success;
 	struct page *page;
+	struct combined_buffer *cbuffer;
 	char buffer[PAGE_SIZE * 4];   /* batching 4 pages */
 	uint64_t keys[4];   /* batching 4 keys*/
 	atomic_t nr_buffered;
