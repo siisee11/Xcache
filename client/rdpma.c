@@ -282,6 +282,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	q = rdpma_get_queue(cpuid, QP_WRITE_SYNC);
 	queue_id = rdpma_get_queue_id(cpuid, QP_WRITE_SYNC);
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
+	msg_id = 0;
 	dev = q->ctrl->rdev->dev;
 
 	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
