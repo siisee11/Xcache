@@ -270,7 +270,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_sge sge[2];
 	int ret;
 	uint32_t imm;
-	struct rdpma_metadata *meta;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
@@ -285,13 +284,16 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
 
-	spin_lock(&q->global_lock); /** LOCK HERE */
-	buf_id = atomic_fetch_add(1,&q->nr_buffered);
+	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
+	buf_id = atomic_fetch_add(1, &q->nr_buffered);
+	BUG_ON(buf_id > 3);
 	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
 	q->keys[buf_id] = key;
+//	memcpy(&q->cbuffer->buffer[PAGE_SIZE * buf_id], page_address(page), PAGE_SIZE);
+//	q->cbuffer->keys[buf_id] = key;
 
 	if (buf_id < 3) {
-		spin_unlock(&q->global_lock); /** LOCK HERE */
+		spin_unlock(&q->global_lock); /** UNLOCK HERE */
 		return 0;
 	}
 
@@ -303,23 +305,20 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
-	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
-	meta->key = key;
-	meta->batch = batch;
-
 	/* DMA PAGE */
-	ret = get_req_for_buf(&req[0], dev, q->buffer, PAGE_SIZE * 4, DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * 4, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
-	sge[0].length = PAGE_SIZE * 4;
+	sge[0].length = (PAGE_SIZE)* 4;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
+#if 1
 	/* DMA KEY */
 	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * 4, DMA_TO_DEVICE);
 	if (unlikely(ret))
@@ -328,7 +327,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = 32;  /* XXX */
+	sge[1].length = sizeof(uint64_t) * 4;  /* XXX */
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -341,8 +340,9 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE;
 	rdma_wr[1].wr.send_flags = 0;
 	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
-	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id);
+	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id); 
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
+#endif
 	
 	/* WRITE PAGE */
 	rdma_wr[0].wr.wr_id   = msg_id;
@@ -354,7 +354,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
-//	spin_lock(&q->queue_lock[msg_id]); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -395,16 +394,18 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		return 1;
 	}
-
 #endif
 
 out:
-//	spin_unlock(&q->queue_lock[msg_id]); /* UNLOCK HERE */
+	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(uint64_t) * 4, DMA_TO_DEVICE); /* XXX Needed? reuse it */
+	kmem_cache_free(req_cache, req[1]);
+
+	atomic_set(&q->nr_buffered, 0);
 	spin_unlock(&q->global_lock); /* UNLOCK HERE */
+
 	ret = post_recv(q);
 	BUG_ON(ret);
 
-	atomic_set(&q->nr_buffered, 0);
 
 	return ret;
 }
@@ -1001,7 +1002,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 		goto out;
 	}
 
-
 	/* Polling recv cq here */
 	do{
 		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
@@ -1022,11 +1022,6 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	bit_unmask(ntohl(wc.ex.imm_data), &num, &mid, &type, &tx_state, &qid);
 	//	pr_info("[%s]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", __func__, qid, mid, type, tx_state, num);
 
-	if ( tx_state == TX_READ_ABORTED ) {
-		ret = -1;
-	} else {
-		ret = 0;
-	}
 
 out:
 //	spin_unlock(&q->queue_lock[msg_id]); /** LOCK HERE */
@@ -1039,6 +1034,12 @@ out:
 
 	kmem_cache_free(req_cache, req[0]);
 	kmem_cache_free(req_cache, req[1]);
+
+	if ( tx_state == TX_READ_ABORTED ) {
+		ret = -1;
+	} else {
+		ret = 0;
+	}
 
 	return ret;
 }
@@ -1587,6 +1588,8 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	atomic_set(&queue->pending, 0);
 	atomic_set(&queue->nr_buffered, 0);
 	spin_lock_init(&queue->cq_lock);
+
+	queue->cbuffer = (struct combined_buffer *)kmalloc(sizeof(struct combined_buffer), GFP_KERNEL);
 
 	for (i = 0 ; i < NUM_LOCKS; i++) {
 		spin_lock_init(&queue->queue_lock[i]);
