@@ -174,12 +174,12 @@ int post_recv_with_addr(uint64_t addr, int client_id, int queue_id){
 	memset(&sge, 0, sizeof(struct ibv_sge));
 
 	sge[0].addr = addr;
-	sge[0].length = (PAGE_SIZE) * 4;
+	sge[0].length = (PAGE_SIZE) * BATCH_SIZE;
 	sge[0].lkey = gctrl[client_id]->mr_buffer->lkey;
 
 #if 1
 	sge[1].addr = (uint64_t)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, queue_id, 0);
-	sge[1].length = sizeof(uint64_t) * 4;
+	sge[1].length = sizeof(uint64_t) * BATCH_SIZE;
 	sge[1].lkey = gctrl[client_id]->mr_buffer->lkey;
 #endif
 
@@ -208,7 +208,7 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	uint64_t* keys = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, 0);
 //	keys = (uint64_t *)(target + PAGE_SIZE * 4);
 
-	for ( unsigned int i = 0 ; i < 4 ; i++ ) {
+	for ( unsigned int i = 0 ; i < BATCH_SIZE ; i++ ) {
 		uint64_t cur_page = target + PAGE_SIZE * i;
 #if defined(TIME_CHECK)
 		clock_gettime(CLOCK_MONOTONIC, &start);
@@ -266,7 +266,7 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	}
 #endif
 
-	uint64_t local_page_offset = page_offset.fetch_add(4, std::memory_order_relaxed);
+	uint64_t local_page_offset = page_offset.fetch_add(BATCH_SIZE, std::memory_order_relaxed);
 	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + (PAGE_SIZE) * local_page_offset);
 	post_recv_with_addr((uint64_t)save_page, cid, qid);
 
@@ -1118,7 +1118,7 @@ int main(int argc, char **argv)
 					post_recv(c, i);
 				} else {
 					/* WRITE QUEUE */
-					uint64_t local_page_offset = page_offset.fetch_add(4, std::memory_order_relaxed);
+					uint64_t local_page_offset = page_offset.fetch_add(BATCH_SIZE, std::memory_order_relaxed);
 					void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[c]->local_mm) + (PAGE_SIZE) * local_page_offset); 
 					post_recv_with_addr((uint64_t) save_page, c, i);
 				}
