@@ -12,11 +12,12 @@
 #include <linux/spinlock.h>
 
 #define NUM_LOCKS 			(10)
+#define BATCH_SIZE 			(16)
 
 #define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
 #define MAX_BATCH 			(1) 			/* 16 get fault */
-#define NUM_ENTRY 			(8) 			/* # of Metadata per queue */
-#define METADATA_SIZE 		(32) 	 		/* [ key * 4 ] */ 
+#define NUM_ENTRY 			(1) 			/* # of Metadata per queue */
+#define METADATA_SIZE 		(8 * BATCH_SIZE) 	 		/* [ key * 4 ] */ 
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */
 #define LOCAL_META_REGION_SIZE  		(NUM_QUEUES * NUM_ENTRY * ENTRY_SIZE)
@@ -89,8 +90,8 @@ struct rdma_queue {
 	int success;
 	struct page *page;
 	struct combined_buffer *cbuffer;
-	char buffer[PAGE_SIZE * 4];   /* batching 4 pages */
-	uint64_t keys[4];   /* batching 4 keys*/
+	char buffer[PAGE_SIZE * BATCH_SIZE];   /* batching 4 pages */
+	uint64_t keys[BATCH_SIZE];   /* batching 4 keys*/
 	atomic_t nr_buffered;
 	struct idr 		queue_status_idr;
 	spinlock_t		queue_lock[NUM_LOCKS];  /* fine grained lock */

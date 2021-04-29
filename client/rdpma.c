@@ -79,7 +79,7 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 		pr_err("[ FAIL ] pmdfc_rdma_write_done status is not success, it is=%d\n", wc->status);
 		//q->write_error = wc->status;
 	}
-	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE, DMA_TO_DEVICE);
+	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE * BATCH_SIZE, DMA_TO_DEVICE);
 
 	atomic_dec(&q->pending);
 	kmem_cache_free(req_cache, req);
@@ -287,13 +287,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
 	buf_id = atomic_fetch_add(1, &q->nr_buffered);
-	BUG_ON(buf_id > 3);
+	BUG_ON(buf_id >= BATCH_SIZE);
 	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
 	q->keys[buf_id] = key;
 //	memcpy(&q->cbuffer->buffer[PAGE_SIZE * buf_id], page_address(page), PAGE_SIZE);
 //	q->cbuffer->keys[buf_id] = key;
 
-	if (buf_id < 3) {
+	if (buf_id < BATCH_SIZE - 1) {
 		spin_unlock(&q->global_lock); /** UNLOCK HERE */
 		return 0;
 	}
@@ -307,28 +307,28 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
 	/* DMA PAGE */
-	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * 4, DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * BATCH_SIZE, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
-	sge[0].length = (PAGE_SIZE)* 4;
+	sge[0].length = (PAGE_SIZE) * BATCH_SIZE;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
 #if 1
 	/* DMA KEY */
-	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * 4, DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[1]->dma == 0);
 
 	sge[1].addr = req[1]->dma;
-	sge[1].length = sizeof(uint64_t) * 4;  /* XXX */
+	sge[1].length = sizeof(uint64_t) * BATCH_SIZE;  /* XXX */
 	sge[1].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	/* TODO: add a chain of WR, we already have a list so should be easy
@@ -398,7 +398,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #endif
 
 out:
-	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(uint64_t) * 4, DMA_TO_DEVICE); /* XXX Needed? reuse it */
+	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE); /* XXX Needed? reuse it */
 	kmem_cache_free(req_cache, req[1]);
 
 	atomic_set(&q->nr_buffered, 0);
