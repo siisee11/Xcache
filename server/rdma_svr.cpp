@@ -14,6 +14,7 @@
 #include <rdma/rdma_cma.h>
 #include <infiniband/verbs.h>
 #include <getopt.h>
+#include <chrono>
 
 #include "circular_queue.h"
 #include "rdma_svr.h"
@@ -167,18 +168,24 @@ int post_recv(int client_id, int queue_id){
 int post_recv_with_addr(uint64_t addr, int client_id, int queue_id){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
-	struct ibv_sge sge[1];
+	struct ibv_sge sge[2];
 
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
 	memset(&sge, 0, sizeof(struct ibv_sge));
 
 	sge[0].addr = addr;
-	sge[0].length = 4096;
+	sge[0].length = (PAGE_SIZE) * 4;
 	sge[0].lkey = gctrl[client_id]->mr_buffer->lkey;
+
+#if 1
+	sge[1].addr = (uint64_t)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, queue_id, 0);
+	sge[1].length = sizeof(uint64_t) * 4;
+	sge[1].lkey = gctrl[client_id]->mr_buffer->lkey;
+#endif
 
 	wr.wr_id = addr;
 	wr.sg_list = &sge[0];
-	wr.num_sge = 1;
+	wr.num_sge = 2;
 	wr.next = NULL;
 
 #ifdef SRQ
@@ -189,7 +196,7 @@ int post_recv_with_addr(uint64_t addr, int client_id, int queue_id){
 	return 0;
 }
 
-static void process_write_twosided(struct queue *q, uint64_t target, int cid, int qid, int mid){
+static void process_write_twosided(struct queue *q, uint64_t target, int cid, int qid, int mid) {
 	struct ibv_send_wr wr = {};
 	struct ibv_send_wr *bad_wr = NULL;
 	struct ibv_sge sge = {};
@@ -198,24 +205,27 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	struct timespec start, end;
 #endif
 
-	uint64_t* key = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, mid);
-	uint64_t local_key = *key;
-#if defined(TIME_CHECK)
-	clock_gettime(CLOCK_MONOTONIC, &start);
-#endif
-	gctrl[cid]->kv->Insert(local_key, (Value_t)target, 0, 0);
-#if defined(TIME_CHECK)
-	clock_gettime(CLOCK_MONOTONIC, &end);
-	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-	dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", target, longkeyToKey(local_key));
-	dprintf("[ INFO ] page %s\n", (char *)target);
+	uint64_t* keys = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, 0);
+//	keys = (uint64_t *)(target + PAGE_SIZE * 4);
 
-#if 0
-	if ( atoi((char *)target) != longkeyToKey(local_key) ) {
-		printf("[ FAIL ] (C:%d,Q:%d,M:%d, key %ld (decimal) Inserted, but page %s\n", cid, qid, mid, longkeyToKey(local_key), (char *)target);
-	}
+	for ( unsigned int i = 0 ; i < 4 ; i++ ) {
+		uint64_t cur_page = target + PAGE_SIZE * i;
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
+		gctrl[cid]->kv->Insert(keys[i], (Value_t)cur_page, 0, 0); 
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &end);
+		rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+		dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", cur_page, longkeyToKey(keys[i]));
+		dprintf("[ INFO ] page %s\n", (char *)cur_page);
+#if 1
+		if ( atoi((char *)cur_page) != longkeyToKey(keys[i]) ) {
+			printf("[ FAIL ] key %ld (decimal) inserted, but page %s [buf_id:%d, qid:%d, mid:%d]\n", longkeyToKey(keys[i]), (char *)cur_page, i, qid, mid);
+		}
+#endif
+	}
 
 #if 1 /* XXX: if this block is commented, some client message ignored */
 	sge.addr = 0;
@@ -228,6 +238,8 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
 
+	// 이 완료 메세지가 의도하지 않은 쓰레드한테 갈수있나?
+	// QP당 동시간에 하나의 메세지만 주고 받는데 그럴리가 없다.
 	ret = ibv_post_send(q->qp, &wr, &bad_wr);
 	if(ret){
 		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
@@ -254,7 +266,8 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	}
 #endif
 
-	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + PAGE_SIZE * page_offset++);
+	uint64_t local_page_offset = page_offset.fetch_add(4, std::memory_order_relaxed);
+	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + (PAGE_SIZE) * local_page_offset);
 	post_recv_with_addr((uint64_t)save_page, cid, qid);
 
 #if defined(TIME_CHECK)
@@ -654,6 +667,8 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 			dprintf("[ INFO ] On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
 
 			post_recv(client_id, queue_id);
+			if (queue_id != qid)
+				printf("[ ERRR ] Queue ID mismatch!!\n");
 
 			if(type == MSG_WRITE){
 				putcnt++;
@@ -684,6 +699,9 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 
 				bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
 				dprintf("[ INFO ] IBV_WC_RECV On Q[%d]: qid(%d), mid(%d), type(%d), tx_state(%d), num(%d)\n", queue_id, qid, mid, type, tx_state, num);
+
+				if (queue_id != qid)
+					printf("[ ERRR ] Queue ID mismatch!!\n");
 
 				process_write_twosided(q, wc.wr_id, client_id, qid, mid);
 			}
@@ -1100,7 +1118,8 @@ int main(int argc, char **argv)
 					post_recv(c, i);
 				} else {
 					/* WRITE QUEUE */
-					void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[c]->local_mm) + PAGE_SIZE * page_offset++);
+					uint64_t local_page_offset = page_offset.fetch_add(4, std::memory_order_relaxed);
+					void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[c]->local_mm) + (PAGE_SIZE) * local_page_offset); 
 					post_recv_with_addr((uint64_t) save_page, c, i);
 				}
 #else

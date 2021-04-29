@@ -146,7 +146,6 @@ RETRY:
 		/* validity check for entry keys */
 		// pattern이 일치하지 않거나, INVALID한 곳에 새로운 key value를 추가할 수 있음.
 		// SENTINEL 인 곳에는 추가 불가.
-
 		if(
 				(
 					((h(&target->_[loc].key, sizeof(Key_t)) >> (8*sizeof(key_hash)-target->local_depth)) != pattern) 
