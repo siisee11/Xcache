@@ -284,16 +284,16 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
 
-	spin_lock(&q->global_lock); /** LOCK HERE */
+	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
 	buf_id = atomic_fetch_add(1, &q->nr_buffered);
 	BUG_ON(buf_id > 3);
-//	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
-//	q->keys[buf_id] = key;
-	memcpy(&q->cbuffer->buffer[buf_id], page_address(page), PAGE_SIZE);
-	q->cbuffer->keys[buf_id] = key;
+	memcpy(q->buffer + PAGE_SIZE * buf_id, page_address(page), PAGE_SIZE);
+	q->keys[buf_id] = key;
+//	memcpy(&q->cbuffer->buffer[PAGE_SIZE * buf_id], page_address(page), PAGE_SIZE);
+//	q->cbuffer->keys[buf_id] = key;
 
 	if (buf_id < 3) {
-		spin_unlock(&q->global_lock); /** LOCK HERE */
+		spin_unlock(&q->global_lock); /** UNLOCK HERE */
 		return 0;
 	}
 
@@ -306,19 +306,19 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
 	/* DMA PAGE */
-	ret = get_req_for_buf(&req[0], dev, q->cbuffer, (PAGE_SIZE + 8) * 4, DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * 4, DMA_TO_DEVICE);
 	if (unlikely(ret))
 		return ret;
 
 	BUG_ON(req[0]->dma == 0);
 
 	sge[0].addr = req[0]->dma;
-	sge[0].length = (PAGE_SIZE + 8 )* 4;
+	sge[0].length = (PAGE_SIZE)* 4;
 	sge[0].lkey = q->ctrl->rdev->pd->local_dma_lkey;
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
-#if 0
+#if 1
 	/* DMA KEY */
 	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * 4, DMA_TO_DEVICE);
 	if (unlikely(ret))
@@ -340,22 +340,21 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].wr.opcode  = IB_WR_RDMA_WRITE;
 	rdma_wr[1].wr.send_flags = 0;
 	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
-	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id); // msg_id 이부분 문제?
+	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id); 
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 #endif
 	
 	/* WRITE PAGE */
 	rdma_wr[0].wr.wr_id   = msg_id;
 	rdma_wr[0].wr.next    = NULL;
-	rdma_wr[0].wr.sg_list = sge;
+	rdma_wr[0].wr.sg_list = &sge[0];
 	rdma_wr[0].wr.num_sge = 1;
 	rdma_wr[0].wr.opcode  = IB_WR_SEND_WITH_IMM;
 	rdma_wr[0].wr.send_flags = IB_SEND_SIGNALED;
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
-//	spin_lock(&q->queue_lock[msg_id]); /** LOCK HERE */
-	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
+	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 	}
@@ -395,15 +394,18 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
 		return 1;
 	}
-
 #endif
 
 out:
-//	spin_unlock(&q->queue_lock[msg_id]); /* UNLOCK HERE */
+	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(uint64_t) * 4, DMA_TO_DEVICE); /* XXX Needed? reuse it */
+	kmem_cache_free(req_cache, req[1]);
+
 	atomic_set(&q->nr_buffered, 0);
 	spin_unlock(&q->global_lock); /* UNLOCK HERE */
+
 	ret = post_recv(q);
 	BUG_ON(ret);
+
 
 	return ret;
 }
