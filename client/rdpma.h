@@ -12,11 +12,11 @@
 #include <linux/spinlock.h>
 
 #define NUM_LOCKS 			(10)
-#define BATCH_SIZE 			(16)
+#define BATCH_SIZE 			(4)
 
 #define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
 #define MAX_BATCH 			(1) 			/* 16 get fault */
-#define NUM_ENTRY 			(1) 			/* # of Metadata per queue */
+#define NUM_ENTRY 			(4) 			/* # of Metadata per queue */
 #define METADATA_SIZE 		(8 * BATCH_SIZE) 	 		/* [ key * 4 ] */ 
 
 #define ENTRY_SIZE 						(METADATA_SIZE + PAGE_SIZE * MAX_BATCH) 	/* [meta, page] */
