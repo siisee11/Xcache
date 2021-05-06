@@ -309,7 +309,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
 	/* DMA PAGE */
+#if BATCH_SIZE == 1
+	ret = get_req_for_page(&req[0], dev, page, BATCH_SIZE, DMA_TO_DEVICE);
+#else
 	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * BATCH_SIZE, DMA_TO_DEVICE);
+#endif
 	if (unlikely(ret))
 		return ret;
 
@@ -321,9 +325,12 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
-#if 1
 	/* DMA KEY */
+#if BATCH_SIZE == 1
+	ret = get_req_for_buf(&req[1], dev, key, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE);
+#else
 	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE);
+#endif
 	if (unlikely(ret))
 		return ret;
 
@@ -345,7 +352,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id); 
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
-#endif
 	
 	/* WRITE PAGE */
 	rdma_wr[0].wr.wr_id   = msg_id;
