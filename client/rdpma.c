@@ -270,6 +270,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_sge sge[2];
 	int ret;
 	uint32_t imm;
+	struct rdpma_metadata *meta;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
@@ -308,9 +309,12 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
+	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	meta->key = key;
+
 	/* DMA PAGE */
 #if BATCH_SIZE == 1
-	ret = get_req_for_page(&req[0], dev, page, BATCH_SIZE, DMA_TO_DEVICE);
+	ret = get_req_for_page(&req[0], dev, page, 1, DMA_TO_DEVICE);
 #else
 	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * BATCH_SIZE, DMA_TO_DEVICE);
 #endif
@@ -327,7 +331,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	/* DMA KEY */
 #if BATCH_SIZE == 1
-	ret = get_req_for_buf(&req[1], dev, key, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE);
+	ret = get_req_for_buf(&req[1], dev, meta, sizeof(uint64_t), DMA_TO_DEVICE);
 #else
 	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE);
 #endif
@@ -412,7 +416,9 @@ out:
 	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE); /* XXX Needed? reuse it */
 	kmem_cache_free(req_cache, req[1]);
 
+#if BATCH_SIZE >= 2
 	atomic_set(&q->nr_buffered, 0);
+#endif
 	spin_unlock(&q->global_lock); /* UNLOCK HERE */
 
 	ret = post_recv(q);
