@@ -285,6 +285,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = 0;
 	dev = q->ctrl->rdev->dev;
 
+#if BATCH_SIZE >= 2
 	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
 	buf_id = atomic_fetch_add(1, &q->nr_buffered);
 	BUG_ON(buf_id >= BATCH_SIZE);
@@ -297,6 +298,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		spin_unlock(&q->global_lock); /** UNLOCK HERE */
 		return 0;
 	}
+#endif
 
 //	pr_info("[ INFO ] cpuid =%d, queue_id =%d, msg_id =%d, key =%u\n", cpuid, queue_id, msg_id, key>>32);
 
@@ -355,6 +357,9 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
+#if BATCH_SIZE == 1
+	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
+#endif
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
