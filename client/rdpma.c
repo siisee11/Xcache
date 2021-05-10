@@ -270,6 +270,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct ib_sge sge[2];
 	int ret;
 	uint32_t imm;
+	struct rdpma_metadata *meta;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
 	int queue_id, msg_id;
@@ -285,6 +286,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = 0;
 	dev = q->ctrl->rdev->dev;
 
+#if BATCH_SIZE >= 2
 	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
 	buf_id = atomic_fetch_add(1, &q->nr_buffered);
 	BUG_ON(buf_id >= BATCH_SIZE);
@@ -297,6 +299,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		spin_unlock(&q->global_lock); /** UNLOCK HERE */
 		return 0;
 	}
+#endif
 
 //	pr_info("[ INFO ] cpuid =%d, queue_id =%d, msg_id =%d, key =%u\n", cpuid, queue_id, msg_id, key>>32);
 
@@ -306,8 +309,15 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
+	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	meta->key = key;
+
 	/* DMA PAGE */
+#if BATCH_SIZE == 1
+	ret = get_req_for_page(&req[0], dev, page, 1, DMA_TO_DEVICE);
+#else
 	ret = get_req_for_buf(&req[0], dev, q->buffer, (PAGE_SIZE) * BATCH_SIZE, DMA_TO_DEVICE);
+#endif
 	if (unlikely(ret))
 		return ret;
 
@@ -319,9 +329,12 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 
 	req[0]->cqe.done = rdpma_rdma_write_done;
 
-#if 1
 	/* DMA KEY */
+#if BATCH_SIZE == 1
+	ret = get_req_for_buf(&req[1], dev, meta, sizeof(uint64_t), DMA_TO_DEVICE);
+#else
 	ret = get_req_for_buf(&req[1], dev, q->keys, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE);
+#endif
 	if (unlikely(ret))
 		return ret;
 
@@ -343,7 +356,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	//	rdma_wr[1].wr.wr_cqe  = &req[0]->cqe;
 	rdma_wr[1].remote_addr = q->ctrl->servermr.baseaddr + GET_OFFSET_FROM_BASE(queue_id, msg_id); 
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
-#endif
 	
 	/* WRITE PAGE */
 	rdma_wr[0].wr.wr_id   = msg_id;
@@ -355,6 +367,9 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].wr.ex.imm_data = imm;
 	rdma_wr[0].wr.wr_cqe  = &req[0]->cqe;
 
+#if BATCH_SIZE == 1
+	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
+#endif
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
 	if (unlikely(ret)) {
 		pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
@@ -401,7 +416,9 @@ out:
 	ib_dma_unmap_page(q->ctrl->rdev->dev, req[1]->dma, sizeof(uint64_t) * BATCH_SIZE, DMA_TO_DEVICE); /* XXX Needed? reuse it */
 	kmem_cache_free(req_cache, req[1]);
 
+#if BATCH_SIZE >= 2
 	atomic_set(&q->nr_buffered, 0);
+#endif
 	spin_unlock(&q->global_lock); /* UNLOCK HERE */
 
 	ret = post_recv(q);
