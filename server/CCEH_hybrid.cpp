@@ -328,7 +328,7 @@ int CCEH::GetNodeID(Key_t& key) {
 }
 
 Value_t CCEH::Get_extent(Key_t& key){
-	int prev = -1;
+	unsigned int prev = -1;
 	Value_t result = NONE;
 	for(int h=0; h<EXTENT_MAX_HEIGHT; h++){
 		Key_t target = key-(key % (1<<h));

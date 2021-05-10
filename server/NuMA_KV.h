@@ -62,7 +62,7 @@ struct Extent{
 class NUMA_KV : public KVStore {
 	public:
 		NUMA_KV(void);
-		NUMA_KV(size_t, size_t, size_t);
+		NUMA_KV(size_t);
 		~NUMA_KV(void);
 		void Insert(Key_t&, Value_t, int, int);
 		void InsertExtent(Key_t&, Value_t, uint64_t);
@@ -94,6 +94,10 @@ class NUMA_KV : public KVStore {
 		vector<thread> numakvThreads;
 		atomic<int> nr_completed = 0;
 		int nr_data;
+#ifdef KV_DEBUG
+		uint64_t insertTime = 0;
+		uint64_t getTime = 0;
+#endif
 };
 
 #endif  // NUMA_KV_H_

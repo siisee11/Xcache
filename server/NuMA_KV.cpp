@@ -24,10 +24,6 @@ extern struct bitmask *pollcpubuf;
 extern int putcnt;
 extern int getcnt;
 
-#ifdef KV_DEBUG
-uint64_t insertTime = 0;
-uint64_t getTime = 0;
-#endif
 
 using namespace std;
 
@@ -49,7 +45,7 @@ NUMA_KV::NUMA_KV(void)
 	dprintf("[  OK  ] NUMA_KV \n");
 }
 
-NUMA_KV::NUMA_KV(size_t initCap, size_t nThreads, size_t nPollThreads)
+NUMA_KV::NUMA_KV(size_t initCap)
 	: cceh{new CCEH(static_cast<size_t>(initCap))}
 {
 	int numable = numa_available();

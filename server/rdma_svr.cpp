@@ -201,33 +201,16 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	struct ibv_send_wr *bad_wr = NULL;
 	struct ibv_sge sge = {};
 	int ret;
+	uint64_t local_keys[BATCH_SIZE];
 #if defined(TIME_CHECK)
 	struct timespec start, end;
 #endif
 
 	uint64_t* keys = (uint64_t*)GET_LOCAL_META_REGION(gctrl[cid]->local_mm, qid, 0);
-//	keys = (uint64_t *)(target + PAGE_SIZE * 4);
+	for ( unsigned int i = 0 ; i < BATCH_SIZE ; i++ ) 
+		local_keys[i] = keys[i];
 
-	for ( unsigned int i = 0 ; i < BATCH_SIZE ; i++ ) {
-		uint64_t cur_page = target + PAGE_SIZE * i;
-#if defined(TIME_CHECK)
-		clock_gettime(CLOCK_MONOTONIC, &start);
-#endif
-		gctrl[cid]->kv->Insert(keys[i], (Value_t)cur_page, 0, 0); 
-#if defined(TIME_CHECK)
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
-#endif
-		dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", cur_page, longkeyToKey(keys[i]));
-		dprintf("[ INFO ] page %s\n", (char *)cur_page);
-#if 1
-		if ( atoi((char *)cur_page) != longkeyToKey(keys[i]) ) {
-			printf("[ FAIL ] key %ld (decimal) inserted, but page %s [buf_id:%d, qid:%d, mid:%d]\n", longkeyToKey(keys[i]), (char *)cur_page, i, qid, mid);
-		}
-#endif
-	}
 
-#if 1 /* XXX: if this block is commented, some client message ignored */
 	sge.addr = 0;
 	sge.length = 0;
 	sge.lkey = gctrl[cid]->mr_buffer->lkey;
@@ -238,12 +221,30 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.imm_data = htonl(bit_mask(0, mid, MSG_READ_REPLY, TX_WRITE_COMMITTED, qid));
 
-	// 이 완료 메세지가 의도하지 않은 쓰레드한테 갈수있나?
-	// QP당 동시간에 하나의 메세지만 주고 받는데 그럴리가 없다.
 	ret = ibv_post_send(q->qp, &wr, &bad_wr);
 	if(ret){
 		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 	}
+
+	for ( unsigned int i = 0 ; i < BATCH_SIZE ; i++ ) {
+		uint64_t cur_page = target + PAGE_SIZE * i;
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
+		gctrl[cid]->kv->Insert(local_keys[i], (Value_t)cur_page, 0, 0); 
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &end);
+		rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
+		dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", cur_page, longkeyToKey(local_keys[i]));
+		dprintf("[ INFO ] page %s\n", (char *)cur_page);
+#if 1
+		if ( (uint64_t)atoi((char *)cur_page) != longkeyToKey(local_keys[i]) ) {
+			printf("[ FAIL ] key %ld (decimal) inserted, but page %s [buf_id:%d, qid:%d, mid:%d]\n", longkeyToKey(local_keys[i]), (char *)cur_page, i, qid, mid);
+		}
+#endif
+	}
+
 
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
@@ -264,7 +265,6 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 			return;
 		}
 	}
-#endif
 
 	uint64_t local_page_offset = page_offset.fetch_add(BATCH_SIZE, std::memory_order_relaxed);
 	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + (PAGE_SIZE) * local_page_offset);
@@ -694,7 +694,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 		}
 		else if ( (int)wc.opcode == IBV_WC_RECV ){
 			if ( wc.wr_id != 0 ) {
-				putcnt++;
+				putcnt = putcnt + BATCH_SIZE;
 				int qid, mid, type, tx_state, num;
 
 				bit_unmask(ntohl(wc.imm_data), &num, &mid, &type, &tx_state, &qid);
@@ -901,7 +901,7 @@ int on_connection(struct queue *q)
 		struct memregion servermr = {};
 
 		printf("[ INFO ] connected. sending memory region info.\n");
-		printf("[ INFO ] *** Server MR key=%u base vaddr=%lx size=%d (MB)***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
+		printf("[ INFO ] *** Server MR key=%u base vaddr=%lx size=%lu (MB)***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
 
 		servermr.baseaddr = (uint64_t) ctrl->local_mm;
 		servermr.key  = ctrl->mr_buffer->rkey;
@@ -978,9 +978,7 @@ void die(const char *reason)
 
 int alloc_control()
 {
-	NUMA_KV *kv = new NUMA_KV(initialTableSize/Segment::kNumSlot, 0, 0);
-	dprintf("[  OK  ] KVStore Initialized\n");
-
+	NUMA_KV *kv = new NUMA_KV(initialTableSize/Segment::kNumSlot);
 	gctrl = (struct ctrl **)malloc(sizeof(struct ctrl *) * NUM_CLIENT);
 	for ( unsigned int c = 0 ; c < NUM_CLIENT ; ++c) {
 		gctrl[c] = (struct ctrl *) malloc(sizeof(struct ctrl));
@@ -996,8 +994,8 @@ int alloc_control()
 			gctrl[c]->queues[i].state = queue::INIT;
 		}
 		gctrl[c]->kv = kv;
+		dprintf("[  OK  ] Global controler & KVStore Initialized for client %d\n", c);
 	}
-
 
 	return 0;
 }
