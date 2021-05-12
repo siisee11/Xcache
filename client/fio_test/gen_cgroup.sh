@@ -18,7 +18,6 @@ elif [ "$1" == "8" ]; then
 	
 else
 	echo 1073741824 > /dev/cgroup/memory/test_process/memory.limit_in_bytes    # 1GB
-
 fi
 
 #echo 536870912 > /dev/cgroup/memory/test_process/memory.limit_in_bytes    # 0.5GB

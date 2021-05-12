@@ -12,7 +12,7 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 8
+#define THREAD_NUM 4
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
 #define NUMPAGES 1000000
@@ -33,7 +33,7 @@
 DEFINE_HASHTABLE(hash_head, BITS);
 #endif
 
-//#define KTIME_CHECK 1
+#define KTIME_CHECK 1
 
 struct page*** vpages;
 atomic_t failedSearch;
@@ -96,6 +96,9 @@ int rdpma_write_message_test(void* arg){
 	long longkey;
 	int failed = 0;
     struct ht_data *cur, *tmp;
+#ifdef KTIME_CHECK
+	ktime_t start, elapsed;
+#endif
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
@@ -104,7 +107,7 @@ int rdpma_write_message_test(void* arg){
 #ifdef KTIME_CHECK
 		fperf_start("rdpma_put");
 #endif
-
+//		start = ktime_get();
 
 #ifdef ONESIDED
 		tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
@@ -120,10 +123,13 @@ int rdpma_write_message_test(void* arg){
 		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE);
 #endif /* ONESIDED */
 
+//		elapsed = ktime_to_us(ktime_sub(ktime_get(), start));
+//		pr_info("%d page %lld usec \n", i, elapsed);
 
 #ifdef KTIME_CHECK
 		fperf_end("rdpma_put");
 #endif
+
 		if (ret != 0)
 			failed++;
 	}

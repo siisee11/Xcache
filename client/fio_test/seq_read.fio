@@ -2,14 +2,15 @@
 bs=128k
 ioengine=libaio
 iodepth=16
-size=512m
+size=512M
 direct=0
-time_based=0
+time_based=1
+runtime=30s
 directory=/fio/1GBx8
 startdelay=2
 group_reporting=1
-invalidate=0
+invalidate=1
 
 [seq_read]
-numjobs=8
+numjobs=$ncpus
 rw=read

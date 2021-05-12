@@ -12,7 +12,7 @@
 #include <linux/spinlock.h>
 
 #define NUM_LOCKS 			(10)
-#define BATCH_SIZE 			(1)
+#define BATCH_SIZE 			(4)
 
 #define NUM_QUEUES 			(8) 			/* 4 CPU * 2 */
 #define MAX_BATCH 			(1) 			/* 16 get fault */
