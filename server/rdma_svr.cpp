@@ -44,6 +44,8 @@ static unsigned int queue_ctr = 0;
 static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
+uint64_t global_mr = 0;
+struct ibv_mr *global_mr_buffer = NULL;
 
 std::atomic<uint64_t> page_offset(0);
 
@@ -148,13 +150,9 @@ int post_recv(int client_id, int queue_id){
 	memset(&wr, 0, sizeof(struct ibv_recv_wr));
 	memset(&sge, 0, sizeof(struct ibv_sge));
 
-	sge.addr = 0;
-	sge.length = 0;
-	sge.lkey = gctrl[client_id]->mr_buffer->lkey;
-
 	wr.wr_id = 0;
 	wr.sg_list = &sge;
-	wr.num_sge = 1;
+	wr.num_sge = 0;
 	wr.next = NULL;
 
 #ifdef SRQ
@@ -177,15 +175,16 @@ int post_recv_with_addr(uint64_t addr, int client_id, int queue_id){
 	sge[0].length = (PAGE_SIZE) * BATCH_SIZE;
 	sge[0].lkey = gctrl[client_id]->mr_buffer->lkey;
 
-#if 1
+#if 0
 	sge[1].addr = (uint64_t)GET_LOCAL_META_REGION(gctrl[client_id]->local_mm, queue_id, 0);
 	sge[1].length = sizeof(uint64_t) * BATCH_SIZE;
-	sge[1].lkey = gctrl[client_id]->mr_buffer->lkey;
+//	sge[1].lkey = gctrl[client_id]->mr_buffer->lkey;
+	sge[1].lkey = global_mr_buffer->lkey;
 #endif
 
 	wr.wr_id = addr;
 	wr.sg_list = &sge[0];
-	wr.num_sge = 2;
+	wr.num_sge = 1;
 	wr.next = NULL;
 
 #ifdef SRQ
@@ -210,11 +209,6 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	for ( unsigned int i = 0 ; i < BATCH_SIZE ; i++ ) 
 		local_keys[i] = keys[i];
 
-
-	sge.addr = 0;
-	sge.length = 0;
-	sge.lkey = gctrl[cid]->mr_buffer->lkey;
-
 	wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM; /* IBV_WR_SEND_WITH_IMM same */
 	wr.sg_list = &sge;
 	wr.num_sge = 0;
@@ -238,7 +232,7 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 #endif
 		dprintf("[ INFO ] MSG_WRITE page %lx, key %ld (decimal) Inserted\n", cur_page, longkeyToKey(local_keys[i]));
 		dprintf("[ INFO ] page %s\n", (char *)cur_page);
-#if 1
+#if 0
 		if ( (uint64_t)atoi((char *)cur_page) != longkeyToKey(local_keys[i]) ) {
 			printf("[ FAIL ] key %ld (decimal) inserted, but page %s [buf_id:%d, qid:%d, mid:%d]\n", longkeyToKey(local_keys[i]), (char *)cur_page, i, qid, mid);
 		}
@@ -267,7 +261,7 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 	}
 
 	uint64_t local_page_offset = page_offset.fetch_add(BATCH_SIZE, std::memory_order_relaxed);
-	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + (PAGE_SIZE) * local_page_offset);
+	void *save_page = (void *)(GET_FREE_PAGE_REGION(global_mr) + (PAGE_SIZE) * local_page_offset);
 	post_recv_with_addr((uint64_t)save_page, cid, qid);
 
 #if defined(TIME_CHECK)
@@ -292,7 +286,7 @@ static void process_write(struct queue *q, int cid, int qid, int mid){
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + PAGE_SIZE * page_offset++);
+	void *save_page = (void *)(GET_FREE_PAGE_REGION(global_mr) + PAGE_SIZE * page_offset++);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -468,7 +462,7 @@ static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-	void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[cid]->local_mm) + PAGE_SIZE * page_offset++);
+	void *save_page = (void *)(GET_FREE_PAGE_REGION(global_mr) + PAGE_SIZE * page_offset++);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_malloc_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -722,6 +716,7 @@ static device *get_device(struct queue *q)
 {
 	struct device *dev = NULL;
 
+	// ctrl에 dev가 등록되어 있지 않다면
 	if (!q->ctrl->dev) {
 		dev = (struct device *) malloc(sizeof(*dev));
 		TEST_Z(dev);
@@ -751,17 +746,40 @@ static device *get_device(struct queue *q)
 					BUFFER_SIZE,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 #else
-		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE + BUFFER_SIZE);
-		TEST_Z(ctrl->local_mm);
+		// global_mr 은 free page들을 관리하는 공간 (client 끼리 공유됨)
+		if (global_mr == 0) {
+			// Shared MR region for every client.
+			global_mr = (uint64_t)malloc(BUFFER_SIZE +  NUM_CLIENT * LOCAL_META_REGION_SIZE);
+			TEST_Z(global_mr);
+
+			TEST_Z(global_mr_buffer = ibv_reg_mr(
+						dev->pd,
+						(void *)global_mr,
+						BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE,
+						IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+			dprintf("[ INFO ] register shared memory region of %zu MB\n", (BUFFER_SIZE)/1024/1024);
+			printf("[ INFO ] registered shared memory region key=%u base vaddr=%lx\n", global_mr_buffer->rkey, global_mr);
+		}
+
+//		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
+//		TEST_Z(ctrl->local_mm);
+		ctrl->local_mm = global_mr + BUFFER_SIZE + LOCAL_META_REGION_SIZE * ctrl->cid;
 
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
 					dev->pd,
-					(void *)ctrl->local_mm,
-					LOCAL_META_REGION_SIZE + BUFFER_SIZE,
+					(void *)global_mr,
+					BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+		printf("[ INFO ] registered perclient memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
+
+		/*
+		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
+					dev->pd,
+					(void *)ctrl->local_mm,
+					LOCAL_META_REGION_SIZE,
+					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+		*/
 #endif
-		dprintf("[ INFO ] registered memory region of %zu MB\n", (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
-		dprintf("[ INFO ] registered memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
 		printf("[  OK  ] MEMORY MODE DRAM MR initialized\n");
 		q->ctrl->dev = dev;
 	}
@@ -774,7 +792,9 @@ static void destroy_device(struct ctrl *ctrl)
 	TEST_Z(ctrl->dev);
 
 	ibv_dereg_mr(ctrl->mr_buffer);
-	free((void*)ctrl->local_mm);
+	ibv_dereg_mr(global_mr_buffer);
+	free((void*)global_mr);
+//	free((void*)ctrl->local_mm);
 	ibv_dealloc_pd(ctrl->dev->pd);
 	free(ctrl->dev);
 	ctrl->dev = NULL;
@@ -901,11 +921,11 @@ int on_connection(struct queue *q)
 		struct memregion servermr = {};
 
 		printf("[ INFO ] connected. sending memory region info.\n");
-		printf("[ INFO ] *** Server MR key=%u base vaddr=%lx size=%lu (MB)***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, (LOCAL_META_REGION_SIZE + BUFFER_SIZE)/1024/1024);
+//		printf("[ INFO ] *** Server per client MR key=%u base vaddr=%lx size=%lu (KB)***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, (LOCAL_META_REGION_SIZE)/1024);
 
 		servermr.baseaddr = (uint64_t) ctrl->local_mm;
 		servermr.key  = ctrl->mr_buffer->rkey;
-		servermr.mr_size  = LOCAL_META_REGION_SIZE + BUFFER_SIZE;
+		servermr.mr_size  = BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE;
 
 		wr.opcode = IBV_WR_SEND;
 		wr.sg_list = &sge;
@@ -1117,7 +1137,7 @@ int main(int argc, char **argv)
 				} else {
 					/* WRITE QUEUE */
 					uint64_t local_page_offset = page_offset.fetch_add(BATCH_SIZE, std::memory_order_relaxed);
-					void *save_page = (void *)(GET_FREE_PAGE_REGION(gctrl[c]->local_mm) + (PAGE_SIZE) * local_page_offset); 
+					void *save_page = (void *)(GET_FREE_PAGE_REGION(global_mr) + (PAGE_SIZE) * local_page_offset); 
 					post_recv_with_addr((uint64_t) save_page, c, i);
 				}
 #else
@@ -1125,7 +1145,7 @@ int main(int argc, char **argv)
 #endif
 			}
 		}
-		printf("[ INFO ] queue connection estabilished for client #%u.\n", c);
+		printf("[ INFO ] queue connection established for client #%u.\n", c);
 
 		/* servermr post send cq need polling */
 		struct ibv_wc wc;
