@@ -10,15 +10,12 @@ class KVStore {
   public:
     KVStore(void) = default;
     ~KVStore(void) = default;
-    virtual void Insert(Key_t&, Value_t, int, int) = 0;
+    virtual void Insert(Key_t&, Value_t) = 0;
 	virtual void InsertExtent(Key_t&, Value_t, uint64_t) = 0;
     virtual bool Delete(Key_t&) = 0;
-    virtual void Get(Key_t&, int, int) = 0;
-    virtual Value_t Get(Key_t&, int) = 0;
+    virtual Value_t Get(Key_t&) = 0;
 	virtual Value_t GetExtent(Key_t&) = 0;
-	virtual int GetNodeID(Key_t&) = 0;
 	virtual Value_t FindAnyway(Key_t&) = 0;
-	virtual bool WaitComplete(void) = 0;
 	virtual bool Recovery(void) = 0;
     virtual double Utilization(void) = 0;
     virtual size_t Capacity(void) = 0;

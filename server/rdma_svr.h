@@ -9,7 +9,7 @@ POBJ_LAYOUT_TOID(PM_MR, void);
 POBJ_LAYOUT_END(PM_MR);
 #endif
 
-#include "NuMA_KV.h"
+#include "KV.h"
 
 #define PAGE_SIZE 	4096
 #define BATCH_SIZE 	4
@@ -100,7 +100,7 @@ struct ctrl {
 	struct memregion clientmr;
 	struct memregion servermr;
 
-	NUMA_KV* kv;
+	KVStore* kv;
 
 	struct ibv_comp_channel *comp_channel;
 };

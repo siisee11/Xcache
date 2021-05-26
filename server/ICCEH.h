@@ -6,19 +6,24 @@
 #include "util/timer.h"
 #include "util/pair.h"
 
-class IHash {
+class ICCEH {
   public:
-    IHash(void) = default;
-    ~IHash(void) = default;
+    ICCEH(void) = default;
+    ~ICCEH(void) = default;
+//    virtual bool InsertOnly(Key_t&, Value_t) = 0;
+	virtual int GetNodeID(Key_t&) = 0;
+	virtual void Insert_extent(Key_t, Value_t, uint64_t) = 0;
     virtual void Insert(Key_t&, Value_t) = 0;
-	virtual void Insert_extent(Key_t, uint64_t, uint64_t, Value_t) = 0;
     virtual bool Delete(Key_t&) = 0;
     virtual Value_t Get(Key_t&) = 0;
-	virtual Value_t Get_extent(Key_t&, uint64_t) = 0;
+	virtual Value_t Get_extent(Key_t&) = 0;
     virtual Value_t FindAnyway(Key_t&) = 0;
     virtual double Utilization(void) = 0;
     virtual size_t Capacity(void) = 0;
 	virtual bool Recovery(void) = 0;
+	virtual std::vector<unsigned> Freqs(void) = 0;
+	virtual	std::vector<size_t> SegmentLoads(void) = 0;
+	virtual	std::vector<double> Metrics(void) = 0;
 };
 
 

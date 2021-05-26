@@ -13,13 +13,11 @@
 #include <condition_variable>
 #include <numa.h>
 
-#include "ICCEH.h"
-#include "Ikvstore.h"
-#include "CCEH_hybrid.h"
+#include "IHash.h"
+#include "IKV.h"
 #include "circular_queue.h"
 #include "util/atomic.h"
-
-#define kNumNodes 2
+#include "counting_bloom_filter.h"
 
 #define MSG_EMPTY 0
 #define MSG_INSERT 1
@@ -27,22 +25,10 @@
 
 using namespace std;
 
-struct work_request
-{
-	uint16_t msg_type;
-	Key_t key;
-	Value_t value;
-	int unique_id;
-#if KV_DEBUG
-	struct timespec time; 
-#endif
-};
-
 struct Extent{
 	uint64_t _key;
 	uint64_t _len;
 	Value_t _value;
-
 
 	Extent(void)
 	{  
@@ -59,16 +45,15 @@ struct Extent{
 	}
 };
 
-class NUMA_KV : public KVStore {
+class KV : public KVStore {
 	public:
-		NUMA_KV(void);
-		NUMA_KV(size_t);
-		~NUMA_KV(void);
-		void Insert(Key_t&, Value_t, int, int);
+		KV(void);
+		KV(size_t);
+		~KV(void);
+		void Insert(Key_t&, Value_t);
 		void InsertExtent(Key_t&, Value_t, uint64_t);
 		bool Delete(Key_t&);
-		void Get(Key_t&, int, int);
-		Value_t Get(Key_t&, int);
+		Value_t Get(Key_t&);
 		Value_t GetExtent(Key_t&);
 		int GetNodeID(Key_t&);
 		Value_t FindAnyway(Key_t&);
@@ -85,19 +70,19 @@ class NUMA_KV : public KVStore {
 		}
 
 	private:
-		ICCEH* cceh;
+		IHash* hash;
+		CountingBloomFilter<Key_t>* bf;
 		void* global_chunk = NULL;
-		queue_t **perNodeQueue = NULL;
-		queue_t **completionQueue = NULL;
 		vector<thread> receivers;
 		vector<thread> cq_pollers;
 		vector<thread> numakvThreads;
 		atomic<int> nr_completed = 0;
 		int nr_data;
+		std::mutex m;
 #ifdef KV_DEBUG
 		uint64_t insertTime = 0;
 		uint64_t getTime = 0;
 #endif
 };
 
-#endif  // NUMA_KV_H_
+#endif  // KV_H_

@@ -8,7 +8,7 @@
 #include <iostream>
 
 #include "util/pair.h"
-#include "ICCEH.h"
+#include "IHash.h"
 #include "variables.h"
 
 constexpr size_t kSegmentBits = 8;
@@ -17,12 +17,6 @@ constexpr size_t kShift = kSegmentBits;
 constexpr size_t kSegmentSize = (1 << kSegmentBits) * 16 * 4;
 constexpr size_t kNumPairPerCacheLine = 4;
 constexpr size_t kNumCacheLine = 8;
-
-struct Metric {
-	unsigned atime;
-	double crf; /* Combined Recency and Frequency */
-};
-
 
 struct Segment {
   static const size_t kNumSlot = kSegmentSize/sizeof(Pair);
@@ -145,8 +139,6 @@ struct Directory {
       }
   }
 
-
-
   Directory(void) {
     depth = kDefaultDepth;
     capacity = pow(2, depth);
@@ -169,23 +161,23 @@ struct Directory {
   void LSBUpdate(int, int, int, int, Segment**);
 };
 
-class CCEH : public ICCEH {
+class CCEH : public IHash {
   public:
     CCEH(void);
     CCEH(size_t);
     ~CCEH(void);
 
-	int GetNodeID(Key_t&);
 	void Insert(Key_t&, Value_t);
-	void Insert_extent(Key_t, Value_t, uint64_t);
     bool InsertOnly(Key_t&, Value_t);
     bool Delete(Key_t&);
     Value_t Get(Key_t&);
-	Value_t Get_extent(Key_t&);
-    Value_t FindAnyway(Key_t&);
-
     double Utilization(void);
     size_t Capacity(void);
+
+	void Insert_extent(Key_t, uint64_t, uint64_t, Value_t);
+	Value_t Get_extent(Key_t&, uint64_t);
+    Value_t FindAnyway(Key_t&);
+
     bool Recovery(void);
 
 	std::vector<size_t> SegmentLoads(void);
@@ -200,10 +192,6 @@ class CCEH : public ICCEH {
 
   private:
     Directory* dir;
-	size_t segments_in_node[NUM_NUMA];
-	unsigned freq[NUM_NUMA];
-	unsigned gtime;
-	struct Metric lrfu[NUM_NUMA];
 };
 
 #endif  // EXTENDIBLE_PTR_H_

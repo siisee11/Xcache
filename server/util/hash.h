@@ -4,13 +4,13 @@
 #include <functional>
 #include <stddef.h>
 
-inline size_t standard(const void* _ptr, size_t _len,
+static inline size_t standard(const void* _ptr, size_t _len,
     size_t _seed=static_cast<size_t>(0xc70f6907UL)){
   return std::_Hash_bytes(_ptr, _len, _seed);
 }
 
 // JENKINS HASH FUNCTION
-inline size_t jenkins(const void* _ptr, size_t _len, size_t _seed=0xc70f6907UL){
+static inline size_t jenkins(const void* _ptr, size_t _len, size_t _seed=0xc70f6907UL){
   size_t i = 0;
   size_t hash = 0;
   const char* key = static_cast<const char*>(_ptr);
@@ -39,7 +39,7 @@ inline size_t jenkins(const void* _ptr, size_t _len, size_t _seed=0xc70f6907UL){
 // 1. It will not work incrementally.
 // 2. It will not produce the same results on little-endian and big-endian
 //    machines.
-inline size_t murmur2 ( const void * key, size_t len, size_t seed=0xc70f6907UL)
+static inline size_t murmur2 ( const void * key, size_t len, size_t seed=0xc70f6907UL)
 {
 	// 'm' and 'r' are mixing constants generated offline.
 	// They're not really 'magic', they just happen to work well.
@@ -113,7 +113,7 @@ typedef struct U32_INT
     uint32_t v;
 } U32_INT;
 
-uint64_t hash_read64_align(const void *ptr, uint32_t align)
+static uint64_t hash_read64_align(const void *ptr, uint32_t align)
 {
     if (align == 0)
     {
@@ -122,7 +122,7 @@ uint64_t hash_read64_align(const void *ptr, uint32_t align)
     return *(uint64_t *)ptr;
 }
 
-uint32_t hash_read32_align(const void *ptr, uint32_t align)
+static uint32_t hash_read32_align(const void *ptr, uint32_t align)
 {
     if (align == 0)
     {
@@ -131,7 +131,7 @@ uint32_t hash_read32_align(const void *ptr, uint32_t align)
     return *(uint32_t *)ptr;
 }
 
-uint64_t hash_compute(const void *input, uint64_t length, uint64_t seed, uint32_t align)
+static uint64_t hash_compute(const void *input, uint64_t length, uint64_t seed, uint32_t align)
 {
     const uint8_t *p = (const uint8_t *)input;
     const uint8_t *end = p + length;
@@ -232,7 +232,7 @@ uint64_t hash_compute(const void *input, uint64_t length, uint64_t seed, uint32_
     return hash;
 }
 
-uint64_t xxhash(const void *data, size_t length, size_t seed)
+static uint64_t xxhash(const void *data, size_t length, size_t seed)
 {
     if ((((uint64_t)data) & 7) == 0)
     {

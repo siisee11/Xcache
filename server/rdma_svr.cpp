@@ -33,6 +33,7 @@ size_t numNetworkThreads = 0;
 size_t numPollThreads = 0;
 bool numa_on = false;
 bool verbose_flag = false;
+bool bf_flag = false;
 bool human = false;
 struct bitmask *netcpubuf;
 struct bitmask *kvcpubuf;
@@ -225,7 +226,7 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 #if defined(TIME_CHECK)
 		clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-		gctrl[cid]->kv->Insert(local_keys[i], (Value_t)cur_page, 0, 0); 
+		gctrl[cid]->kv->Insert(local_keys[i], (Value_t)cur_page); 
 #if defined(TIME_CHECK)
 		clock_gettime(CLOCK_MONOTONIC, &end);
 		rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -297,7 +298,7 @@ static void process_write(struct queue *q, int cid, int qid, int mid){
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	rdpma_handle_write_memcpy_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 #endif
-	gctrl[cid]->kv->Insert(local_key, (Value_t)save_page, 0, 0);
+	gctrl[cid]->kv->Insert(local_key, (Value_t)save_page);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -371,7 +372,7 @@ static void process_read(struct queue *q, int cid, int qid, int mid){
 	void* value;
 	bool abort = false;
 
-	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key, 0); 
+	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key); 
 
 	if(!value){
 		dprintf("Value for key[%lx] not found\n", key);
@@ -507,7 +508,7 @@ static void process_write_odp(struct queue *q, int cid, int qid, int mid){
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-	gctrl[cid]->kv->Insert(local_key, (Value_t)save_page, 0, 0);
+	gctrl[cid]->kv->Insert(local_key, (Value_t)save_page);
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
 	rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -560,7 +561,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 	void* value;
 	bool abort = false;
 
-	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key, 0); 
+	value = (void *)gctrl[cid]->kv->Get((Key_t&)local_key); 
 
 	if(!value){
 		dprintf("Value for key[%ld] not found\n", longkeyToKey(local_key));
@@ -761,8 +762,6 @@ static device *get_device(struct queue *q)
 			printf("[ INFO ] registered shared memory region key=%u base vaddr=%lx\n", global_mr_buffer->rkey, global_mr);
 		}
 
-//		ctrl->local_mm = (uint64_t)malloc(LOCAL_META_REGION_SIZE);
-//		TEST_Z(ctrl->local_mm);
 		ctrl->local_mm = global_mr + BUFFER_SIZE + LOCAL_META_REGION_SIZE * ctrl->cid;
 
 		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
@@ -772,13 +771,6 @@ static device *get_device(struct queue *q)
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 		printf("[ INFO ] registered perclient memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
 
-		/*
-		TEST_Z(ctrl->mr_buffer = ibv_reg_mr(
-					dev->pd,
-					(void *)ctrl->local_mm,
-					LOCAL_META_REGION_SIZE,
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
-		*/
 #endif
 		printf("[  OK  ] MEMORY MODE DRAM MR initialized\n");
 		q->ctrl->dev = dev;
@@ -794,7 +786,6 @@ static void destroy_device(struct ctrl *ctrl)
 	ibv_dereg_mr(ctrl->mr_buffer);
 	ibv_dereg_mr(global_mr_buffer);
 	free((void*)global_mr);
-//	free((void*)ctrl->local_mm);
 	ibv_dealloc_pd(ctrl->dev->pd);
 	free(ctrl->dev);
 	ctrl->dev = NULL;
@@ -998,7 +989,8 @@ void die(const char *reason)
 
 int alloc_control()
 {
-	NUMA_KV *kv = new NUMA_KV(initialTableSize/Segment::kNumSlot);
+	auto totalSize = 1073741824; // 10GiB
+	KVStore *kv = new KV( totalSize / 4096 );
 	gctrl = (struct ctrl **)malloc(sizeof(struct ctrl *) * NUM_CLIENT);
 	for ( unsigned int c = 0 ; c < NUM_CLIENT ; ++c) {
 		gctrl[c] = (struct ctrl *) malloc(sizeof(struct ctrl));
@@ -1030,10 +1022,11 @@ int main(int argc, char **argv)
 	struct rdma_cm_id *listener = NULL;
 	uint16_t port = 0;
 
-	const char *short_options = "vs:t:i:n:d:z:hK:P:W:";
+	const char *short_options = "vbs:t:i:n:d:z:hK:P:W:";
 	static struct option long_options[] =
 	{
 		{"verbose", 0, NULL, 'v'},
+		{"bloomfilter", 0, NULL, 'b'},
 		{"tcp_port", 1, NULL, 't'},
 		{"ib_port", 1, NULL, 'i'},
 		{"tablesize", 1, NULL, 's'},
@@ -1090,6 +1083,9 @@ int main(int argc, char **argv)
 				break;
 			case 'v':
 				verbose_flag = true;
+				break;
+			case 'b':
+				bf_flag = true;
 				break;
 			default:
 				printf ("%c, <%s> is invalid\n", (char)c,optarg);
