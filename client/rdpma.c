@@ -290,45 +290,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = 0;
 	dev = q->ctrl->rdev->dev;
 
-	// Bloom filter 
-	{
-		indexes = kzalloc(NUM_HASHES, GFP_ATOMIC);
-		ret = get_req_for_buf(&req[0], dev, indexes, NUM_HASHES , DMA_TO_DEVICE);
-		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
-			bf_sge[i].addr = req[0]->dma + i;
-			bf_sge[i].length = 1;
-			bf_sge[i].lkey = q->ctrl->rdev->pd->local_dma_lkey;
-
-			bf_rdma_wr[i].wr.next    = (i == NUM_HASHES - 1) ? NULL : &(bf_rdma_wr[i+1].wr);
-			bf_rdma_wr[i].wr.sg_list = &bf_sge[i];
-			bf_rdma_wr[i].wr.num_sge = 1;
-			bf_rdma_wr[i].wr.opcode  = IB_WR_RDMA_READ;
-			bf_rdma_wr[i].wr.send_flags = (i == NUM_HASHES - 1 ) ? IB_SEND_SIGNALED : 0 || IB_SEND_INLINE;
-			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + hash_funcs[0](key, sizeof(key), i); 
-			bf_rdma_wr[i].rkey = q->ctrl->bfmr.key;
-		}
-
-		ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
-		if (unlikely(ret)) {
-			pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
-		}
-
-		BUG_ON(ret);
-		drain_queue(q);
-
-		ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, NUM_HASHES, DMA_TO_DEVICE); /* XXX Needed? reuse it */
-		kmem_cache_free(req_cache, req[0]);
-
-		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
-			pr_info("indexes = %d\n", indexes[i]);
-			if (indexes[i] == 0) {
-				pr_info("[ INFO ] Key not exist, skip get\n");
-				return -1;
-			}
-		}
-	}
-
-
 #if BATCH_SIZE >= 2
 	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
 	buf_id = atomic_fetch_add(1, &q->nr_buffered);
@@ -1000,6 +961,44 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	queue_id = rdpma_get_queue_id(cpuid, QP_READ_SYNC);
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
+
+	// Bloom filter 
+	{
+		indexes = kzalloc(NUM_HASHES, GFP_ATOMIC);
+		ret = get_req_for_buf(&req[0], dev, indexes, NUM_HASHES , DMA_TO_DEVICE);
+		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
+			bf_sge[i].addr = req[0]->dma + i;
+			bf_sge[i].length = 1;
+			bf_sge[i].lkey = q->ctrl->rdev->pd->local_dma_lkey;
+
+			bf_rdma_wr[i].wr.next    = (i == NUM_HASHES - 1) ? NULL : &(bf_rdma_wr[i+1].wr);
+			bf_rdma_wr[i].wr.sg_list = &bf_sge[i];
+			bf_rdma_wr[i].wr.num_sge = 1;
+			bf_rdma_wr[i].wr.opcode  = IB_WR_RDMA_READ;
+			bf_rdma_wr[i].wr.send_flags = (i == NUM_HASHES - 1 ) ? IB_SEND_SIGNALED : 0 || IB_SEND_INLINE;
+			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + hash_funcs[0](key, sizeof(key), i) % BF_SIZE; 
+			bf_rdma_wr[i].rkey = q->ctrl->bfmr.key;
+		}
+
+		ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
+		if (unlikely(ret)) {
+			pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
+		}
+
+		BUG_ON(ret);
+		drain_queue(q);
+
+		ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, NUM_HASHES, DMA_TO_DEVICE); /* XXX Needed? reuse it */
+		kmem_cache_free(req_cache, req[0]);
+
+		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
+			pr_info("indexes = %d\n", indexes[i]);
+			if (indexes[i] == 0) {
+				pr_info("[ INFO ] Key not exist, skip get\n");
+				return -1;
+			}
+		}
+	}
 
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
