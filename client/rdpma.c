@@ -5,6 +5,7 @@
 #include "rdpma.h"
 #include "pmdfc.h"
 #include "timeperf.h"
+#include "hash.h"
 
 struct pmdfc_rdma_ctrl *gctrl;
 static int serverport;
@@ -266,7 +267,6 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 {
 	struct rdma_queue *q;
 	struct rdma_req *req[2];
-	struct rdma_req *bf_req[NUM_HASHES];
 	struct ib_device *dev;
 	struct ib_sge sge[2];
 	struct ib_sge bf_sge[NUM_HASHES];
@@ -276,6 +276,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	uint8_t *indexes;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
+	struct ib_rdma_wr bf_rdma_wr[NUM_HASHES] = {};
 	int queue_id, msg_id;
 	struct ib_wc wc;
 	int ne = 0;
@@ -307,7 +308,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 			bf_rdma_wr[i].rkey = q->ctrl->bfmr.key;
 		}
 
-		ret = ib_post_send(q->qp, &rdma_wr.wr, &bad_wr);
+		ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
 		if (unlikely(ret)) {
 			pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 		}
