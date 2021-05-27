@@ -30,6 +30,9 @@
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_OFFSET_FROM_BASE_TO_PAGE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 
+#define NUM_HASHES 4
+#define BF_SIZE 100000
+
 
 enum qp_type {
 	QP_READ_SYNC,
@@ -108,7 +111,7 @@ struct pmdfc_rdma_ctrl {
 	struct pmdfc_rdma_dev *rdev; // TODO: move this to queue
 	struct rdma_queue *queues;
 	struct pmdfc_rdma_memregion servermr;
-	/* XXX */
+	struct pmdfc_rdma_memregion bfmr;
 	struct pmdfc_rdma_memregion clientmr;
 
 	union {

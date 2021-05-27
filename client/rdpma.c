@@ -1763,8 +1763,6 @@ static void pmdfc_rdma_recv_remotemr_done(struct ib_cq *cq, struct ib_wc *wc)
 			DMA_FROM_DEVICE); 
 	mr_free_end = ctrl->servermr.mr_size;
 
-	pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->servermr.baseaddr,
-			ctrl->servermr.key, ctrl->servermr.mr_size/1024);
 	complete_all(&qe->done);
 }
 
@@ -1852,30 +1850,45 @@ inline static void pmdfc_rdma_wait_completion(struct ib_cq *cq,
 
 static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
 {
-	struct rdma_req *qe;
+	struct rdma_req *qe[2];
 	int ret;
 	struct ib_device *dev;
 
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 	dev = ctrl->rdev->dev;
 
-	ret = get_req_for_buf(&qe, dev, &(ctrl->servermr), sizeof(ctrl->servermr),
+	ret = get_req_for_buf(&qe[0], dev, &(ctrl->servermr), sizeof(ctrl->servermr),
 			DMA_FROM_DEVICE);
 	if (unlikely(ret))
 		goto out;
 
-	qe->cqe.done = pmdfc_rdma_recv_remotemr_done;
+	ret = get_req_for_buf(&qe[1], dev, &(ctrl->bfmr), sizeof(ctrl->bfmr),
+			DMA_FROM_DEVICE);
+	if (unlikely(ret))
+		goto out;
 
-	ret = pmdfc_rdma_post_recv(&(ctrl->queues[0]), qe, sizeof(struct pmdfc_rdma_memregion));
+	qe[0]->cqe.done = pmdfc_rdma_recv_remotemr_done;
+	qe[1]->cqe.done = pmdfc_rdma_recv_remotemr_done;
+
+	ret = pmdfc_rdma_post_recv(&(ctrl->queues[0]), qe[0], sizeof(struct pmdfc_rdma_memregion));
+	ret = pmdfc_rdma_post_recv(&(ctrl->queues[0]), qe[1], sizeof(struct pmdfc_rdma_memregion));
 
 	if (unlikely(ret))
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe, 1000);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[0], 1000);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[1], 1000);
+
+	pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->servermr.baseaddr,
+			ctrl->servermr.key, ctrl->servermr.mr_size/1024);
+	pr_info("[ INFO ] bfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->bfmr.baseaddr,
+			ctrl->bfmr.key, ctrl->bfmr.mr_size/1024);
+
 
 out_free_qe:
-	kmem_cache_free(req_cache, qe);
+	kmem_cache_free(req_cache, qe[0]);
+	kmem_cache_free(req_cache, qe[1]);
 out:
 	return ret;
 }
