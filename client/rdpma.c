@@ -269,14 +269,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	struct rdma_req *req[2];
 	struct ib_device *dev;
 	struct ib_sge sge[2];
-	struct ib_sge bf_sge[NUM_HASHES];
 	int ret, i;
 	uint32_t imm;
 	struct rdpma_metadata *meta;
-	uint8_t *indexes;
 	const struct ib_send_wr *bad_wr;
 	struct ib_rdma_wr rdma_wr[2] = {};
-	struct ib_rdma_wr bf_rdma_wr[NUM_HASHES] = {};
 	int queue_id, msg_id;
 	struct ib_wc wc;
 	int ne = 0;
@@ -943,7 +940,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	struct ib_sge sge = { };
 	struct ib_rdma_wr rdma_wr = {};
 	const struct ib_send_wr *bad_wr;
-	int msg_id;
+	int msg_id, i;
 	uint64_t imm;
 	int cpuid = smp_processor_id();
 	int queue_id;
@@ -953,6 +950,9 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	uint32_t num;
 	struct rdpma_metadata *meta;
 	struct rdma_req *req[2];
+	uint8_t *indexes;
+	struct ib_sge bf_sge[NUM_HASHES];
+	struct ib_rdma_wr bf_rdma_wr[NUM_HASHES] = {};
 
 	//VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 
@@ -976,11 +976,11 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			bf_rdma_wr[i].wr.num_sge = 1;
 			bf_rdma_wr[i].wr.opcode  = IB_WR_RDMA_READ;
 			bf_rdma_wr[i].wr.send_flags = (i == NUM_HASHES - 1 ) ? IB_SEND_SIGNALED : 0 || IB_SEND_INLINE;
-			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + hash_funcs[0](key, sizeof(key), i) % BF_SIZE; 
+			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + hash_funcs[2](&key, sizeof(key), i) % BF_SIZE; 
 			bf_rdma_wr[i].rkey = q->ctrl->bfmr.key;
 		}
 
-		ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
+		ret = ib_post_send(q->qp, &bf_rdma_wr[0].wr, &bad_wr);
 		if (unlikely(ret)) {
 			pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 		}
@@ -995,6 +995,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			pr_info("indexes = %d\n", indexes[i]);
 			if (indexes[i] == 0) {
 				pr_info("[ INFO ] Key not exist, skip get\n");
+				kfree(indexes);
 				return -1;
 			}
 		}
