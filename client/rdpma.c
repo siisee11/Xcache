@@ -951,6 +951,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	struct rdpma_metadata *meta;
 	struct rdma_req *req[2];
 	uint8_t *indexes;
+	int index;
 	struct ib_sge bf_sge[NUM_HASHES];
 	struct ib_rdma_wr bf_rdma_wr[NUM_HASHES] = {};
 
@@ -976,7 +977,9 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			bf_rdma_wr[i].wr.num_sge = 1;
 			bf_rdma_wr[i].wr.opcode  = IB_WR_RDMA_READ;
 			bf_rdma_wr[i].wr.send_flags = (i == NUM_HASHES - 1 ) ? IB_SEND_SIGNALED : 0 || IB_SEND_INLINE;
-			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + hash_funcs[2](&key, sizeof(key), i) % BF_SIZE; 
+			index = hash_funcs[1](&key, sizeof(key), i) % BF_SIZE;
+			pr_info("[ INFO ] query index %d\n", index);
+			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + index; 
 			bf_rdma_wr[i].rkey = q->ctrl->bfmr.key;
 		}
 
@@ -995,7 +998,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			pr_info("indexes = %d\n", indexes[i]);
 			if (indexes[i] == 0) {
 				pr_info("[ INFO ] Key not exist, skip get\n");
-				kfree(indexes);
+//				if (indexes) kfree(indexes); 	// kfree error why??
 				return -1;
 			}
 		}

@@ -12,10 +12,10 @@
 #include "rdpma.h"
 #include "timeperf.h"
 
-#define THREAD_NUM 4
+#define THREAD_NUM 1
 #define PAGE_ORDER 0
 #define BATCH_SIZE (1 << PAGE_ORDER)
-#define NUMPAGES 1000000
+#define NUMPAGES 8
 
 #define PUTTEST 1
 #define GETTEST 1
@@ -296,10 +296,7 @@ int main(void){
 	if (elapsed/1000/1000 != 0) {
 		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", NUMPAGES/(elapsed/1000/1000));
-	} else  {
-		pr_info("[ PASS ] Throughput: %lld (KB/msec)\n", (TOTAL_CAPACITY/1024)/(elapsed/1000));
-		pr_info("[ PASS ] IOPS: %lld (Operation/msec)\n", NUMPAGES/(elapsed/1000));
-	}
+	} 
 	
 	ssleep(1);
 #ifdef GETTEST
@@ -338,8 +335,7 @@ int main(void){
 	if (elapsed/1000/1000 != 0) {
 		pr_info("[ PASS ] Throughput: %lld (MB/sec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000/1000));
 		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", NUMPAGES/(elapsed/1000/1000));
-	} else 
-		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
+	}
 
 #endif
 #if 0
