@@ -14,15 +14,15 @@
 
 #define THREAD_NUM 4
 #define PAGE_ORDER 0
-#define BATCH_SIZE (1 << PAGE_ORDER)
+#define ORDER_SIZE (1 << PAGE_ORDER)
 #define NUMPAGES 1000000
 
 #define PUTTEST 1
 #define GETTEST 1
 
-#define TOTAL_CAPACITY (PAGE_SIZE * BATCH_SIZE * NUMPAGES)
+#define TOTAL_CAPACITY (PAGE_SIZE * ORDER_SIZE * NUMPAGES)
 
-#define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/BATCH_SIZE/THREAD_NUM)
+#define ITERATIONS (TOTAL_CAPACITY/PAGE_SIZE/ORDER_SIZE/THREAD_NUM)
 
 //#define ONESIDED 1
 
@@ -115,12 +115,12 @@ int rdpma_write_message_test(void* arg){
 		tmp->roffset = atomic_long_fetch_add_unless(&mr_free_start, PAGE_SIZE, mr_free_end);
 		hash_add(hash_head, &tmp->h_node, tmp->longkey);
 
-		ret = rdpma_put_onesided(vpages[tid][i], tmp->roffset, BATCH_SIZE);
+		ret = rdpma_put_onesided(vpages[tid][i], tmp->roffset, ORDER_SIZE);
 
 #else  /* ONESIDED */
 		if ( simple_strtol(page_address(vpages[tid][i]), NULL, 10) != longkey >> 32)
 			pr_info("wrong parameter for rdpma_put\n");
-		ret = rdpma_put(vpages[tid][i], longkey, BATCH_SIZE);
+		ret = rdpma_put(vpages[tid][i], longkey, ORDER_SIZE);
 #endif /* ONESIDED */
 
 //		elapsed = ktime_to_us(ktime_sub(ktime_get(), start));
@@ -163,18 +163,18 @@ int rdpma_single_read_message_test(void* arg){
 	long longkey;
 
 	test_page = alloc_pages(GFP_KERNEL, PAGE_ORDER);
-	test_string = kzalloc(PAGE_SIZE * BATCH_SIZE, GFP_KERNEL);
+	test_string = kzalloc(PAGE_SIZE * ORDER_SIZE, GFP_KERNEL);
 	strcpy(test_string, "hi, dicl");
 
 	longkey = get_longkey(key, index);
 	
-	ret = rdpma_get(test_page, longkey, BATCH_SIZE);
+	ret = rdpma_get(test_page, longkey, ORDER_SIZE);
 
 	if (ret == -1){
 		printk("[ FAIL ] Searching for key (ret -1)\n");
 		result++;
 	}
-	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE * BATCH_SIZE) != 0){
+	else if(memcmp(page_address(test_page), test_string, PAGE_SIZE * ORDER_SIZE) != 0){
 //		printk("[ FAIL ] Searching for key\n");
 //		printk("[ FAIL ] returned: %s\n", (char *)page_address(test_page));
 		result++;
@@ -218,9 +218,9 @@ int rdpma_read_message_test(void* arg){
 		}
 
 exists:
-		ret = rdpma_get_onesided(return_page[tid], roffset, BATCH_SIZE);
+		ret = rdpma_get_onesided(return_page[tid], roffset, ORDER_SIZE);
 #else
-		ret = rdpma_get(return_page[tid], longkey, BATCH_SIZE);
+		ret = rdpma_get(return_page[tid], longkey, ORDER_SIZE);
 #endif
 
 #ifdef KTIME_CHECK
@@ -228,7 +228,7 @@ exists:
 #endif
 
 		if ( ret == 0 ) {
-			if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * BATCH_SIZE) != 0){
+			if(memcmp(page_address(return_page[tid]), page_address(vpages[tid][i]), PAGE_SIZE * ORDER_SIZE) != 0){
 				printk("failed Searching for key %x\nreturn: %s\nexpect: %s", key, (char *)page_address(return_page[tid]), (char *)page_address(vpages[tid][i]));
 				nfailed++;
 			}
