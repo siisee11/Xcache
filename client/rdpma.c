@@ -963,6 +963,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
 
+#ifdef BLOOMFILTER
 	// Bloom filter 
 	{
 		indexes = kzalloc(NUM_HASHES, GFP_ATOMIC);
@@ -978,7 +979,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			bf_rdma_wr[i].wr.opcode  = IB_WR_RDMA_READ;
 			bf_rdma_wr[i].wr.send_flags = (i == NUM_HASHES - 1 ) ? IB_SEND_SIGNALED : 0 || IB_SEND_INLINE;
 			index = hash_funcs[1](&key, sizeof(key), i) % BF_SIZE;
-			pr_info("[ INFO ] query index %d\n", index);
+//			pr_info("[ INFO ] query index %d\n", index);
 			bf_rdma_wr[i].remote_addr = q->ctrl->bfmr.baseaddr + index; 
 			bf_rdma_wr[i].rkey = q->ctrl->bfmr.key;
 		}
@@ -987,15 +988,28 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 		if (unlikely(ret)) {
 			pr_err("[ FAIL ] ib_post_send failed: %d\n", ret);
 		}
-
 		BUG_ON(ret);
-		drain_queue(q);
+
+		/* Poll send completion queue first */
+		do{
+			ne = ib_poll_cq(q->qp->send_cq, 1, &wc);
+			if(ne < 0){
+				printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
+				ret = -1;
+				goto out;
+			}
+		}while(ne < 1);
+
+		if(wc.status != IB_WC_SUCCESS){
+			printk(KERN_ALERT "[%s]: sending request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
+			ret = -1;
+			goto out;
+		}
 
 		ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, NUM_HASHES, DMA_TO_DEVICE); /* XXX Needed? reuse it */
 		kmem_cache_free(req_cache, req[0]);
 
 		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
-			pr_info("indexes = %d\n", indexes[i]);
 			if (indexes[i] == 0) {
 				pr_info("[ INFO ] Key not exist, skip get\n");
 //				if (indexes) kfree(indexes); 	// kfree error why??
@@ -1003,6 +1017,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			}
 		}
 	}
+#endif
 
 	/* setup imm data */
 	imm = htonl(bit_mask(batch, msg_id, MSG_READ, TX_READ_BEGIN, queue_id));
