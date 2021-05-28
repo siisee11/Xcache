@@ -33,6 +33,9 @@ POBJ_LAYOUT_END(PM_MR);
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_FREE_PAGE_REGION(addr)  (addr + LOCAL_META_REGION_SIZE)
 
+#define NUM_HASHES 2
+#define BF_SIZE 100000
+
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
@@ -91,6 +94,7 @@ struct memregion {
 struct ctrl {
 	struct queue *queues;
 	struct ibv_mr *mr_buffer;
+	struct ibv_mr *bf_mr_buffer;
 	uint64_t cid;
 	void *buffer;
 	struct device *dev;
@@ -99,8 +103,10 @@ struct ctrl {
 	uint64_t local_mm;
 	struct memregion clientmr;
 	struct memregion servermr;
+	struct memregion bfmr;
 
 	KVStore* kv;
+	CountingBloomFilter<Key_t>* bf;
 
 	struct ibv_comp_channel *comp_channel;
 };

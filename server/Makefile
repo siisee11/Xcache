@@ -48,7 +48,7 @@ Cuckoo: KV.cpp src/cuckoo_hash.cpp src/cuckoo_hash.h
 	$(CXX) $(CFLAGS) -c src/cuckoo_hash.cpp -o src/cuckoo_hash.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -c -o KV_cuckoo.o KV.cpp $(INCLUDES) $(LIBS) -DCUCKOO
 	$(CXX) $(CFLAGS) -o kv_cuckoo test_KV.cpp src/cuckoo_hash.o KV_cuckoo.o $(LIBS) $(INCLUDES)
-	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp lfcq.o src/cuckoo_hash.o KV_cuckoo.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
+	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/cuckoo_hash.o KV_cuckoo.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 LinearProbing: src/linear_probing.cpp src/linear_probing.h
 	$(CXX) $(CFLAGS) -c src/linear_probing.cpp -o src/linear_probing.o $(LIBS) $(INCLUDES)

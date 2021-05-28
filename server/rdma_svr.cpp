@@ -46,6 +46,7 @@ static unsigned int client_ctr = 0;
 unsigned int nr_cpus;
 std::atomic<bool> done(false);
 uint64_t global_mr = 0;
+CountingBloomFilter<Key_t>* global_bf = NULL;
 struct ibv_mr *global_mr_buffer = NULL;
 
 std::atomic<uint64_t> page_offset(0);
@@ -752,7 +753,7 @@ static device *get_device(struct queue *q)
 			// Shared MR region for every client.
 			global_mr = (uint64_t)malloc(BUFFER_SIZE +  NUM_CLIENT * LOCAL_META_REGION_SIZE);
 			TEST_Z(global_mr);
-
+/*
 			TEST_Z(global_mr_buffer = ibv_reg_mr(
 						dev->pd,
 						(void *)global_mr,
@@ -760,6 +761,8 @@ static device *get_device(struct queue *q)
 						IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 			dprintf("[ INFO ] register shared memory region of %zu MB\n", (BUFFER_SIZE)/1024/1024);
 			printf("[ INFO ] registered shared memory region key=%u base vaddr=%lx\n", global_mr_buffer->rkey, global_mr);
+			*/
+
 		}
 
 		ctrl->local_mm = global_mr + BUFFER_SIZE + LOCAL_META_REGION_SIZE * ctrl->cid;
@@ -770,6 +773,18 @@ static device *get_device(struct queue *q)
 					BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE,
 					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 		printf("[ INFO ] registered perclient memory region key=%u base vaddr=%lx\n", ctrl->mr_buffer->rkey, ctrl->local_mm);
+
+		if (bf_flag && global_bf) {
+			ctrl->bf = global_bf;
+			uint64_t baseaddr = ctrl->bf->GetBaseAddr();
+//			printf("[ INFO ] NUMBIT %u BA: %lx , %d\n", ctrl->bf->GetNumBits(), baseaddr, ((uint8_t *)baseaddr)[0]);
+			TEST_Z(ctrl->bf_mr_buffer = ibv_reg_mr(
+						dev->pd,
+						(void *)ctrl->bf->GetBaseAddr(),
+						ctrl->bf->GetNumBits(),
+						IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+			printf("[ INFO ] registered perclient BF memory region key=%u base vaddr=%lx\n", ctrl->bf_mr_buffer->rkey, ctrl->bf->GetBaseAddr());
+		}
 
 #endif
 		printf("[  OK  ] MEMORY MODE DRAM MR initialized\n");
@@ -904,12 +919,13 @@ int on_connection(struct queue *q)
 	TEST_Z(q->state == queue::INIT);
 
 	if (q == &ctrl->queues[0]) {
-		struct ibv_send_wr wr = {};
+		struct ibv_send_wr wr[2] = {};
 		struct ibv_recv_wr rwr = {};
 		struct ibv_send_wr *bad_wr = NULL;
 		struct ibv_recv_wr *bad_rwr = NULL;
-		struct ibv_sge sge = {};
+		struct ibv_sge sge[2] = {};
 		struct memregion servermr = {};
+		struct memregion bfmr = {};
 
 		printf("[ INFO ] connected. sending memory region info.\n");
 //		printf("[ INFO ] *** Server per client MR key=%u base vaddr=%lx size=%lu (KB)***\n", ctrl->mr_buffer->rkey, ctrl->local_mm, (LOCAL_META_REGION_SIZE)/1024);
@@ -918,24 +934,38 @@ int on_connection(struct queue *q)
 		servermr.key  = ctrl->mr_buffer->rkey;
 		servermr.mr_size  = BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE;
 
-		wr.opcode = IBV_WR_SEND;
-		wr.sg_list = &sge;
-		wr.num_sge = 1;
-		wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+		bfmr.baseaddr = ctrl->bf->GetBaseAddr();
+		bfmr.key  = ctrl->bf_mr_buffer->rkey;
+		bfmr.mr_size  = ctrl->bf->GetNumBits();
 
-		sge.addr = (uint64_t) &servermr;
-		sge.length = sizeof(servermr);
+		wr[0].next = &wr[1];
+		wr[0].opcode = IBV_WR_SEND;
+		wr[0].sg_list = &sge[0];
+		wr[0].num_sge = 1;
+		wr[0].send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
 
-		TEST_NZ(ibv_post_send(q->qp, &wr, &bad_wr));
+		wr[1].next = NULL;
+		wr[1].opcode = IBV_WR_SEND;
+		wr[1].sg_list = &sge[1];
+		wr[1].num_sge = 1;
+		wr[1].send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+
+		sge[0].addr = (uint64_t) &servermr;
+		sge[0].length = sizeof(servermr);
+
+		sge[1].addr = (uint64_t) &bfmr;
+		sge[1].length = sizeof(bfmr);
+
+		TEST_NZ(ibv_post_send(q->qp, &wr[0], &bad_wr));
 
 #ifndef ONESIDED
 		/* GET CLIENT MR REGION */
-		sge.addr = (uint64_t) &ctrl->clientmr;
-		sge.length = sizeof(struct memregion);
-		sge.lkey = ctrl->mr_buffer->lkey;
+		sge[0].addr = (uint64_t) &ctrl->clientmr;
+		sge[0].length = sizeof(struct memregion);
+		sge[0].lkey = ctrl->mr_buffer->lkey;
 
 		rwr.wr_id = 0;
-		rwr.sg_list = &sge;
+		rwr.sg_list = &sge[0];
 		rwr.num_sge = 1;
 
 #ifdef SRQ
@@ -989,8 +1019,13 @@ void die(const char *reason)
 
 int alloc_control()
 {
+	dprintf("[ INFO ] Bloom filter %s\n", bf_flag ? "enabled": "disabled");
+	if (bf_flag) {
+		global_bf = new CountingBloomFilter<Key_t>(NUM_HASHES, BF_SIZE);
+		dprintf("[  OK  ] Bloom filter(%d, %d) Initialized\n", global_bf->GetNumHashes(), global_bf->GetNumBits());
+	}
 	auto totalSize = 1073741824; // 10GiB
-	KVStore *kv = new KV( totalSize / 4096 );
+	KVStore *kv = new KV( totalSize / 4096,  global_bf);
 	gctrl = (struct ctrl **)malloc(sizeof(struct ctrl *) * NUM_CLIENT);
 	for ( unsigned int c = 0 ; c < NUM_CLIENT ; ++c) {
 		gctrl[c] = (struct ctrl *) malloc(sizeof(struct ctrl));

@@ -1,7 +1,7 @@
 #include <string>
 #include <iostream>
 
-#include "counting_bloom_filter.h"
+#include "util/counting_bloom_filter.h"
 #include "util/pair.h"
 
 int main(int argc, char *argv[]){
