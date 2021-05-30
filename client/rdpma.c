@@ -1466,9 +1466,9 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 					rdev->local_dma_bf_bits_addr, gctrl->bf->bitmap_size_in_byte, DMA_BIDIRECTIONAL);
 			return NULL;
 		}
-		q->ctrl->bfmr.key = rdev->mr->lkey;
-		q->ctrl->bfmr.baseaddr = rdev->local_dma_bf_bits_addr;
-		q->ctrl->bfmr.mr_size = gctrl->bf->bitmap_size_in_byte;
+		q->ctrl->cbfmr.key = rdev->mr->lkey;
+		q->ctrl->cbfmr.baseaddr = rdev->local_dma_bf_bits_addr;
+		q->ctrl->cbfmr.mr_size = gctrl->bf->bitmap_size_in_byte;
 #endif
 
 		q->ctrl->rdev = rdev;
@@ -2005,7 +2005,7 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 	if (unlikely(ret))
 		goto out;
 
-	ret = get_req_for_buf(&qe[1], dev, &(ctrl->bfmr), sizeof(ctrl->bfmr),
+	ret = get_req_for_buf(&qe[1], dev, &(ctrl->cbfmr), sizeof(ctrl->cbfmr),
 			DMA_TO_DEVICE);
 	if (unlikely(ret))
 		goto out;
@@ -2028,8 +2028,8 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
 			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
 
-	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->bfmr.baseaddr,
-			ctrl->bfmr.key, ctrl->bfmr.mr_size/1024);
+	pr_info("[ INFO ] cbfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->cbfmr.baseaddr,
+			ctrl->cbfmr.key, ctrl->cbfmr.mr_size/1024);
 
 out_free_qe:
 	kmem_cache_free(req_cache, qe[0]);

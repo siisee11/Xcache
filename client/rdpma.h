@@ -114,6 +114,7 @@ struct pmdfc_rdma_ctrl {
 	struct rdma_queue *queues;
 	struct pmdfc_rdma_memregion servermr;
 	struct pmdfc_rdma_memregion bfmr;
+	struct pmdfc_rdma_memregion cbfmr;
 	struct pmdfc_rdma_memregion clientmr;
 	struct bloom_filter *bf;
 
