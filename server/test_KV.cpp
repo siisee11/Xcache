@@ -175,9 +175,10 @@ int main(int argc, char* argv[]){
 
 	/* Create KV store */
 	KVStore* kv = NULL;
+	CountingBloomFilter<Key_t>* bf = new CountingBloomFilter<Key_t>(2,100000);
 
 	auto totalSize = 1073741824; // 10GiB
-	kv = new KV( totalSize / 4096 );
+	kv = new KV( totalSize / 4096, bf );
 	dprintf("[  OK  ] KVStore Initialized\n");
 
 	uint64_t* keys = (uint64_t*)malloc(sizeof(uint64_t)*numData);

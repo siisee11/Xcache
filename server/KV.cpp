@@ -54,7 +54,7 @@ static void dprintf( const char* format, ... ) {
  * @size:
  * table size: Cuckoo, path, extendible, level
  */
-KV::KV(size_t size)
+KV::KV(size_t size, CountingBloomFilter<Key_t>* _bf)
 {
 #ifdef CUCKOO 
 	hash = new CuckooHash(static_cast<size_t>(size));
@@ -70,11 +70,7 @@ KV::KV(size_t size)
 	hash = new LinearProbingHash(static_cast<size_t>(size));
 #endif
 
-	dprintf("[ INFO ] Bloom filter %s\n", bf_flag ? "enabled": "disabled");
-	if (bf_flag) {
-		bf = new CountingBloomFilter<Key_t>(2, 100000);
-		dprintf("[  OK  ] Bloom filter Initialized\n");
-	}
+	bf = _bf;
 
 #ifdef KV_DEBUG
 	insertTime = 0;
@@ -125,10 +121,7 @@ Value_t KV::Get(Key_t& key) {
 	struct timespec g_start;
 	clock_gettime(CLOCK_MONOTONIC, &g_start);
 #endif
-	Value_t ret = NONE;
-	if (bf_flag && !bf->Query(key))
-		return NONE;
-	ret = hash->Get(key);
+	Value_t ret = hash->Get(key);
 #ifdef KV_DEBUG
 	struct timespec g_end;
 	clock_gettime(CLOCK_MONOTONIC, &g_end);

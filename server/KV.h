@@ -17,7 +17,7 @@
 #include "IKV.h"
 #include "circular_queue.h"
 #include "util/atomic.h"
-#include "counting_bloom_filter.h"
+#include "util/counting_bloom_filter.h"
 
 #define MSG_EMPTY 0
 #define MSG_INSERT 1
@@ -49,6 +49,7 @@ class KV : public KVStore {
 	public:
 		KV(void);
 		KV(size_t);
+		KV(size_t, CountingBloomFilter<Key_t>*);
 		~KV(void);
 		void Insert(Key_t&, Value_t);
 		void InsertExtent(Key_t&, Value_t, uint64_t);

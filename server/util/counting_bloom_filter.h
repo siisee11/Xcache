@@ -50,19 +50,24 @@ class CountingBloomFilter {
 		 *                   storage size will differ from this.
 		 */
 		explicit
-			CountingBloomFilter(uint8_t numHashes, uint32_t numBits)
+			CountingBloomFilter(uint8_t numHashes, uint64_t numBits)
 			: m_numHashes(numHashes), m_numBits(numBits)
 			{
-				m_bitarray.reserve(numBits);
-				for(uint32_t i = 0; i < GetNumBits(); i++){
-					m_bitarray[i] = 0;
-				}
+//				m_bitarray.reserve(numBits);
+				m_bitarray = (uint8_t *)calloc(numBits , sizeof(uint8_t));
+//				for(uint32_t i = 0; i < GetNumBits(); i++){
+//					m_bitarray[i] = 0;
+//				}
 			}
 
 		/** Returns the number of hashes used by this Bloom filter
 		*/
 		uint8_t GetNumHashes() const {
 			return m_numHashes;
+		}
+
+		uint64_t GetBaseAddr() const {
+			return (uint64_t)m_bitarray;
 		}
 
 		/** Returns the number of bits in the bit array used by this Bloom filter.
@@ -72,14 +77,14 @@ class CountingBloomFilter {
 		 * @see     AbstractBloomFilter::AbstractBloomFilter
 		 * @return  Number of bits, in terms of an ordinary Bloom filter
 		 */
-		uint32_t GetNumBits() const {
+		uint64_t GetNumBits() const {
 			return m_numBits;
 		}
 
 		void Insert(T const& o) {
-
 			for(uint8_t i = 0; i < GetNumHashes(); i++){
-				int idx = ComputeHash(o, i);
+				auto idx = ComputeHash(o, i);
+//				printf("idx: %d\n", idx);
 				if (m_bitarray[idx] < 255)
 					m_bitarray[idx] += 1;
 				else
@@ -99,7 +104,7 @@ class CountingBloomFilter {
 
 		bool Query(T const& o) const {
 			for(uint8_t i = 0; i < GetNumHashes(); i++){
-				int idx = ComputeHash(o, i);
+				auto idx = ComputeHash(o, i);
 				if(m_bitarray[idx] == 0){
 					return false;
 				}
@@ -144,6 +149,18 @@ class CountingBloomFilter {
 			return r;
 		}
 
+		/** Returns an ordinary BF with the same set represented by this counting
+		 *  BF.
+		 *
+		 *  @return The new OrdinaryBloomFilter
+		 */
+		void ToOrdinaryBloomFilter() const {
+			for(int i = 0; i < GetNumBits(); i++){
+				m_bitarray[i] = m_bitarray[i] > 0;
+			}
+			return ;
+		}
+
 	protected:
 
 		/** Returns the bit array index associated with the given (object, salt)
@@ -176,8 +193,9 @@ class CountingBloomFilter {
 			return idx;
 		}
 
-		uint16_t ComputeHash(T const& key, uint8_t salt) const {
-			auto f_hash = hash_funcs[salt](&key, sizeof(key), 0xc70f6907UL);
+		uint64_t ComputeHash(T const& key, uint8_t salt) const {
+//			auto f_hash = hash_funcs[salt](&key, sizeof(key), 0xc70f6907UL);
+			auto f_hash = hash_funcs[1](&key, sizeof(key), salt);
 			int idx = f_hash % GetNumBits();
 			return idx;
 		}
@@ -190,9 +208,10 @@ class CountingBloomFilter {
 
 		/** Number of bits for bit array
 		*/
-		uint32_t m_numBits;
+		uint64_t m_numBits;
 
-		std::vector<uint8_t> m_bitarray;
+//		std::vector<uint8_t> m_bitarray;
+		uint8_t *m_bitarray;
 
 }; // class CountingBloomFilter
 
