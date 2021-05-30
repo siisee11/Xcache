@@ -5,6 +5,7 @@ struct bloom_filter {
 	struct kref		kref;
 	struct mutex		lock;
 	unsigned int		bitmap_size;
+	unsigned int 		bitmap_size_in_byte;
 	unsigned int		nr_hash;
 	unsigned long		bitmap[0];
 };

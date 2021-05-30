@@ -1441,7 +1441,7 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		rdev->mr = rdev->pd->device->ops.get_dma_mr(rdev->pd, IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_WRITE | IB_ACCESS_REMOTE_READ);
 		rdev->mr->pd = rdev->pd;
 #if CBLOOMFILTER
-		rdev->mr_size = LOCAL_META_REGION_SIZE + bloom_filter_bitsize(gctrl->bf);
+		rdev->mr_size = LOCAL_META_REGION_SIZE + gctrl->bf->bitmap_size_in_byte;
 #else
 		rdev->mr_size = LOCAL_META_REGION_SIZE;
 #endif
@@ -1459,16 +1459,16 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		q->ctrl->clientmr.mr_size = rdev->mr_size;
 
 #if CBLOOMFILTER
-		rdev->local_bf_bits = (uint64_t)kmalloc(bloom_filter_bitsize(gctrl->bf), GFP_KERNEL);
+		rdev->local_bf_bits = (uint64_t)kmalloc(gctrl->bf->bitmap_size_in_byte, GFP_KERNEL);
 		rdev->local_dma_bf_bits_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_mm, bloom_filter_bitsize(gctrl->bf), DMA_BIDIRECTIONAL);
 		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_bf_bits_addr))) {
 			ib_dma_unmap_single(rdev->dev,
-					rdev->local_dma_bf_bits_addr, bloom_filter_bitsize(gctrl->bf), DMA_BIDIRECTIONAL);
+					rdev->local_dma_bf_bits_addr, gctrl->bf->bitmap_size_in_byte, DMA_BIDIRECTIONAL);
 			return NULL;
 		}
 		q->ctrl->bfmr.key = rdev->mr->lkey;
 		q->ctrl->bfmr.baseaddr = rdev->local_dma_bf_bits_addr;
-		q->ctrl->bfmr.mr_size = bloom_filter_bitsize(gctrl->bf);
+		q->ctrl->bfmr.mr_size = gctrl->bf->bitmap_size_in_byte;
 #endif
 
 		q->ctrl->rdev = rdev;
@@ -1829,7 +1829,7 @@ static int pmdfc_rdma_create_ctrl(struct pmdfc_rdma_ctrl **c)
 
 #if CBLOOMFILTER
 	ctrl->bf = bloom_filter_new(NUM_HASHES, BF_SIZE);
-	pr_info("[ INFO ] cbloomfilter created. size= %dB\n", NUM_HASHES, bloom_filter_bitsize(ctrl->bf));
+	pr_info("[ INFO ] cbloomfilter created. nr_hash= %d, size= %dB\n", ctrl->bf->nr_hash, ctrl->bf->bitmap_size_in_byte);
 #endif
 
 	return pmdfc_rdma_init_queues(ctrl);

@@ -34,6 +34,7 @@ struct bloom_filter *bloom_filter_new(unsigned int num_hash, unsigned int bit_si
 	kref_init(&filter->kref);
 	mutex_init(&filter->lock);
 	filter->bitmap_size = bit_size;
+	filter->bitmap_size_in_byte = bitmap_size;
 	filter->nr_hash = num_hash;
 
 	return filter;
