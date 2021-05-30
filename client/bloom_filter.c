@@ -47,7 +47,6 @@ struct bloom_filter *bloom_filter_ref(struct bloom_filter *filter)
 
 static void __bloom_filter_free(struct kref *kref)
 {
-	struct bloom_crypto_alg *alg, *tmp;
 	struct bloom_filter *filter =
 		container_of(kref, struct bloom_filter, kref);
 
@@ -61,20 +60,11 @@ int bloom_filter_add(struct bloom_filter *filter,
 {
 	int ret = 0;
 	int i;
+	unsigned int index;
 
 	for (i = 0 ; i < filter->nr_hash; i++ ) {
-
-	}
-
-	list_for_each_entry(alg, &filter->alg_list, entry) {
-		unsigned int bit;
-
-		ret = __bit_for_crypto_alg(alg, data, datalen, filter->bitmap_size, &bit);
-		if (ret < 0)
-			goto exit_unlock;
-		set_bit(bit, filter->bitmap);
-
-//		pr_info("set_bit --> %u\n", bit);
+		index = hash_funcs[i](data, datalen, i) % filter->bitmap_size;
+		set_bit(index, filter->bitmap);
 	}
 
 	return ret;
@@ -84,34 +74,20 @@ int bloom_filter_check(struct bloom_filter *filter,
 		       const u8 *data, unsigned int datalen,
 		       bool *result)
 {
-	struct bloom_crypto_alg *alg;
 	int ret = 0;
-
-//	mutex_lock(&filter->lock);
-	if (unlikely(list_empty(&filter->alg_list))) {
-		ret = -EINVAL;
-		goto exit_unlock;
-	}
+	unsigned int index;
+	int i;
 
 	*result = true;
 
-	list_for_each_entry(alg, &filter->alg_list, entry) {
-		unsigned int bit;
+	for (i = 0 ; i < filter->nr_hash; i++ ) {
+		index = hash_funcs[i](data, datalen, i) % filter->bitmap_size;
 
-		ret = __bit_for_crypto_alg(alg, data, datalen, filter->bitmap_size, &bit);
-		if (ret < 0)
-			goto exit_unlock;
-
-//		pr_info("Bloom filter: test_bit-->%d\n", bit);
-
-		if (!test_bit(bit, filter->bitmap)) {
+		if (!test_bit(index, filter->bitmap)) {
 			*result = false;
 			break;
 		}
 	}
-
-exit_unlock:
-//	mutex_unlock(&filter->lock);
 
 	return ret;
 }
@@ -123,9 +99,7 @@ void bloom_filter_set(struct bloom_filter *filter,
 		BITS_TO_LONGS(filter->bitmap_size) * sizeof(unsigned long));
 }
 
-void bloom_filter_reset(struct bloom_filter *filter)
+int bloom_filter_bitsize(struct bloom_filter *filter)
 {
-//	mutex_lock(&filter->lock);
-	bitmap_zero(filter->bitmap, filter->bitmap_size);
-//	mutex_unlock(&filter->lock);
+	return BITS_TO_LONGS(filter->bitmap_size) * sizeof(unsigned long);
 }
