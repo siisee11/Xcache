@@ -30,7 +30,7 @@
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_OFFSET_FROM_BASE_TO_PAGE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 
-#define NUM_HASHES 4
+#define NUM_HASHES 2
 #define BF_SIZE 100000
 
 
@@ -51,11 +51,13 @@ struct pmdfc_rdma_dev {
 	struct ib_device *dev;
 	struct ib_pd *pd;
 
-	/* XXX */
 	struct ib_mr* mr;
 	uint64_t mr_size;
 	uint64_t local_mm;
 	uintptr_t local_dma_addr;
+
+	uint64_t local_bf_bits;
+	uintptr_t local_dma_bf_bits_addr;
 };
 
 struct rdma_req {
@@ -112,7 +114,9 @@ struct pmdfc_rdma_ctrl {
 	struct rdma_queue *queues;
 	struct pmdfc_rdma_memregion servermr;
 	struct pmdfc_rdma_memregion bfmr;
+	struct pmdfc_rdma_memregion cbfmr;
 	struct pmdfc_rdma_memregion clientmr;
+	struct bloom_filter *bf;
 
 	union {
 		struct sockaddr addr;

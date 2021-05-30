@@ -6,6 +6,7 @@
 #include "pmdfc.h"
 #include "timeperf.h"
 #include "hash.h"
+#include "bloom_filter.h"
 
 struct pmdfc_rdma_ctrl *gctrl;
 static int serverport;
@@ -39,7 +40,8 @@ int QP_MAX_SEND_WR = 4096;
 //#define NORMALPUT 1
 //#define NORMALGET 1
 #define TWOSIDED 1
-#define BLOOMFILTER 1
+//#define SBLOOMFILTER 1
+#define CBLOOMFILTER 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -287,6 +289,12 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	msg_id = 0;
 	dev = q->ctrl->rdev->dev;
+
+#ifdef CBLOOMFILTER
+	// Client side bloom filter enabled.
+	struct bloom_filter *filter = gctrl->bf;
+	bloom_filter_add(filter, (char *)&key, sizeof(key));	
+#endif
 
 #if BATCH_SIZE >= 2
 	spin_lock(&q->global_lock); /** LOCK HERE: 적기전에 send하면 안되니까 */
@@ -952,6 +960,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	struct rdpma_metadata *meta;
 	struct rdma_req *req[2];
 	uint8_t *indexes;
+	bool isIn= false;
 	int index;
 	struct ib_sge bf_sge[NUM_HASHES];
 	struct ib_rdma_wr bf_rdma_wr[NUM_HASHES] = {};
@@ -964,7 +973,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	msg_id = cpuid / (numqueues / 2); /* Identifier of cpus in same queue */
 	dev = q->ctrl->rdev->dev;
 
-#ifdef BLOOMFILTER
+#ifdef SBLOOMFILTER
 	// Bloom filter 
 	{
 		indexes = kzalloc(NUM_HASHES, GFP_ATOMIC);
@@ -1018,6 +1027,13 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			}
 		}
 	}
+#endif
+
+#ifdef CBLOOMFILTER
+	// Client side bloom filter enabled.
+	bloom_filter_check(gctrl->bf, (char *)&key, sizeof(key), &isIn);
+	if (!isIn)
+		return -1;
 #endif
 
 	/* setup imm data */
@@ -1393,6 +1409,7 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 	struct pmdfc_rdma_dev *rdev = NULL;
 
 	if (!q->ctrl->rdev) {
+		// called only once.
 		rdev = kzalloc(sizeof(*rdev), GFP_KERNEL);
 		if (!rdev) {
 			pr_err("[ FAIL ] no memory\n");
@@ -1423,21 +1440,36 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		/* XXX: allocate memory region here */
 		rdev->mr = rdev->pd->device->ops.get_dma_mr(rdev->pd, IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_WRITE | IB_ACCESS_REMOTE_READ);
 		rdev->mr->pd = rdev->pd;
+#if CBLOOMFILTER
+		rdev->mr_size = LOCAL_META_REGION_SIZE + gctrl->bf->bitmap_size_in_byte;
+#else
 		rdev->mr_size = LOCAL_META_REGION_SIZE;
-		rdev->local_mm = (uint64_t)kmalloc(rdev->mr_size, GFP_KERNEL);
-		rdev->local_dma_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_mm, rdev->mr_size, DMA_BIDIRECTIONAL);
+#endif
+		rdev->local_mm = (uint64_t)kmalloc(LOCAL_META_REGION_SIZE, GFP_KERNEL);
+		rdev->local_dma_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_mm, LOCAL_META_REGION_SIZE, DMA_BIDIRECTIONAL);
 		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_addr))) {
 			ib_dma_unmap_single(rdev->dev,
-					rdev->local_dma_addr, rdev->mr_size, DMA_BIDIRECTIONAL);
+					rdev->local_dma_addr, LOCAL_META_REGION_SIZE, DMA_BIDIRECTIONAL);
 			return NULL;
 		}
 
 		pr_info("[ DBUG ] mr.lkey= %u, pd->local_dma_lkey= %u\n", rdev->mr->lkey, rdev->pd->local_dma_lkey);
-		//	q->ctrl->clientmr->key = rdev->mr.rkey;
-		//		q->ctrl->clientmr.key = rdev->pd->local_dma_lkey;
 		q->ctrl->clientmr.key = rdev->mr->lkey;
 		q->ctrl->clientmr.baseaddr = rdev->local_dma_addr;
 		q->ctrl->clientmr.mr_size = rdev->mr_size;
+
+#if CBLOOMFILTER
+		rdev->local_bf_bits = (uint64_t)kmalloc(gctrl->bf->bitmap_size_in_byte, GFP_KERNEL);
+		rdev->local_dma_bf_bits_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_mm, bloom_filter_bitsize(gctrl->bf), DMA_BIDIRECTIONAL);
+		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_bf_bits_addr))) {
+			ib_dma_unmap_single(rdev->dev,
+					rdev->local_dma_bf_bits_addr, gctrl->bf->bitmap_size_in_byte, DMA_BIDIRECTIONAL);
+			return NULL;
+		}
+		q->ctrl->cbfmr.key = rdev->mr->lkey;
+		q->ctrl->cbfmr.baseaddr = rdev->local_dma_bf_bits_addr;
+		q->ctrl->cbfmr.mr_size = gctrl->bf->bitmap_size_in_byte;
+#endif
 
 		q->ctrl->rdev = rdev;
 	}
@@ -1795,6 +1827,11 @@ static int pmdfc_rdma_create_ctrl(struct pmdfc_rdma_ctrl **c)
 	}
 	/* no need to set the port on the srcaddr */
 
+#if CBLOOMFILTER
+	ctrl->bf = bloom_filter_new(NUM_HASHES, BF_SIZE);
+	pr_info("[ INFO ] cbloomfilter created. nr_hash= %d, size= %dB\n", ctrl->bf->nr_hash, ctrl->bf->bitmap_size_in_byte);
+#endif
+
 	return pmdfc_rdma_init_queues(ctrl);
 }
 
@@ -1828,7 +1865,6 @@ static void pmdfc_rdma_recv_remotemr_done(struct ib_cq *cq, struct ib_wc *wc)
 	complete_all(&qe->done);
 }
 
-/* XXX */
 static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
 {
 	struct rdma_req *qe =
@@ -1844,8 +1880,8 @@ static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
 	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct pmdfc_rdma_memregion),
 			DMA_FROM_DEVICE); 
 
-	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
-			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
+//	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
+//			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
 	complete_all(&qe->done);
 }
 
@@ -1957,30 +1993,47 @@ out:
 
 static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 {
-	struct rdma_req *qe;
+	struct rdma_req *qe[2];
 	int ret;
 	struct ib_device *dev;
 
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 	dev = ctrl->rdev->dev;
 
-	ret = get_req_for_buf(&qe, dev, &(ctrl->clientmr), sizeof(ctrl->clientmr),
+	ret = get_req_for_buf(&qe[0], dev, &(ctrl->clientmr), sizeof(ctrl->clientmr),
 			DMA_TO_DEVICE);
 	if (unlikely(ret))
 		goto out;
 
-	qe->cqe.done = pmdfc_rdma_send_localmr_done;
+	ret = get_req_for_buf(&qe[1], dev, &(ctrl->cbfmr), sizeof(ctrl->cbfmr),
+			DMA_TO_DEVICE);
+	if (unlikely(ret))
+		goto out;
 
-	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe, sizeof(struct pmdfc_rdma_memregion));
+	qe[0]->cqe.done = pmdfc_rdma_send_localmr_done;
+	qe[1]->cqe.done = pmdfc_rdma_send_localmr_done;
 
+	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[0], sizeof(struct pmdfc_rdma_memregion));
+	if (unlikely(ret))
+		goto out_free_qe;
+
+	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[1], sizeof(struct pmdfc_rdma_memregion));
 	if (unlikely(ret))
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe, 1000);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[0], 1000);
+	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[1], 1000);
+
+	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
+			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
+
+	pr_info("[ INFO ] cbfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->cbfmr.baseaddr,
+			ctrl->cbfmr.key, ctrl->cbfmr.mr_size/1024);
 
 out_free_qe:
-	kmem_cache_free(req_cache, qe);
+	kmem_cache_free(req_cache, qe[0]);
+	kmem_cache_free(req_cache, qe[1]);
 out:
 	return ret;
 }
