@@ -2032,7 +2032,8 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 			ctrl->bfmr.key, ctrl->bfmr.mr_size/1024);
 
 out_free_qe:
-	kmem_cache_free(req_cache, qe);
+	kmem_cache_free(req_cache, qe[0]);
+	kmem_cache_free(req_cache, qe[1]);
 out:
 	return ret;
 }
