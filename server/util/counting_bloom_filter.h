@@ -88,7 +88,7 @@ class CountingBloomFilter {
 				if (m_bitarray[idx] < 255)
 					m_bitarray[idx] += 1;
 				else
-					printf("idx: %d exceed 256\n", idx);
+					printf("idx: %lu exceed 256\n", idx);
 			}
 		}
 

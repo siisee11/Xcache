@@ -5,7 +5,6 @@
 #include "util/pair.h"
 
 int main(int argc, char *argv[]){
-	std::mutex m1, m2;  // 우리의 mutex 객체
 
 	Key_t t[10000];
 	for (int i = 0; i < 10000; i++ ) {

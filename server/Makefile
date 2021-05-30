@@ -74,7 +74,7 @@ CCEH: src/cceh.cpp src/cceh.h
 	$(CXX) $(CFLAGS) -c src/cceh.cpp -o src/cceh.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -c -o KV_cceh.o KV.cpp $(INCLUDES) $(LIBS) -DDCCEH
 	$(CXX) $(CFLAGS) -o kv_cceh test_KV.cpp src/cceh.o KV_cceh.o $(LIBS) $(INCLUDES)
-
+	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/cceh.o KV_cceh.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 rdma_dram:
 	#numactl -N 0,1 -m 0,1 ./rdma_svr -t 7777

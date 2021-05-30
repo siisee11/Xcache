@@ -20,6 +20,8 @@
 #include "rdma_svr.h"
 #include "variables.h"
 
+#define CBLOOMFILTER 1
+
 /* option values */
 int tcp_port = -1;
 int ib_port = 1;
@@ -240,7 +242,6 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 		}
 #endif
 	}
-
 
 #if defined(TIME_CHECK)
 	clock_gettime(CLOCK_MONOTONIC, &end);
@@ -632,9 +633,7 @@ static void process_read_odp(struct queue *q, int cid, int qid, int mid){
 		rdpma_handle_read_poll_found_elapsed += start.tv_nsec - end.tv_nsec + 1000000000 * (start.tv_sec - end.tv_sec);
 	}
 #endif
-
 }
-
 
 static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -706,6 +705,11 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 				dprintf("[ INFO ] connected. receiving memory region info.\n");
 				printf("[ INFO ] *** Client MR key=%u base vaddr=%p size=%lu (KB) ***\n", gctrl[client_id]->clientmr.key, (void *)gctrl[client_id]->clientmr.baseaddr
 						, gctrl[client_id]->clientmr.mr_size/1024);
+#ifdef CBLOOMFILTER
+				if (gctrl[client_id]->bfmr.key != 0)
+					printf("[ INFO ] *** Client BF MR key=%u base vaddr=%p size=%lu (KB) ***\n", gctrl[client_id]->bfmr.key, (void *)gctrl[client_id]->bfmr.baseaddr
+							, gctrl[client_id]->bfmr.mr_size/1024);
+#endif
 			}
 		}else{
 			fprintf(stderr, "Received a weired opcode (%d)\n", (int)wc.opcode);
@@ -920,7 +924,7 @@ int on_connection(struct queue *q)
 
 	if (q == &ctrl->queues[0]) {
 		struct ibv_send_wr wr[2] = {};
-		struct ibv_recv_wr rwr = {};
+		struct ibv_recv_wr rwr[2] = {};
 		struct ibv_send_wr *bad_wr = NULL;
 		struct ibv_recv_wr *bad_rwr = NULL;
 		struct ibv_sge sge[2] = {};
@@ -934,9 +938,15 @@ int on_connection(struct queue *q)
 		servermr.key  = ctrl->mr_buffer->rkey;
 		servermr.mr_size  = BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE;
 
-		bfmr.baseaddr = ctrl->bf->GetBaseAddr();
-		bfmr.key  = ctrl->bf_mr_buffer->rkey;
-		bfmr.mr_size  = ctrl->bf->GetNumBits();
+		if (bf_flag) {
+			bfmr.baseaddr = ctrl->bf->GetBaseAddr();
+			bfmr.key  = ctrl->bf_mr_buffer->rkey;
+			bfmr.mr_size  = ctrl->bf->GetNumBits();
+		} else {
+			bfmr.baseaddr = 0;
+			bfmr.key  = 0;
+			bfmr.mr_size  = 0;
+		}
 
 		wr[0].next = &wr[1];
 		wr[0].opcode = IBV_WR_SEND;
@@ -964,14 +974,26 @@ int on_connection(struct queue *q)
 		sge[0].length = sizeof(struct memregion);
 		sge[0].lkey = ctrl->mr_buffer->lkey;
 
-		rwr.wr_id = 0;
-		rwr.sg_list = &sge[0];
-		rwr.num_sge = 1;
+		rwr[0].next = NULL;
+		rwr[0].sg_list = &sge[0];
+		rwr[0].num_sge = 1;
+
+#ifdef CBLOOMFILTER
+		rwr[0].next = &rwr[1];
+		/* GET CLIENT MR REGION */
+		sge[1].addr = (uint64_t) &ctrl->bfmr;
+		sge[1].length = sizeof(struct memregion);
+		sge[1].lkey = ctrl->mr_buffer->lkey;
+
+		rwr[1].sg_list = &sge[1];
+		rwr[1].num_sge = 1;
+#endif
+
 
 #ifdef SRQ
-		TEST_NZ(ibv_post_srq_recv(q->qp->srq, &rwr, &bad_rwr));
+		TEST_NZ(ibv_post_srq_recv(q->qp->srq, &rwr[0], &bad_rwr));
 #else
-		TEST_NZ(ibv_post_recv(q->qp, &rwr, &bad_rwr));
+		TEST_NZ(ibv_post_recv(q->qp, &rwr[0], &bad_rwr));
 #endif
 #endif /* ndef ONESIDED */
 	}
