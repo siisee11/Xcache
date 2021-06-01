@@ -10,7 +10,7 @@ class IHash {
   public:
     IHash(void) = default;
     ~IHash(void) = default;
-    virtual void Insert(Key_t&, Value_t) = 0;
+    virtual Key_t Insert(Key_t&, Value_t) = 0;
 	virtual void Insert_extent(Key_t, uint64_t, uint64_t, Value_t) = 0;
     virtual bool Delete(Key_t&) = 0;
     virtual Value_t Get(Key_t&) = 0;

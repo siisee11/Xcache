@@ -36,6 +36,8 @@ extern struct bitmask *netcpubuf;
 extern struct bitmask *kvcpubuf;
 extern struct bitmask *pollcpubuf;
 
+int deletecnt = 0;
+
 using namespace std;
 
 void *global_chunk = NULL;
@@ -90,9 +92,15 @@ void KV::Insert(Key_t& key, Value_t value) {
 	struct timespec i_end;
 	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
-	hash->Insert(key, value);
-	if (bf_flag)
+	auto deletedKey = hash->Insert(key, value);
+	if (bf_flag) {
 		bf->Insert(key);
+		if (deletedKey != -1) {
+			deletecnt++;
+//			printf("Key %d deleted\n", deletedKey);
+			bf->Delete(deletedKey);
+		}
+	}
 #ifdef KV_DEBUG
 	clock_gettime(CLOCK_MONOTONIC, &i_end);
 	insertTime += i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000;
@@ -151,8 +159,6 @@ Value_t KV::GetExtent(Key_t& key) {
 	return target;
 }
 
-
-
 Value_t KV::FindAnyway(Key_t& key) {
 	return hash->FindAnyway(key);
 }
@@ -182,6 +188,7 @@ void KV::PrintStats(void) {
 	printf("Util =%.3f\t Capa =%lu\n", util, cap);
 	printf("InsertTime = \t%.3f (usec)\n", insertTime/1000.0);
 	printf("GetTime= \t%.3f (usec)\n", getTime/1000.0);
+	printf("Key deleted %d\n", deletecnt);
 
 //	printf("%.3f, %lu, %d, %d, %d, %d, %zu, %zu, %.3f, %.3f, %.3f, %.3f, %.3f\n", util, cap, freqs[0], freqs[1], miss_cnt[0].load(), miss_cnt[1].load(), segs[0], segs[1], metrics[0], metrics[1], 
 //			perNodeQueueTime/1000.0/numData/2, insertTime/1000.0/numData, getTime/1000.0/numData);

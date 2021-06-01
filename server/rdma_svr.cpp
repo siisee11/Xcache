@@ -146,6 +146,57 @@ void rdpma_indicator() {
 	}
 }
 
+void send_bf(int cid, long bitAddr, size_t size) {
+	struct ibv_sge sge;
+	struct ibv_send_wr wr = {}; 
+	struct ibv_send_wr *bad_wr = NULL; 
+	struct ibv_wc wc;
+	int ne;
+	int ret;
+
+	sge.addr = bitAddr;
+	sge.length = size * sizeof(long);
+	sge.lkey = gctrl[cid]->mr_buffer->lkey;
+
+	wr.opcode = IBV_WR_RDMA_WRITE; /* IBV_WR_SEND_WITH_IMM same */
+	wr.sg_list = &sge;
+	wr.num_sge = 1;
+	wr.send_flags = IBV_SEND_SIGNALED;
+	wr.wr.rdma.remote_addr = gctrl[cid]->bfmr.baseaddr;
+	wr.wr.rdma.rkey        = gctrl[cid]->bfmr.key;
+
+	ret = ibv_post_send(gctrl[cid]->queues[0].qp, &wr, &bad_wr);
+	if(ret){
+		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
+	}
+
+	do{
+		ne = ibv_poll_cq(gctrl[cid]->queues[0].qp->send_cq, 1, &wc);
+		if(ne < 0){
+			fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
+			return;
+		}
+	}while(ne < 1);
+
+	if(wc.status != IBV_WC_SUCCESS){
+		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
+		return;
+	}
+}
+
+/**
+ * bf_sender - Send bf to client periodically
+ */
+void rdpma_bf_sender(int c) {
+	while (!done) {
+		sleep(2);
+		if (global_bf) {
+			global_bf->ToOrdinaryBloomFilter();
+			send_bf(c, global_bf->GetBoolBitArray(), global_bf->GetNumLongs());
+		}
+	}
+}
+
 int post_recv(int client_id, int queue_id){
 	struct ibv_recv_wr wr;
 	struct ibv_recv_wr* bad_wr;
@@ -1164,7 +1215,8 @@ int main(int argc, char **argv)
 	port = ntohs(rdma_get_src_port(listener));
 	printf("[ INFO ] listening on port %d\n", port);
 
-	std::thread i;
+	std::thread indicator;
+	std::thread bf_sender[NUM_CLIENT];
 	for (unsigned int c = 0; c < NUM_CLIENT; ++c) {
 		for (unsigned int i = 0; i < NUM_QUEUES; ++i) {
 //			printf("[ INFO ] waiting for queue connection: %d\n", i);
@@ -1218,7 +1270,11 @@ int main(int argc, char **argv)
 
 #ifndef ONESIDED
 		if (c == 0)
-			i = std::thread( rdpma_indicator );
+			indicator = std::thread( rdpma_indicator );
+
+#ifdef CBLOOMFILTER
+		bf_sender[c] = std::thread( rdpma_bf_sender, c );
+#endif
 #endif
 	}
 
@@ -1233,7 +1289,8 @@ int main(int argc, char **argv)
 			break;
 	}
 
-	i.join();
+	indicator.join();
+	bf_sender[0].join();
 
 	rdma_destroy_event_channel(ec);
 	rdma_destroy_id(listener);

@@ -3,10 +3,9 @@
 #include <thread>
 #include <mutex>
 #include <shared_mutex>
-#include "../util/persist.h"
-#include "../util/hash.h"
+#include "util/persist.h"
+#include "util/hash.h"
 #include "linear_probing.h"
-
 
 LinearProbingHash::LinearProbingHash(void)
 	: capacity{0}, dict{nullptr} { }
@@ -23,45 +22,51 @@ LinearProbingHash::~LinearProbingHash(void) {
 	if (dict != nullptr) delete[] dict;
 }
 
-void LinearProbingHash::Insert(Key_t& key, Value_t value) {
+// return deleted key
+Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 	using namespace std;
 	auto key_hash = h(&key, sizeof(key));
 
-RETRY:
-	while (resizing_lock == 1) {
-		asm("nop");
-	}
-	auto loc = key_hash % capacity;
-	if (size < capacity * kResizingThreshold) {
-		auto i = 0;
-		while (i < capacity) {
-			auto slot = (loc + i) % capacity;
-			unique_lock<shared_mutex> lock(mutex[slot/locksize]);
-			do {
-				if (dict[slot].key == INVALID) {
-					dict[slot].value = value;
-					mfence();
-					dict[slot].key = key;
-					clflush((char*)&dict[slot].key, sizeof(Pair));
-					auto _size = size;
-					while (!CAS(&size, &_size, _size+1)) {
-						_size = size;
-					}
-					return;
-				}
-				i++;
-				slot = (loc + i) % capacity;
-				if (!(i < capacity)) break;
-			} while (slot % locksize != 0);
-		}
-	} else {
-		auto lock = 0;
-		if (CAS(&resizing_lock, &lock, 1)) {
-			resize(capacity * kResizingFactor);
-			resizing_lock = 0;
+	auto loc = key_hash % capacity; // target location of key
+	
+	auto i = 0;
+	auto slot = (loc + i) % capacity;
+	auto off = slot % locksize;
+	auto deleteindex = slot - off;
+	auto firstIndex = slot - off;
+	unique_lock<shared_mutex> lock(mutex[slot/locksize]);
+	for ( int j = 0 ; j < locksize - 1; j++ ) {
+		slot = firstIndex + j;
+
+		// if there is available slot, insert and return
+		if (dict[slot].key == INVALID) {
+			dict[slot].value = value;
+			mfence();
+			dict[slot].key = key;
+			clflush((char*)&dict[slot].key, sizeof(Pair));
+			auto _size = size;
+			while (!CAS(&size, &_size, _size+1)) {
+				_size = size;
+			}
+			return -1;
 		}
 	}
-	goto RETRY;
+
+	// If there is no available slot. 
+	// Delete first element of this cluster and shift all element to the left.
+	// Insert new element at tail.
+	auto deleteKey = dict[deleteindex].key;
+	for (int j = 0 ; j < locksize -1 ; j++) {
+		auto target = deleteindex + j;
+		dict[target].key = dict[target + 1].key;
+		dict[target].value = dict[target + 1].value;
+	}
+	dict[deleteindex + locksize - 1].key = key;
+	dict[deleteindex + locksize - 1].value = value;
+
+	clflush((char*)&dict[deleteindex].key, sizeof(Pair) * locksize);
+	
+	return deleteKey;
 }
 
 bool LinearProbingHash::InsertOnly(Key_t& key, Value_t value) {
@@ -85,11 +90,15 @@ bool LinearProbingHash::Delete(Key_t& key) {
 
 Value_t LinearProbingHash::Get(Key_t& key) {
 	auto key_hash = h(&key, sizeof(key)) % capacity;
-	for (size_t i = 0; i < capacity; ++i) {
-		auto id = (key_hash + i) % capacity;
-		std::shared_lock<std::shared_mutex> lock(mutex[id/locksize]);
-		if (dict[id].key == INVALID) return NONE;
-		if (dict[id].key == key) return std::move(dict[id].value);
+	auto loc = key_hash % capacity; // target location of key
+	auto off = loc % locksize;
+	auto firstIndex = loc - off;
+	{
+		std::shared_lock<std::shared_mutex> lock(mutex[loc/locksize]);
+		for (size_t i = 0; i < locksize - 1; ++i) {
+			auto id = firstIndex + i;
+			if (dict[id].key == key) return std::move(dict[id].value);
+		}
 	}
 	return NONE;
 }

@@ -88,7 +88,7 @@ CCEH::~CCEH(void)
 { }
 
 
-void CCEH::Insert(Key_t& key, Value_t value) {
+Key_t CCEH::Insert(Key_t& key, Value_t value) {
 	auto key_hash = h(&key, sizeof(key));
 	auto y = (key_hash & kMask) * kNumPairPerCacheLine;
 
@@ -146,7 +146,7 @@ RETRY:
 				clflush((char*)&target->_[loc], sizeof(Pair));
 				/* release segment exclusive lock */
 				target->unlock();
-				return;
+				return -1;
 			}
 		}
 	}

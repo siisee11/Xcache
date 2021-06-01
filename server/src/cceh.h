@@ -167,7 +167,7 @@ class CCEH : public IHash {
     CCEH(size_t);
     ~CCEH(void);
 
-	void Insert(Key_t&, Value_t);
+	Key_t Insert(Key_t&, Value_t);
     bool InsertOnly(Key_t&, Value_t);
     bool Delete(Key_t&);
     Value_t Get(Key_t&);

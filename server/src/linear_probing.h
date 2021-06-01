@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <mutex>
 #include <shared_mutex>
-#include "../util/pair.h"
+#include "util/pair.h"
 #include "IHash.h"
 
 class LinearProbingHash : public IHash {
@@ -14,7 +14,7 @@ class LinearProbingHash : public IHash {
 	LinearProbingHash(void);
 	LinearProbingHash(size_t);
 	~LinearProbingHash(void);
-	void Insert(Key_t&, Value_t);
+	Key_t Insert(Key_t&, Value_t);
 	bool InsertOnly(Key_t&, Value_t);
 	bool Delete(Key_t&);
 	Value_t Get(Key_t&);

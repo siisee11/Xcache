@@ -6,10 +6,15 @@
 #include <cstdlib>
 #include <iostream>
 #include <functional>
+#include <bitset>
 #include <string.h>
 #include <mutex>
 #include <openssl/sha.h>
 #include "util/hash.h"
+
+#define BITS_PER_BYTE           8
+#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
+#define BITS_TO_LONGS(nr)       DIV_ROUND_UP(nr, BITS_PER_BYTE * sizeof(long))
 
 /** Container type for a hashable object and a salt
  *  Do not use this struct directly, but rather its alias bloom::HashParams<T>.
@@ -51,13 +56,10 @@ class CountingBloomFilter {
 		 */
 		explicit
 			CountingBloomFilter(uint8_t numHashes, uint64_t numBits)
-			: m_numHashes(numHashes), m_numBits(numBits)
+			: m_numHashes(numHashes), m_numBits(numBits), m_numLongs(BITS_TO_LONGS(numBits))
 			{
-//				m_bitarray.reserve(numBits);
 				m_bitarray = (uint8_t *)calloc(numBits , sizeof(uint8_t));
-//				for(uint32_t i = 0; i < GetNumBits(); i++){
-//					m_bitarray[i] = 0;
-//				}
+				m_boolbitarray = (long *)calloc(BITS_TO_LONGS(numBits), sizeof(long));
 			}
 
 		/** Returns the number of hashes used by this Bloom filter
@@ -79,6 +81,14 @@ class CountingBloomFilter {
 		 */
 		uint64_t GetNumBits() const {
 			return m_numBits;
+		}
+
+		uint64_t GetNumLongs() const {
+			return m_numLongs;
+		}
+
+		uint64_t GetBoolBitArray() const {
+			return (uint64_t)m_boolbitarray;
 		}
 
 		void Insert(T const& o) {
@@ -156,7 +166,9 @@ class CountingBloomFilter {
 		 */
 		void ToOrdinaryBloomFilter() const {
 			for(int i = 0; i < GetNumBits(); i++){
-				m_bitarray[i] = m_bitarray[i] > 0;
+				auto j = i / sizeof(long);
+				if (m_bitarray[i] > 0)
+					m_boolbitarray[j] += 1 << (sizeof(long) - 1 - i);
 			}
 			return ;
 		}
@@ -209,9 +221,13 @@ class CountingBloomFilter {
 		/** Number of bits for bit array
 		*/
 		uint64_t m_numBits;
+		uint64_t m_numLongs;
 
 //		std::vector<uint8_t> m_bitarray;
 		uint8_t *m_bitarray;
+
+		long *m_boolbitarray;
+
 
 }; // class CountingBloomFilter
 
