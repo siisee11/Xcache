@@ -33,7 +33,6 @@
 #define NUM_HASHES 2
 #define BF_SIZE 100000
 
-
 enum qp_type {
 	QP_READ_SYNC,
 	QP_READ_ASYNC,
