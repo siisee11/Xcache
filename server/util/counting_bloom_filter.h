@@ -59,7 +59,7 @@ class CountingBloomFilter {
 			: m_numHashes(numHashes), m_numBits(numBits), m_numLongs(BITS_TO_LONGS(numBits))
 			{
 				m_bitarray = (uint8_t *)calloc(numBits , sizeof(uint8_t));
-				m_boolbitarray = (long *)calloc(BITS_TO_LONGS(numBits), sizeof(long));
+				m_boolbitarray = (uint64_t *)calloc(BITS_TO_LONGS(numBits), sizeof(uint64_t));
 			}
 
 		/** Returns the number of hashes used by this Bloom filter
@@ -166,9 +166,11 @@ class CountingBloomFilter {
 		 */
 		void ToOrdinaryBloomFilter() const {
 			for(int i = 0; i < GetNumBits(); i++){
-				auto j = i / sizeof(long);
-				if (m_bitarray[i] > 0)
-					m_boolbitarray[j] += 1 << (sizeof(long) - 1 - i);
+				auto j = i / 64; 
+				if (m_bitarray[i] > 0) {
+					uint8_t bitShift = 64 - 1 - (i % 64);   // i == 65 -> 62 
+					m_boolbitarray[j] |= 1 << bitShift;
+				}
 			}
 			return ;
 		}
@@ -226,7 +228,7 @@ class CountingBloomFilter {
 //		std::vector<uint8_t> m_bitarray;
 		uint8_t *m_bitarray;
 
-		long *m_boolbitarray;
+		uint64_t *m_boolbitarray;
 
 
 }; // class CountingBloomFilter

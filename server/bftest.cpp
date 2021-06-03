@@ -36,7 +36,7 @@ int main(int argc, char *argv[]){
 	}
 
 	if(!bf->Delete(t[0])){
-		std::cout << "Error: Failed to delete second inserted object." << std::endl;
+		std::cout << "Error: Failed to delete object." << std::endl;
 		return 1;
 	}
 
@@ -44,6 +44,8 @@ int main(int argc, char *argv[]){
 		std::cout << "Error: Query for deleted object was true." << std::endl;
 		return 1;
 	}
+
+	bf->ToOrdinaryBloomFilter();
 
 	std::cout << "Tests passed." << std::endl;
 

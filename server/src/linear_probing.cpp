@@ -13,7 +13,7 @@ LinearProbingHash::LinearProbingHash(void)
 LinearProbingHash::LinearProbingHash(size_t _capacity)
 	: capacity{_capacity}, dict{new Pair[capacity]}
 {
-	locksize = 256;
+	locksize = 16;
 	nlocks = (capacity)/locksize+1;
 	mutex = new std::shared_mutex[nlocks];
 }
@@ -27,12 +27,8 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 	using namespace std;
 	auto key_hash = h(&key, sizeof(key));
 
-	auto loc = key_hash % capacity; // target location of key
-	
-	auto i = 0;
-	auto slot = (loc + i) % capacity;
+	auto slot = key_hash % capacity;
 	auto off = slot % locksize;
-	auto deleteindex = slot - off;
 	auto firstIndex = slot - off;
 	unique_lock<shared_mutex> lock(mutex[slot/locksize]);
 	for ( int j = 0 ; j < locksize - 1; j++ ) {
@@ -55,16 +51,16 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 	// If there is no available slot. 
 	// Delete first element of this cluster and shift all element to the left.
 	// Insert new element at tail.
-	auto deleteKey = dict[deleteindex].key;
+	auto deleteKey = dict[firstIndex].key;
 	for (int j = 0 ; j < locksize -1 ; j++) {
-		auto target = deleteindex + j;
+		auto target = firstIndex + j;
 		dict[target].key = dict[target + 1].key;
 		dict[target].value = dict[target + 1].value;
 	}
-	dict[deleteindex + locksize - 1].key = key;
-	dict[deleteindex + locksize - 1].value = value;
+	dict[firstIndex + locksize - 1].key = key;
+	dict[firstIndex + locksize - 1].value = value;
 
-	clflush((char*)&dict[deleteindex].key, sizeof(Pair) * locksize);
+	clflush((char*)&dict[firstIndex].key, sizeof(Pair) * locksize);
 	
 	return deleteKey;
 }
@@ -95,7 +91,7 @@ Value_t LinearProbingHash::Get(Key_t& key) {
 	auto firstIndex = loc - off;
 	{
 		std::shared_lock<std::shared_mutex> lock(mutex[loc/locksize]);
-		for (size_t i = 0; i < locksize - 1; ++i) {
+		for (int i = 0; i < locksize - 1; ++i) {
 			auto id = firstIndex + i;
 			if (dict[id].key == key) return std::move(dict[id].value);
 		}
@@ -153,7 +149,7 @@ void LinearProbingHash::resize(size_t _capacity) {
 	std::shared_mutex* old_mutex = mutex;
 
 	Pair* newDict = new Pair[_capacity];
-	for (int i = 0; i < capacity; i++) {
+	for (size_t i = 0; i < capacity; i++) {
 		if (dict[i].key != INVALID) {
 			auto key_hash = h(&dict[i].key, sizeof(Key_t)) % _capacity;
 			auto loc = getLocation(key_hash, _capacity, newDict);

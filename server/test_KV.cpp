@@ -41,7 +41,7 @@ static void dprintf( const char* format, ... ) {
 
 static void usage(){
 	printf("Usage : \n");
-	printf("./bin/kv --pm_path /jy/1 --dataset <text file> --nr_data 10000000 -W 0-3 -K 4-7,14-17 -P 8-9,18-19 --tablesize 32768 --verbose\n");
+	printf("./bin/kv --dataset <text file> --nr_data 10000000 -W 0-3 -K 4-7,14-17 -P 8-9,18-19 --tablesize 32768 --verbose\n");
 }
 
 void clear_cache(){
@@ -73,7 +73,6 @@ static void printCpuBuf(size_t nr_cpus, struct bitmask *bm, const char *str) {
 
 int main(int argc, char* argv[]){
 	char *data_path;
-	char *pm_path;
 
 	const char *short_options = "vbut:n:d:z:hK:P:W:";
 	static struct option long_options[] =
@@ -83,7 +82,6 @@ int main(int argc, char* argv[]){
 		{"bloomfilter", 0, NULL, 'b'},
 		{"tablesize", 1, NULL, 't'},
 		{"dataset", 1, NULL, 'd'},
-		{"pm_path", 1, NULL, 'z'},
 		{"nr_data", 1, NULL, 'n'},
 		{"netcpubind", 1, NULL, 'W'},
 		{"kvcpubind", 1, NULL, 'K'},
@@ -112,9 +110,6 @@ int main(int argc, char* argv[]){
 				break;
 			case 'd':
 				data_path = strdup(optarg);
-				break;
-			case 'z':
-				pm_path= strdup(optarg);
 				break;
 			case 'W':
 				netcpubuf = numa_parse_cpustring(optarg);
@@ -156,7 +151,7 @@ int main(int argc, char* argv[]){
 	}
 
 	struct timespec i_start, i_end, g_start, g_end;
-	uint64_t i_elapsed, g_elapsed, m_elapsed;
+	uint64_t i_elapsed, g_elapsed;
 
 	dprintf("START MAIN FUNCTION\n");
 
@@ -175,9 +170,9 @@ int main(int argc, char* argv[]){
 
 	/* Create KV store */
 	KVStore* kv = NULL;
-	CountingBloomFilter<Key_t>* bf = new CountingBloomFilter<Key_t>(2,100000);
+	CountingBloomFilter<Key_t>* bf = new CountingBloomFilter<Key_t>(2,1000000);
 
-	auto totalSize = 1073741824; // 10GiB
+	auto totalSize = 10737418240 * 2 ; // 10GiB
 	kv = new KV( totalSize / 4096, bf );
 	dprintf("[  OK  ] KVStore Initialized\n");
 

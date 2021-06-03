@@ -51,7 +51,7 @@ class KV : public KVStore {
 		KV(size_t);
 		KV(size_t, CountingBloomFilter<Key_t>*);
 		~KV(void);
-		void Insert(Key_t&, Value_t);
+		bool Insert(Key_t&, Value_t);
 		void InsertExtent(Key_t&, Value_t, uint64_t);
 		bool Delete(Key_t&);
 		Value_t Get(Key_t&);

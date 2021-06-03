@@ -146,7 +146,7 @@ void rdpma_indicator() {
 	}
 }
 
-void send_bf(int cid, long bitAddr, size_t size) {
+void send_bf(struct queue *q, int cid) {
 	struct ibv_sge sge;
 	struct ibv_send_wr wr = {}; 
 	struct ibv_send_wr *bad_wr = NULL; 
@@ -154,9 +154,12 @@ void send_bf(int cid, long bitAddr, size_t size) {
 	int ne;
 	int ret;
 
+	uint64_t bitAddr = global_bf->GetBoolBitArray();
+	size_t size = global_bf->GetNumLongs() * sizeof(long);
+
 	sge.addr = bitAddr;
-	sge.length = size * sizeof(long);
-	sge.lkey = gctrl[cid]->mr_buffer->lkey;
+	sge.length = size;
+	sge.lkey = gctrl[cid]->bf_mr_bits_buffer->lkey;
 
 	wr.opcode = IBV_WR_RDMA_WRITE; /* IBV_WR_SEND_WITH_IMM same */
 	wr.sg_list = &sge;
@@ -165,13 +168,14 @@ void send_bf(int cid, long bitAddr, size_t size) {
 	wr.wr.rdma.remote_addr = gctrl[cid]->bfmr.baseaddr;
 	wr.wr.rdma.rkey        = gctrl[cid]->bfmr.key;
 
-	ret = ibv_post_send(gctrl[cid]->queues[0].qp, &wr, &bad_wr);
+	q->m.lock();
+	ret = ibv_post_send(q->qp, &wr, &bad_wr);
 	if(ret){
 		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 	}
 
 	do{
-		ne = ibv_poll_cq(gctrl[cid]->queues[0].qp->send_cq, 1, &wc);
+		ne = ibv_poll_cq(q->qp->send_cq, 1, &wc);
 		if(ne < 0){
 			fprintf(stderr, "[%s] ibv_poll_cq failed\n", __func__);
 			return;
@@ -182,6 +186,9 @@ void send_bf(int cid, long bitAddr, size_t size) {
 		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
 		return;
 	}
+	q->m.unlock();
+
+	return;
 }
 
 /**
@@ -189,10 +196,10 @@ void send_bf(int cid, long bitAddr, size_t size) {
  */
 void rdpma_bf_sender(int c) {
 	while (!done) {
-		sleep(2);
+		sleep(1);
 		if (global_bf) {
 			global_bf->ToOrdinaryBloomFilter();
-			send_bf(c, global_bf->GetBoolBitArray(), global_bf->GetNumLongs());
+			send_bf(&gctrl[c]->queues[0], c);
 		}
 	}
 }
@@ -280,7 +287,7 @@ static void process_write_twosided(struct queue *q, uint64_t target, int cid, in
 #if defined(TIME_CHECK)
 		clock_gettime(CLOCK_MONOTONIC, &start);
 #endif
-		gctrl[cid]->kv->Insert(local_keys[i], (Value_t)cur_page); 
+		gctrl[cid]->kv->Insert(local_keys[i], (Value_t)cur_page);
 #if defined(TIME_CHECK)
 		clock_gettime(CLOCK_MONOTONIC, &end);
 		rdpma_handle_write_elapsed+= end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
@@ -702,7 +709,7 @@ static void server_recv_poll_cq(struct queue *q, int client_id, int queue_id) {
 		}while(ne < 1);
 
 		if(wc.status != IBV_WC_SUCCESS){
-			fprintf(stderr, "Failed status %s (%d)\n", ibv_wc_status_str(wc.status), wc.status);
+			fprintf(stderr, "%s: Failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
 			die("Failed status");
 		}
 
@@ -831,14 +838,19 @@ static device *get_device(struct queue *q)
 
 		if (bf_flag && global_bf) {
 			ctrl->bf = global_bf;
-			uint64_t baseaddr = ctrl->bf->GetBaseAddr();
-//			printf("[ INFO ] NUMBIT %u BA: %lx , %d\n", ctrl->bf->GetNumBits(), baseaddr, ((uint8_t *)baseaddr)[0]);
 			TEST_Z(ctrl->bf_mr_buffer = ibv_reg_mr(
 						dev->pd,
 						(void *)ctrl->bf->GetBaseAddr(),
 						ctrl->bf->GetNumBits(),
 						IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
 			printf("[ INFO ] registered perclient BF memory region key=%u base vaddr=%lx\n", ctrl->bf_mr_buffer->rkey, ctrl->bf->GetBaseAddr());
+
+			TEST_Z(ctrl->bf_mr_bits_buffer = ibv_reg_mr(
+						dev->pd,
+						(void *)ctrl->bf->GetBoolBitArray(),
+						ctrl->bf->GetNumLongs() * sizeof(long),
+						IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
+			printf("[ INFO ] registered perclient BF bitfield MR key=%u base vaddr=%lx\n", ctrl->bf_mr_bits_buffer->rkey, ctrl->bf->GetBoolBitArray());
 		}
 
 #endif
@@ -1097,7 +1109,7 @@ int alloc_control()
 		global_bf = new CountingBloomFilter<Key_t>(NUM_HASHES, BF_SIZE);
 		dprintf("[  OK  ] Bloom filter(%d, %d) Initialized\n", global_bf->GetNumHashes(), global_bf->GetNumBits());
 	}
-	auto totalSize = 1073741824; // 10GiB
+	auto totalSize = 10737418240; // 10GiB
 	KVStore *kv = new KV( totalSize / 4096,  global_bf);
 	gctrl = (struct ctrl **)malloc(sizeof(struct ctrl *) * NUM_CLIENT);
 	for ( unsigned int c = 0 ; c < NUM_CLIENT ; ++c) {

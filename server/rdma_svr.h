@@ -34,7 +34,7 @@ POBJ_LAYOUT_END(PM_MR);
 #define GET_FREE_PAGE_REGION(addr)  (addr + LOCAL_META_REGION_SIZE)
 
 #define NUM_HASHES 2
-#define BF_SIZE 100000
+#define BF_SIZE 1000000
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
@@ -83,6 +83,7 @@ struct queue {
 		INIT,
 		CONNECTED
 	} state;
+	std::mutex m;
 };
 
 struct memregion {
@@ -95,6 +96,7 @@ struct ctrl {
 	struct queue *queues;
 	struct ibv_mr *mr_buffer;
 	struct ibv_mr *bf_mr_buffer;
+	struct ibv_mr *bf_mr_bits_buffer;
 	uint64_t cid;
 	void *buffer;
 	struct device *dev;

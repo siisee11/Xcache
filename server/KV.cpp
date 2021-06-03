@@ -86,26 +86,27 @@ KV::~KV(void)
 { 
 }
 
-void KV::Insert(Key_t& key, Value_t value) {
+// return deleted or not
+bool KV::Insert(Key_t& key, Value_t value) {
 #ifdef KV_DEBUG
 	struct timespec i_start;
 	struct timespec i_end;
 	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
 	auto deletedKey = hash->Insert(key, value);
-	if (bf_flag) {
+	if (bf) {
 		bf->Insert(key);
-		if (deletedKey != -1) {
+		if (deletedKey != (uint64_t)-1) {
 			deletecnt++;
-//			printf("Key %d deleted\n", deletedKey);
 			bf->Delete(deletedKey);
+//			printf("Key %lu deleted and query %s\n", deletedKey, bf->Query(deletedKey) ? "found":"not found");
 		}
 	}
 #ifdef KV_DEBUG
 	clock_gettime(CLOCK_MONOTONIC, &i_end);
 	insertTime += i_end.tv_nsec - i_start.tv_nsec + (i_end.tv_sec - i_start.tv_sec)*1000000000;
 #endif
-	return;
+	return deletedKey == (uint64_t)-1 ? false : true;
 }
 
 void KV::InsertExtent(Key_t& key, Value_t value, uint64_t len) {
