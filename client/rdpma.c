@@ -1456,7 +1456,7 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 
 #if CBLOOMFILTER
 		rdev->local_bf_bits = (uint64_t)kmalloc(gctrl->bf->bitmap_size_in_byte, GFP_KERNEL);
-		rdev->local_dma_bf_bits_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_bf_bits, bloom_filter_bitsize(gctrl->bf), DMA_BIDIRECTIONAL);
+		rdev->local_dma_bf_bits_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_bf_bits, gctrl->bf->bitmap_size_in_byte, DMA_BIDIRECTIONAL);
 		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_bf_bits_addr))) {
 			ib_dma_unmap_single(rdev->dev,
 					rdev->local_dma_bf_bits_addr, gctrl->bf->bitmap_size_in_byte, DMA_BIDIRECTIONAL);

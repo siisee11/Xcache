@@ -31,7 +31,7 @@
 #define GET_OFFSET_FROM_BASE_TO_PAGE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 
 #define NUM_HASHES 2
-#define BF_SIZE 100000
+#define BF_SIZE 1000000
 
 enum qp_type {
 	QP_READ_SYNC,
