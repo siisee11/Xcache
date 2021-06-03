@@ -95,10 +95,6 @@ int rdpma_write_message_test(void* arg){
 	uint32_t key;
 	long longkey;
 	int failed = 0;
-    struct ht_data *cur, *tmp;
-#ifdef KTIME_CHECK
-	ktime_t start, elapsed;
-#endif
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = (uint32_t)keys[tid][i];
@@ -107,7 +103,6 @@ int rdpma_write_message_test(void* arg){
 #ifdef KTIME_CHECK
 		fperf_start("rdpma_put");
 #endif
-//		start = ktime_get();
 
 #ifdef ONESIDED
 		tmp = (struct ht_data *)kmalloc(sizeof(struct ht_data), GFP_ATOMIC);
@@ -123,8 +118,6 @@ int rdpma_write_message_test(void* arg){
 		ret = rdpma_put(vpages[tid][i], longkey, ORDER_SIZE);
 #endif /* ONESIDED */
 
-//		elapsed = ktime_to_us(ktime_sub(ktime_get(), start));
-//		pr_info("%d page %lld usec \n", i, elapsed);
 
 #ifdef KTIME_CHECK
 		fperf_end("rdpma_put");
@@ -198,8 +191,7 @@ int rdpma_read_message_test(void* arg){
 	uint32_t key, index = 0;
 	int tid = my_data->tid;
 	int nfailed = 0;
-    struct ht_data *cur;
-	long longkey, roffset = 0;
+	long longkey = 0;
 
 	for(i = 0; i < ITERATIONS; i++){
 		key = keys[tid][i];
