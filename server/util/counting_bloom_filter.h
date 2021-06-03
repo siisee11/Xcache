@@ -122,6 +122,19 @@ class CountingBloomFilter {
 			return true;
 		}
 
+		bool QueryBitBloom(T const& o) const {
+			for(uint8_t i = 0; i < GetNumHashes(); i++){
+				auto idx = ComputeHash(o, i);
+				auto j = idx / 64; 
+				uint8_t bitShift = 64 - 1 - (idx % 64);   // i == 65 -> 62 
+				uint64_t checkBit = (uint64_t) 1 << bitShift;
+				if ((m_boolbitarray[j] & checkBit) == 0) {
+					return false;
+				}
+			}
+			return true;
+		}
+
 		virtual void Serialize(std::ostream &os) const {
 			uint8_t numHashes = GetNumHashes();
 			uint16_t numBits = GetNumBits();
@@ -165,11 +178,12 @@ class CountingBloomFilter {
 		 *  @return The new OrdinaryBloomFilter
 		 */
 		void ToOrdinaryBloomFilter() const {
-			for(int i = 0; i < GetNumBits(); i++){
+			for(uint64_t i = 0; i < GetNumBits(); i++){
 				auto j = i / 64; 
 				if (m_bitarray[i] > 0) {
 					uint8_t bitShift = 64 - 1 - (i % 64);   // i == 65 -> 62 
-					m_boolbitarray[j] |= 1 << bitShift;
+					uint64_t checkBit = (uint64_t) 1 << bitShift;
+					m_boolbitarray[j] += checkBit;
 				}
 			}
 			return ;

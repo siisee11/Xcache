@@ -12,7 +12,7 @@ int main(int argc, char *argv[]){
 	}
 
 	CountingBloomFilter<Key_t> *bf;
-	bf = new CountingBloomFilter<Key_t>(4, 100000);
+	bf = new CountingBloomFilter<Key_t>(2, 100000);
 
 	for (int i = 0; i < 9999; i++ ) {
 		bf->Insert(t[i]);
@@ -28,6 +28,16 @@ int main(int argc, char *argv[]){
 		return 1;
 	}
 
+	bf->ToOrdinaryBloomFilter();
+	if(!bf->QueryBitBloom(t[0])){
+		std::cout << "Error: QueryBB for first inserted element was false." << std::endl;
+		return 1;
+	}
+
+	if(bf->QueryBitBloom(t[9999])){
+		std::cout << "Error: QueryBB for non-inserted element was true." << std::endl;
+		return 1;
+	}
 
 	for (int i = 0; i < 9999; i++ ) {
 		if (!bf->Query(t[i])) {
