@@ -84,6 +84,7 @@ KV::KV(size_t size, CountingBloomFilter<Key_t>* _bf)
 
 KV::~KV(void)
 { 
+	return;
 }
 
 // return deleted or not

@@ -38,12 +38,6 @@ oneside:
 	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
 	$(CXX) $(CFLAGS) -o rdma_svr_onesided rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DONESIDED
 
-perf: test_KV.cpp
-	$(CXX) $(CFLAGS) -o kv test_KV.cpp src/linear_probing.o KV.o $(LIBS) $(INCLUDES)
-
-Static: src/static_hash.cpp src/static_hash.h
-	$(CXX) $(CFLAGS) -c src/static_hash.cpp -o src/static_hash.o $(LIBS) $(INCLUDES)
-
 Cuckoo: KV.cpp src/cuckoo_hash.cpp src/cuckoo_hash.h
 	$(CXX) $(CFLAGS) -c src/cuckoo_hash.cpp -o src/cuckoo_hash.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -c -o KV_cuckoo.o KV.cpp $(INCLUDES) $(LIBS) -DCUCKOO

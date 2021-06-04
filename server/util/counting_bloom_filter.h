@@ -91,6 +91,10 @@ class CountingBloomFilter {
 			return (uint64_t)m_boolbitarray;
 		}
 
+		uint64_t GetLong(int idx) const {
+			return m_boolbitarray[idx];
+		}
+
 		void Insert(T const& o) {
 			for(uint8_t i = 0; i < GetNumHashes(); i++){
 				auto idx = ComputeHash(o, i);
@@ -178,12 +182,15 @@ class CountingBloomFilter {
 		 *  @return The new OrdinaryBloomFilter
 		 */
 		void ToOrdinaryBloomFilter() const {
+			for(uint64_t i = 0; i < m_numLongs; i++){
+				m_boolbitarray[i] = 0;
+			}
 			for(uint64_t i = 0; i < GetNumBits(); i++){
 				auto j = i / 64; 
 				if (m_bitarray[i] > 0) {
 					uint8_t bitShift = 64 - 1 - (i % 64);   // i == 65 -> 62 
 					uint64_t checkBit = (uint64_t) 1 << bitShift;
-					m_boolbitarray[j] += checkBit;
+					m_boolbitarray[j] |= checkBit;
 				}
 			}
 			return ;

@@ -170,9 +170,14 @@ int main(int argc, char* argv[]){
 
 	/* Create KV store */
 	KVStore* kv = NULL;
-	CountingBloomFilter<Key_t>* bf = new CountingBloomFilter<Key_t>(2,1000000);
+	CountingBloomFilter<Key_t>* bf = NULL;
+	if (bf_flag) {
+//		bf = new CountingBloomFilter<Key_t>(2,1010000); // 이거 왜안됨?????? ㄹㅇ 개빡치네
+		bf = new CountingBloomFilter<Key_t>(2,1000000);
+		dprintf("[  OK  ] BF Initialized\n");
+	}
 
-	auto totalSize = 10737418240 * 2 ; // 10GiB
+	auto totalSize = 10737418240 * 10 ; // 10GiB
 	kv = new KV( totalSize / 4096, bf );
 	dprintf("[  OK  ] KVStore Initialized\n");
 
@@ -191,10 +196,8 @@ int main(int argc, char* argv[]){
 	}
 	dprintf("[  OK  ] Completed reading dataset\n");
 
-
 	vector<thread> insertingThreads;
 	vector<thread> searchingThreads;
-	vector<thread> mixThreads;
 	vector<int> failed(numNetworkThreads);
 	vector<Key_t> notfoundKeys[numNetworkThreads];
 
@@ -205,6 +208,7 @@ int main(int argc, char* argv[]){
 	};
 
 	auto search = [&kv, &keys, &failed, &notfoundKeys](int from, int to, int tid){
+		sleep(1);
 		int fail = 0;
 		for(int i = from; i < to; i++){
 			auto ret = kv->Get(keys[i]);
@@ -268,7 +272,7 @@ int main(int argc, char* argv[]){
 	while(true) {
 		if (numa_bitmask_isbitset(netcpubuf, cpu_id)) {
 			if(t_id != numNetworkThreads-1) {
-				searchingThreads.emplace_back(thread(search, chunk * t_id, chunk * (t_id+1), t_id));
+				searchingThreads.emplace_back(thread(search, chunk*t_id, chunk*(t_id+1), t_id));
 			}
 			else {
 				searchingThreads.emplace_back(thread(search, chunk*t_id, numData, t_id));
@@ -303,14 +307,14 @@ int main(int argc, char* argv[]){
 
 	if (human) cout << failedSearch << " failedSearch" << endl;
 
+#if 0
 	vector<Key_t> notFoundKeys;
-	for(int i=0; i<numNetworkThreads; i++){
+	for(size_t i=0; i<numNetworkThreads; i++){
 		for(auto& k: notfoundKeys[i]){
 			notFoundKeys.push_back(k);
 		}
 	}
 
-#if 0
 	for(auto& k: notFoundKeys){
 		auto ret = kv->FindAnyway(k);
 		if(ret == NONE){
@@ -332,7 +336,7 @@ int main(int argc, char* argv[]){
 		kv->PrintStats();
 	}
 
-	delete(kv);
+	delete kv;
 
 	return 0;
 }
