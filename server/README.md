@@ -23,6 +23,9 @@ C++ Boost library and include neeeded.
 ```make``` to compile CCEH.
 ```./rdma_svr -t 7777``` to run server on port 7777
 
+## KV testing
+```./kv_linear -W 10-19 -d /dataset/input_sort.txt -n 10000000 -v -h -b```
+
 ## Todos
 
 statistic
