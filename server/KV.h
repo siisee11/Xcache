@@ -18,6 +18,7 @@
 #include "circular_queue.h"
 #include "util/atomic.h"
 #include "util/counting_bloom_filter.h"
+#include "Logger.h"
 
 #define MSG_EMPTY 0
 #define MSG_INSERT 1
@@ -73,6 +74,8 @@ class KV : public KVStore {
 	private:
 		IHash* hash;
 		CountingBloomFilter<Key_t>* bf;
+		Logger *logger;
+		ofstream * _logfile;
 		void* global_chunk = NULL;
 		vector<thread> receivers;
 		vector<thread> cq_pollers;

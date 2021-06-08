@@ -79,6 +79,10 @@ KV::KV(size_t size, CountingBloomFilter<Key_t>* _bf)
 	getTime = 0;
 #endif
 
+	logger = new Logger(LOG_LEVEL_FATAL);
+
+	logger->info("Logger Init", 1);
+
 	dprintf("[  OK  ] KV init\n");
 }
 
@@ -95,6 +99,7 @@ bool KV::Insert(Key_t& key, Value_t value) {
 	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
 	auto deletedKey = hash->Insert(key, value);
+	logger->info("Insert", 1);
 	if (bf) {
 		bf->Insert(key);
 		if (deletedKey != (uint64_t)-1) {

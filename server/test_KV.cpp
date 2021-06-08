@@ -336,7 +336,7 @@ int main(int argc, char* argv[]){
 		kv->PrintStats();
 	}
 
-	delete kv;
+//	delete kv;
 
 	return 0;
 }

@@ -46,9 +46,10 @@ Cuckoo: KV.cpp src/cuckoo_hash.cpp src/cuckoo_hash.h
 
 LinearProbing: src/linear_probing.cpp src/linear_probing.h
 	$(CXX) $(CFLAGS) -c src/linear_probing.cpp -o src/linear_probing.o $(LIBS) $(INCLUDES)
+	$(CXX) $(CFLAGS) -c -o Logger.o Logger.cpp $(INCLUDES) $(LIBS)
 	$(CXX) $(CFLAGS) -c -o KV_linear.o KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
-	$(CXX) $(CFLAGS) -o kv_linear test_KV.cpp src/linear_probing.o KV_linear.o $(LIBS) $(INCLUDES)
-	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/linear_probing.o KV_linear.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
+	$(CXX) $(CFLAGS) -o kv_linear test_KV.cpp src/linear_probing.o KV_linear.o Logger.o $(LIBS) $(INCLUDES)
+	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/linear_probing.o KV_linear.o Logger.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 Extendible: src/extendible_hash.cpp src/extendible_hash.h
 	$(CXX) $(CFLAGS) -c src/extendible_hash.cpp -o src/extendible_hash.o $(LIBS) $(INCLUDES)
