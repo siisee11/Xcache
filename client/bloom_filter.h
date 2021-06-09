@@ -15,12 +15,12 @@ struct bloom_filter *bloom_filter_ref(struct bloom_filter *filter);
 void bloom_filter_unref(struct bloom_filter *filter);
 
 int bloom_filter_add(struct bloom_filter *filter,
-		     const u8 *data, unsigned int);
+		     const void *data, unsigned int);
 int bloom_filter_check(struct bloom_filter *filter,
-		       const u8 *data, unsigned int size,
+		       const void *data, unsigned int size,
 		       bool *result);
 void bloom_filter_set(struct bloom_filter *filter,
-		      const u8 *bit_data);
+		      const void *bit_data);
 int bloom_filter_bitsize(struct bloom_filter *filter);
 
 #endif /* _BLOOM_H_ */

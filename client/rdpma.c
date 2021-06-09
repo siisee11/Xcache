@@ -1031,7 +1031,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 
 #ifdef CBLOOMFILTER
 	// Client side bloom filter enabled.
-	bloom_filter_check(gctrl->bf, (char *)&key, sizeof(key), &isIn);
+	bloom_filter_check(gctrl->bf, (void *)&key, sizeof(key), &isIn);
 	if (!isIn)
 		return -1;
 #endif
@@ -1456,7 +1456,7 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 
 #if CBLOOMFILTER
 //		rdev->local_bf_bits = (uint64_t)kmalloc(gctrl->bf->bitmap_size_in_byte, GFP_KERNEL);
-		rdev->local_bf_bits = gctrl->bf->bitmap;
+		rdev->local_bf_bits = (uint64_t)gctrl->bf->bitmap;
 		rdev->local_dma_bf_bits_addr = ib_dma_map_single(rdev->dev, (void *)rdev->local_bf_bits, gctrl->bf->bitmap_size_in_byte, DMA_BIDIRECTIONAL);
 		if (unlikely(ib_dma_mapping_error(rdev->dev, rdev->local_dma_bf_bits_addr))) {
 			ib_dma_unmap_single(rdev->dev,

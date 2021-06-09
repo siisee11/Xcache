@@ -30,9 +30,8 @@
 #define GET_OFFSET_FROM_BASE_TO_ADDR(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + 16)
 #define GET_OFFSET_FROM_BASE_TO_PAGE(qid, mid) 		(NUM_ENTRY * ENTRY_SIZE * qid + ENTRY_SIZE * mid + METADATA_SIZE)
 
-#define NUM_HASHES 10
-//#define BF_SIZE 10000000
-#define BF_SIZE 33554432
+#define NUM_HASHES 4
+#define BF_SIZE 10000000
 //#define BF_SIZE 1969760731
 
 enum qp_type {

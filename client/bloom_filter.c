@@ -57,7 +57,7 @@ static void __bloom_filter_free(struct kref *kref)
 }
 
 int bloom_filter_add(struct bloom_filter *filter,
-		     const u8 *data, unsigned int datalen)
+		     const void *data, unsigned int datalen)
 {
 	int ret = 0;
 	int i;
@@ -72,7 +72,7 @@ int bloom_filter_add(struct bloom_filter *filter,
 }
 
 int bloom_filter_check(struct bloom_filter *filter,
-		       const u8 *data, unsigned int datalen,
+		       const void *data, unsigned int datalen,
 		       bool *result)
 {
 	int ret = 0;
@@ -82,7 +82,8 @@ int bloom_filter_check(struct bloom_filter *filter,
 	*result = true;
 
 	for (i = 0 ; i < filter->nr_hash; i++ ) {
-		index = hash_funcs[i](data, datalen, i) % filter->bitmap_size;
+		index = hash_funcs[1](data, datalen, i) % filter->bitmap_size;
+		if (*(uint64_t *)data == 0) pr_info("data=%lx index = %lu\n", *(uint64_t *)data, index);
 
 		if (!test_bit(index, filter->bitmap)) {
 			*result = false;
@@ -94,7 +95,7 @@ int bloom_filter_check(struct bloom_filter *filter,
 }
 
 void bloom_filter_set(struct bloom_filter *filter,
-		      const u8 *bit_data)
+		      const void *bit_data)
 {
 	memcpy(filter->bitmap, bit_data,
 		BITS_TO_LONGS(filter->bitmap_size) * sizeof(unsigned long));
@@ -104,3 +105,4 @@ int bloom_filter_bitsize(struct bloom_filter *filter)
 {
 	return BITS_TO_LONGS(filter->bitmap_size) * sizeof(unsigned long);
 }
+
