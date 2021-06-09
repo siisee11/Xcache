@@ -83,7 +83,16 @@ int bloom_filter_check(struct bloom_filter *filter,
 
 	for (i = 0 ; i < filter->nr_hash; i++ ) {
 		index = hash_funcs[1](data, datalen, i) % filter->bitmap_size;
-		if (*(uint64_t *)data == 0) pr_info("data=%lx index = %lu\n", *(uint64_t *)data, index);
+		if (*(uint64_t *)data == 0) {
+			pr_info("data=%lx index = %lu, ", *(uint64_t *)data, index);
+			unsigned int j = idx / 64;
+			uint8_t bitShift = 64 - 1 - (idx % 64);   // i == 65 -> 62
+			uint64_t checkBit = (uint64_t) 1 << bitShift;
+			if ((filter->bitmap[j] & checkBit) == 0) {
+				pr_info("not in\n");
+			}
+			pr_info("in\n");
+		}
 
 		if (!test_bit(index, filter->bitmap)) {
 			*result = false;
