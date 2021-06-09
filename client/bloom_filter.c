@@ -64,7 +64,7 @@ int bloom_filter_add(struct bloom_filter *filter,
 	unsigned int index;
 
 	for (i = 0 ; i < filter->nr_hash; i++ ) {
-		index = hash_funcs[i](data, datalen, i) % filter->bitmap_size;
+		index = hash_funcs[1](data, datalen, i) % filter->bitmap_size;
 
 		unsigned int j = index / 64;
 		uint8_t bitShift = 64 - 1 - (index % 64);   // i == 65 -> 62
