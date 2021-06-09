@@ -157,6 +157,10 @@ void send_bf(struct queue *q, int cid) {
 	uint64_t bitAddr = global_bf->GetBoolBitArray();
 	size_t size = global_bf->GetNumLongs() * sizeof(long);
 
+//	printf("First bits of bf = %lu\n", global_bf->GetLong(0)); :: PASS
+	printf("Existence of Key 0 = %s \n", global_bf->QueryBitBloom(0)?"true":"false");
+//	printf("Existence of Key 300 = %s \n", global_bf->Query(0)?"true":"false");
+
 	sge.addr = bitAddr;
 	sge.length = size;
 	sge.lkey = gctrl[cid]->bf_mr_bits_buffer->lkey;
@@ -196,10 +200,11 @@ void send_bf(struct queue *q, int cid) {
  */
 void rdpma_bf_sender(int c) {
 	while (!done) {
-		sleep(1);
+		sleep(10);
 		if (global_bf) {
 			global_bf->ToOrdinaryBloomFilter();
 			send_bf(&gctrl[c]->queues[0], c);
+			printf("[ INFO ] Send bloomfilter to client\n");
 		}
 	}
 }

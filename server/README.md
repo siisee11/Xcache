@@ -28,6 +28,7 @@ C++ Boost library and include neeeded.
 
 ## Todos
 
+[ ] increase hash_func size
 statistic
 
 ## Timeline

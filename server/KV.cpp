@@ -80,8 +80,7 @@ KV::KV(size_t size, CountingBloomFilter<Key_t>* _bf)
 #endif
 
 	logger = new Logger(LOG_LEVEL_FATAL);
-
-	logger->info("Logger Init", 1);
+	logger->info("Logger Init", 0);
 
 	dprintf("[  OK  ] KV init\n");
 }
@@ -99,10 +98,13 @@ bool KV::Insert(Key_t& key, Value_t value) {
 	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
 	auto deletedKey = hash->Insert(key, value);
-	logger->info("Insert", 1);
+//	logger->info("Insert, Key=%lu", key);
+//	std::cout << "Insert, "<< key << endl;
 	if (bf) {
 		bf->Insert(key);
 		if (deletedKey != (uint64_t)-1) {
+//			logger->info("Delete, Key=%lu", key);
+//			std::cout << "Delete, "<< key << endl;
 			deletecnt++;
 			bf->Delete(deletedKey);
 //			printf("Key %lu deleted and query %s\n", deletedKey, bf->Query(deletedKey) ? "found":"not found");
