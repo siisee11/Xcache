@@ -8,6 +8,20 @@ Logger::Logger()
 Logger::Logger(int level)
 {
 	this->logLevel = level;
+
+	FILE *fp = NULL;
+	fp = fopen(__LOG_FILE__, "w");
+
+	if(fp == NULL)
+	{
+		puts("fail to open file pointer");
+		return;
+	}
+
+	if(fp != NULL)
+	{
+		fclose(fp);
+	}
 }
 
 string Logger::getTimestamp()

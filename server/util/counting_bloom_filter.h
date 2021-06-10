@@ -117,8 +117,10 @@ class CountingBloomFilter {
 		}
 
 		bool Query(T const& o) const {
+			printf("Query : ");
 			for(uint8_t i = 0; i < GetNumHashes(); i++){
 				auto idx = ComputeHash(o, i);
+				printf("%lu, ", idx);
 				if(m_bitarray[idx] == 0){
 					return false;
 				}
@@ -127,8 +129,10 @@ class CountingBloomFilter {
 		}
 
 		bool QueryBitBloom(T const& o) const {
+			printf("Query BB : ");
 			for(uint8_t i = 0; i < GetNumHashes(); i++){
 				auto idx = ComputeHash(o, i);
+				printf("%lu, ", idx);
 				auto j = idx / 64; 
 				uint8_t bitShift = 64 - 1 - (idx % 64);   // i == 65 -> 62 
 				uint64_t checkBit = (uint64_t) 1 << bitShift;
