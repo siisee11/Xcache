@@ -2001,36 +2001,40 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 			DMA_TO_DEVICE);
 	if (unlikely(ret))
 		goto out;
+	qe[0]->cqe.done = pmdfc_rdma_send_localmr_done;
 
+	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[0], sizeof(struct pmdfc_rdma_memregion));
+	if (unlikely(ret))
+		goto out_free_qe;
+	/* this delay doesn't really matter, only happens once */
+	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[0], 1000);
+
+	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
+			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
+
+#ifdef CBLOOMFILTER
 	ret = get_req_for_buf(&qe[1], dev, &(ctrl->cbfmr), sizeof(ctrl->cbfmr),
 			DMA_TO_DEVICE);
 	if (unlikely(ret))
 		goto out;
 
-	qe[0]->cqe.done = pmdfc_rdma_send_localmr_done;
 	qe[1]->cqe.done = pmdfc_rdma_send_localmr_done;
-
-	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[0], sizeof(struct pmdfc_rdma_memregion));
-	if (unlikely(ret))
-		goto out_free_qe;
 
 	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[1], sizeof(struct pmdfc_rdma_memregion));
 	if (unlikely(ret))
 		goto out_free_qe;
 
-	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[0], 1000);
 	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[1], 1000);
-
-	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
-			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
 
 	pr_info("[ INFO ] cbfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->cbfmr.baseaddr,
 			ctrl->cbfmr.key, ctrl->cbfmr.mr_size/1024);
+#endif
 
 out_free_qe:
 	kmem_cache_free(req_cache, qe[0]);
+#ifdef CBLOOMFILTER
 	kmem_cache_free(req_cache, qe[1]);
+#endif
 out:
 	return ret;
 }
