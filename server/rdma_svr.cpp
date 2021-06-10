@@ -158,7 +158,7 @@ void send_bf(struct queue *q, int cid) {
 	size_t size = global_bf->GetNumLongs() * sizeof(long);
 
 //	printf("First bits of bf = %lu\n", global_bf->GetLong(0)); :: PASS
-	printf("Existence of Key 0 = %s \n", global_bf->QueryBitBloom(0)?"true":"false");
+//	printf("Existence of Key 0 = %s \n", global_bf->QueryBitBloom(0)?"true":"false");
 //	printf("Existence of Key 300 = %s \n", global_bf->Query(0)?"true":"false");
 
 	sge.addr = bitAddr;
@@ -1048,7 +1048,7 @@ int on_connection(struct queue *q)
 
 #ifdef CBLOOMFILTER
 		rwr[0].next = &rwr[1];
-		/* GET CLIENT MR REGION */
+		/* GET CLIENT BFMR REGION */
 		sge[1].addr = (uint64_t) &ctrl->bfmr;
 		sge[1].length = sizeof(struct memregion);
 		sge[1].lkey = ctrl->mr_buffer->lkey;
