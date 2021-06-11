@@ -1975,9 +1975,9 @@ static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
 	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[0], 1000);
 	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[1], 1000);
 
-	pr_info("[ INFO ] servermr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->servermr.baseaddr,
+	pr_info("[ INFO ] | Server -> Client | servermr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->servermr.baseaddr,
 			ctrl->servermr.key, ctrl->servermr.mr_size/1024);
-	pr_info("[ INFO ] bfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->bfmr.baseaddr,
+	pr_info("[ INFO ] | Server -> Client | bfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->bfmr.baseaddr,
 			ctrl->bfmr.key, ctrl->bfmr.mr_size/1024);
 
 
