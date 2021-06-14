@@ -21,13 +21,14 @@
 #include "hash.h"
 
 
-struct bloom_filter *bloom_filter_new(unsigned int num_hash, unsigned int bit_size)
+struct bloom_filter *bloom_filter_new(uint64_t bits_addr, unsigned int num_hash, unsigned int bit_size)
 {
 	struct bloom_filter *filter;
 	unsigned long bitmap_size = BITS_TO_LONGS(bit_size)
-				  * sizeof(unsigned long);
+		* sizeof(unsigned long);
 
-	filter = kzalloc(sizeof(*filter) + bitmap_size, GFP_KERNEL);
+	filter = kzalloc(sizeof(*filter), GFP_KERNEL);
+
 	if (!filter)
 		return ERR_PTR(-ENOMEM);
 
@@ -36,6 +37,7 @@ struct bloom_filter *bloom_filter_new(unsigned int num_hash, unsigned int bit_si
 	filter->bitmap_size = bit_size;
 	filter->bitmap_size_in_byte = bitmap_size;
 	filter->nr_hash = num_hash;
+	filter->bitmap = (unsigned long *)bits_addr;
 
 	return filter;
 }

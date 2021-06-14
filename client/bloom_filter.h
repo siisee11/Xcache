@@ -10,7 +10,7 @@ struct bloom_filter {
 	unsigned long		bitmap[0];
 };
 
-struct bloom_filter *bloom_filter_new(unsigned int ,unsigned int bit_size);
+struct bloom_filter *bloom_filter_new(uint64_t, unsigned int ,unsigned int bit_size);
 struct bloom_filter *bloom_filter_ref(struct bloom_filter *filter);
 void bloom_filter_unref(struct bloom_filter *filter);
 
