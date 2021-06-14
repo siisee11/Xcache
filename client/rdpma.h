@@ -57,7 +57,7 @@ struct pmdfc_rdma_dev {
 	uintptr_t local_dma_addr;
 
 	uint64_t local_bf_bits;
-	uintptr_t local_dma_bf_bits_addr;
+	dma_addr_t local_dma_bf_bits_addr;
 };
 
 struct rdma_req {

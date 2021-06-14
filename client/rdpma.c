@@ -41,7 +41,7 @@ int QP_MAX_SEND_WR = 4096;
 //#define NORMALGET 1
 #define TWOSIDED 1
 //#define SBLOOMFILTER 1
-//#define CBLOOMFILTER 1
+#define CBLOOMFILTER 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -1407,6 +1407,7 @@ static struct ib_client pmdfc_rdma_ib_client = {
 static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 {
 	struct pmdfc_rdma_dev *rdev = NULL;
+	int err;
 
 	if (!q->ctrl->rdev) {
 		// called only once.
@@ -1441,7 +1442,6 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		err = dma_set_mask_and_coherent(rdev->dev->dma_device, DMA_BIT_MASK(64));
 		if (err) {
 			printk(KERN_INFO "[%s:probe] dma_set_mask returned: %d\n", __func__, err);
-			return;
 		}
 
 		unsigned long bitmap_size = BITS_TO_LONGS(BF_SIZE) * sizeof(unsigned long);
@@ -1449,13 +1449,12 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		rdev->local_bf_bits = (uint64_t)ib_dma_alloc_coherent(rdev->dev, bitmap_size, &rdev->local_dma_bf_bits_addr, GFP_KERNEL);
 		if (!rdev->local_bf_bits) {
 			printk(KERN_ALERT "[%s:probe] failed to allocate coherent buffer\n", __func__);
-			return;
 		} else {
 			pr_info("[ PASS ] ib_dma_alloc_coherent, rpt_size: %lu KB", bitmap_size/1024);
 		}
 
 		gctrl->bf = bloom_filter_new(rdev->local_bf_bits, NUM_HASHES, BF_SIZE);
-		pr_info("[ INFO ] cbloomfilter created. nr_hash= %d, size= %dB\n", ctrl->bf->nr_hash, ctrl->bf->bitmap_size_in_byte);
+		pr_info("[ INFO ] cbloomfilter created. nr_hash= %d, size= %dB\n", gctrl->bf->nr_hash, gctrl->bf->bitmap_size_in_byte);
 #endif
 
 		/* XXX: allocate memory region here */

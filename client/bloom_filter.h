@@ -7,7 +7,7 @@ struct bloom_filter {
 	unsigned int		bitmap_size;
 	unsigned int 		bitmap_size_in_byte;
 	unsigned int		nr_hash;
-	unsigned long		bitmap[0];
+	unsigned long		*bitmap;
 };
 
 struct bloom_filter *bloom_filter_new(uint64_t, unsigned int ,unsigned int bit_size);
