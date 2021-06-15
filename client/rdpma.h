@@ -32,7 +32,7 @@
 
 #define NUM_HASHES 4
 //#define BF_SIZE 20000000
-#define BF_SIZE 100000000
+#define BF_SIZE 1000000000
 //#define BF_SIZE 1969760731
 
 enum qp_type {

@@ -2026,7 +2026,7 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 	/* this delay doesn't really matter, only happens once */
 	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[0], 1000);
 
-	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
+	pr_info("[ INFO ] | Client -> Server | localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
 			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
 
 #ifdef CBLOOMFILTER
@@ -2043,7 +2043,7 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 
 	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[1], 1000);
 
-	pr_info("[ INFO ] cbfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->cbfmr.baseaddr,
+	pr_info("[ INFO ] | Client -> Server | cbfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->cbfmr.baseaddr,
 			ctrl->cbfmr.key, ctrl->cbfmr.mr_size/1024);
 #endif
 

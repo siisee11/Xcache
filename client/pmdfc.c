@@ -187,12 +187,12 @@ exists:
 	}
 
 
+	/* get page from server */
 	if (onesided) 
 		ret = rdpma_get_onesided(page, roffset, 1);
 	else
 		ret = rdpma_get(page, longkey, 1);
 
-	/* send Address of page */
 	get_cnt++;
 	if (ret == -1)
 		goto not_exists;
