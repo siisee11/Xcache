@@ -1442,15 +1442,17 @@ static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
 		err = dma_set_mask_and_coherent(rdev->dev->dma_device, DMA_BIT_MASK(64));
 		if (err) {
 			printk(KERN_INFO "[%s:probe] dma_set_mask returned: %d\n", __func__, err);
+			return NULL;
 		}
 
 		unsigned long bitmap_size = BITS_TO_LONGS(BF_SIZE) * sizeof(unsigned long);
 
 		rdev->local_bf_bits = (uint64_t)ib_dma_alloc_coherent(rdev->dev, bitmap_size, &rdev->local_dma_bf_bits_addr, GFP_KERNEL);
 		if (!rdev->local_bf_bits) {
-			printk(KERN_ALERT "[%s:probe] failed to allocate coherent buffer\n", __func__);
+			printk(KERN_ALERT "[ FAIL ] %s: failed to allocate coherent buffer\n", __func__);
+			return NULL;
 		} else {
-			pr_info("[ PASS ] ib_dma_alloc_coherent, rpt_size: %lu KB", bitmap_size/1024);
+			pr_info("[ PASS ] ib_dma_alloc_coherent, bitmap_size: %lu KB", bitmap_size/1024);
 		}
 
 		gctrl->bf = bloom_filter_new(rdev->local_bf_bits, NUM_HASHES, BF_SIZE);
