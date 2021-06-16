@@ -20,7 +20,7 @@
 #include "rdpma.h"
 
 #define PMDFC_PUT 1
-#define PMDFC_GET 1
+//#define PMDFC_GET 1
 //#define PMDFC_TIME_CHECK 1
 //#define PMDFC_HASHTABLE 1
 

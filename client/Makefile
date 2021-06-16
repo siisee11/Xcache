@@ -1,5 +1,5 @@
 CONFIG_MODULE_SIG=n
-obj-m := pmdfc_client.o pmdfc_rdma_core.o rdma_testing.o
+obj-m := pmdfc_client.o pmdfc_rdma_core.o rdma_testing.o fastswap.o
 
 pmdfc_client-objs := pmdfc.o
 pmdfc_rdma_core-objs := rdpma.o bloom_filter.o
@@ -31,6 +31,7 @@ rdma_conn:
 pmdfc_client:
 	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
 	insmod ./pmdfc_client.ko 
+	insmod ./fastswap.ko 
 
 pmdfc_client_onesided:
 	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)

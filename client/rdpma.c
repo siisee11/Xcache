@@ -41,7 +41,7 @@ int QP_MAX_SEND_WR = 4096;
 //#define NORMALGET 1
 #define TWOSIDED 1
 //#define SBLOOMFILTER 1
-#define CBLOOMFILTER 1
+//#define CBLOOMFILTER 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -412,13 +412,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 		ne = ib_poll_cq(q->qp->recv_cq, 1, &wc);
 		if(ne < 0){
 			printk(KERN_ALERT "[%s]: ib_poll_cq failed\n", __func__);
-			return 1;
+			return -1;
 		}
 	}while(ne < 1);
 
 	if(unlikely(wc.status != IB_WC_SUCCESS)){
 		printk(KERN_ALERT "[%s]: recv request failed status %s(%d) for wr_id %d\n", __func__, ib_wc_status_msg(wc.status), wc.status, (int)wc.wr_id);
-		return 1;
+		return -1;
 	}
 #endif
 
