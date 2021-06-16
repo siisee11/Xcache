@@ -5,7 +5,7 @@
 #include <shared_mutex>
 #include "util/persist.h"
 #include "util/hash.h"
-#include "linear_probing.h"
+#include "cuckoo_probing.h"
 
 LinearProbingHash::LinearProbingHash(void)
 	: capacity{0}, dict{nullptr} { }
@@ -22,7 +22,15 @@ LinearProbingHash::~LinearProbingHash(void) {
 	if (dict != nullptr) delete[] dict;
 }
 
-// return deleted key
+
+/*
+ * cluster (always sorted)
+ * -----------------------------------------
+ * |  cuckoo-ed   |  old      ->      new  |
+ * -----------------------------------------
+ *
+ * return deleted key
+ */
 Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 	using namespace std;
 	auto key_hash = h(&key, sizeof(key));
@@ -48,18 +56,74 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 		}
 	}
 
-	// Delete first element of this cluster and shift all element to the left.
+	// If there is no available slot. 
+	// If first element is cuckoo-ed Pair,
+	// Delete first element of this cluster and Insert new element at head.
+	if ( (uint64_t)dict[firstIndex].value & cuckooBit ) {
+		auto deleteKey = dict[firstIndex].key;
+		for (int j = 0 ; j < locksize -1 ; j++) {
+			auto target = firstIndex + j;
+			dict[target].key = dict[target + 1].key;
+			dict[target].value = dict[target + 1].value;
+		}
+
+		dict[firstIndex + locksize - 1].key = key;
+		dict[firstIndex + locksize - 1].value = value;	
+		clflush((char*)&dict[firstIndex].key, sizeof(Pair) * locksize);
+		return deleteKey;
+	}
+	
+	// Cuckoo (Delete oldest one in first hash cluster, and move it to next hash cluster)
+	// Delete first element and shift.
 	// Insert new element at tail.
-	auto deleteKey = dict[firstIndex].key;
+	Pair cuckooPair = dict[firstIndex];
 	for (int j = 0 ; j < locksize -1 ; j++) {
 		auto target = firstIndex + j;
 		dict[target].key = dict[target + 1].key;
 		dict[target].value = dict[target + 1].value;
 	}
 	dict[firstIndex + locksize - 1].key = key;
-	dict[firstIndex + locksize - 1].value = value;
-
+	dict[firstIndex + locksize - 1].value = value;	
 	clflush((char*)&dict[firstIndex].key, sizeof(Pair) * locksize);
+
+	// Check Next hash position.
+	auto next_hash = hash_funcs[0](&key, sizeof(key), 951125);
+	slot = next_hash % capacity;
+	off = slot % locksize;
+	firstIndex = slot - off;
+	for ( int j = 0 ; j < locksize - 1; j++ ) {
+		slot = firstIndex + j;
+
+		// +-----------------------+    +-----------------------+
+		// | a | b | c | INV | ... | -> | new | a | b | c | ... |
+		// +-----------------------+    +-----------------------+
+		// if there is available slot, shift left element to the right.
+
+		if (dict[slot].key == INVALID) {
+			for (int i = j ; i > 0 ; i-- ) {
+				dict[firstIndex + i].value = dict[firstIndex + i - 1].value;
+				mfence();
+				dict[firstIndex + i].key = dict[firstIndex + i - 1].key;
+			}
+			dict[firstIndex].key = cuckooPair.key;
+			mfence();
+			dict[firstIndex].value = (Value_t)((uint64_t)cuckooPair.value | cuckooBit);
+			clflush((char*)&dict[firstIndex].key, sizeof(Pair) * locksize);
+			auto _size = size;
+			while (!CAS(&size, &_size, _size+1)) {
+				_size = size;
+			}
+
+			return -1;
+		}
+	}
+
+	// Delete first element of this cluster.
+	// Insert new element at head.
+	auto deleteKey = dict[firstIndex].key;
+	dict[firstIndex].key = cuckooPair.key;
+	dict[firstIndex].value = (Value_t)((uint64_t)cuckooPair.value | cuckooBit);
+	clflush((char*)&dict[firstIndex].key, sizeof(Pair));
 	
 	return deleteKey;
 }
@@ -95,6 +159,22 @@ Value_t LinearProbingHash::Get(Key_t& key) {
 			if (dict[id].key == key) return std::move(dict[id].value);
 		}
 	}
+
+	// Check Next hash position.
+	auto next_hash = hash_funcs[0](&key, sizeof(key),951125);
+	loc = next_hash % capacity; // target location of key
+	off = loc % locksize;
+	firstIndex = loc - off;
+	{
+		std::shared_lock<std::shared_mutex> lock(mutex[loc/locksize]);
+		for (int i = 0; i < locksize - 1; ++i) {
+			auto id = firstIndex + i;
+			if (dict[id].key == key) {
+				return std::move((Value_t)((uint64_t)dict[id].value & ~cuckooBit));
+			}
+		}
+	}
+
 	return NONE;
 }
 

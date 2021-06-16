@@ -20,7 +20,7 @@
 #include "rdma_svr.h"
 #include "variables.h"
 
-#define CBLOOMFILTER 1
+//#define CBLOOMFILTER 1
 
 /* option values */
 int tcp_port = -1;
@@ -1114,8 +1114,7 @@ int alloc_control()
 		global_bf = new CountingBloomFilter<Key_t>(NUM_HASHES, BF_SIZE);
 		dprintf("[  OK  ] Bloom filter(%d, %d) Initialized\n", global_bf->GetNumHashes(), global_bf->GetNumBits());
 	}
-	auto totalSize = 10737418240; // 10GiB
-	KVStore *kv = new KV( totalSize / 4096,  global_bf);
+	KVStore *kv = new KV( BUFFER_SIZE / 4096,  global_bf);
 	gctrl = (struct ctrl **)malloc(sizeof(struct ctrl *) * NUM_CLIENT);
 	for ( unsigned int c = 0 ; c < NUM_CLIENT ; ++c) {
 		gctrl[c] = (struct ctrl *) malloc(sizeof(struct ctrl));

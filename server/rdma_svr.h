@@ -34,14 +34,15 @@ POBJ_LAYOUT_END(PM_MR);
 #define GET_FREE_PAGE_REGION(addr)  (addr + LOCAL_META_REGION_SIZE)
 
 #define NUM_HASHES 4
-#define BF_SIZE 10000000
+#define BF_SIZE 20000000
+//#define BF_SIZE 1000000000
 //#define BF_SIZE 1969760731
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
-//const size_t BUFFER_SIZE = ((1UL << 30) * 200);
-const size_t BUFFER_SIZE = ((1UL << 30) * 10);
+//const size_t BUFFER_SIZE = ((1UL << 30) * 50); // 50GB
+const size_t BUFFER_SIZE = ((1UL << 30) * 100); // 100GB
 
 enum{
 	MSG_WRITE_REQUEST,
