@@ -55,6 +55,7 @@ CuckooProbing: src/cuckoo_probing.cpp src/cuckoo_probing.h
 	$(CXX) $(CFLAGS) -c src/cuckoo_probing.cpp -o src/cuckoo_probing.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -c -o Logger.o Logger.cpp $(INCLUDES) $(LIBS)
 	$(CXX) $(CFLAGS) -c -o KV_cuckoop.o KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
+	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
 	$(CXX) $(CFLAGS) -o kv_cuckoop test_KV.cpp src/cuckoo_probing.o KV_cuckoop.o Logger.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/cuckoo_probing.o KV_cuckoop.o Logger.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
