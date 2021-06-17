@@ -955,7 +955,7 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	int queue_id;
 	struct ib_wc wc;
 	int ret, ne = 0;
-	int qid, mid, type, tx_state;
+	int qid, mid, type, tx_state = 0;
 	uint32_t num;
 	struct rdpma_metadata *meta;
 	struct rdma_req *req[2];
@@ -1894,8 +1894,8 @@ static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
 	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct pmdfc_rdma_memregion),
 			DMA_FROM_DEVICE); 
 
-//	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
-//			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
+	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
+			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
 	complete_all(&qe->done);
 }
 

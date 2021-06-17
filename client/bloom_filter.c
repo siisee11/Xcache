@@ -91,9 +91,11 @@ int bloom_filter_check(struct bloom_filter *filter,
 
 	for (i = 0 ; i < filter->nr_hash; i++ ) {
 		index = hash_funcs[1](data, datalen, i) % filter->bitmap_size;
+		/*
 		if (*(uint64_t *)data == 0) {
 			pr_info("data=%lx index = %lu, ", *(uint64_t *)data, index);
 		}
+		*/
 
 		unsigned int j = index / 64;
 		uint8_t bitShift = 64 - 1 - (index % 64);   // i == 65 -> 62
