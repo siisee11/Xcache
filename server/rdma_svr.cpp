@@ -820,16 +820,6 @@ static device *get_device(struct queue *q)
 			// Shared MR region for every client.
 			global_mr = (uint64_t)malloc(BUFFER_SIZE +  NUM_CLIENT * LOCAL_META_REGION_SIZE);
 			TEST_Z(global_mr);
-/*
-			TEST_Z(global_mr_buffer = ibv_reg_mr(
-						dev->pd,
-						(void *)global_mr,
-						BUFFER_SIZE + NUM_CLIENT * LOCAL_META_REGION_SIZE,
-						IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
-			dprintf("[ INFO ] register shared memory region of %zu MB\n", (BUFFER_SIZE)/1024/1024);
-			printf("[ INFO ] registered shared memory region key=%u base vaddr=%lx\n", global_mr_buffer->rkey, global_mr);
-			*/
-
 		}
 
 		ctrl->local_mm = global_mr + BUFFER_SIZE + LOCAL_META_REGION_SIZE * ctrl->cid;
