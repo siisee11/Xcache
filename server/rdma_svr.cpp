@@ -1209,11 +1209,28 @@ int main(int argc, char **argv)
 
 	nr_cpus = std::thread::hardware_concurrency();
 
+	// Server configuration display (when human flag is true)
+	if (human) {
+		printf("[ INFO ] Configurations \n");
+		printf("\t  +-- Bloomfilter \t: %s \n", bf_flag ? "on" : "off");
+		if (bf_flag) printf("BF_SIZE \t: %d \n", BF_SIZE);
+#ifdef CBLOOMFILTER 
+		printf("\t  +-- CBLOOMFILTER \t: on \n");
+#endif
+		printf("\t  +-- BUFFER_SIZE \t: %d MB \n", BUFFER_SIZE/1024/1024);
+		printf("\t  +-- BATCH_SIZE \t: %d \n", BATCH_SIZE);
+		printf("\t  +-- NUM_CLIENT \t: %d \n", NUM_CLIENT);
+		printf("\t  +-- NUM_QUEUES \t: %d \n", NUM_QUEUES);
+		printf("\n");
+
+	}
+
+
+
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(tcp_port);
 
 	TEST_NZ(alloc_control());
-
 	TEST_Z(ec = rdma_create_event_channel());
 	TEST_NZ(rdma_create_id(ec, &listener, NULL, RDMA_PS_TCP));
 	TEST_NZ(rdma_bind_addr(listener, (struct sockaddr *)&addr));
