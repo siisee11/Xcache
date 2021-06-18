@@ -330,10 +330,19 @@ static int __init pmdfc_init(void)
 	pmdfc_debugfs_init();
 #endif
 
-	pr_info("Hostname: \tapache1\n");
-	pr_info("Transport: \t%s\n", "rdma");
-	pr_info("Method:   \t%s\n", onesided? "onesided" : "twosided");
-	
+	pr_info("[ INFO ] * CKCache BACKEND *\n");
+	pr_info("\t  +-- Hostname\t: apache1\n");
+	pr_info("\t  +-- Method  \t: %s\n", onesided? "onesided" : "twosided");
+#ifdef PMDFC_HASHTABLE
+	pr_info("\t  +-- PMDFC_HASHTABLE on\n");
+#endif
+#ifdef PMDFC_GET
+	pr_info("\t  +-- PMDFC_GET on\n");
+#endif
+#ifdef PMDFC_PUT  
+	pr_info("\t  +-- PMDFC_PUT on\n");
+#endif
+
 #ifdef PMDFC_HASHTABLE
     hash_init(hash_head);
     pr_info("[  OK  ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 

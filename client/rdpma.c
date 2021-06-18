@@ -1,4 +1,4 @@
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+//#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/slab.h>
 #include <linux/cpumask.h>
@@ -41,7 +41,7 @@ int QP_MAX_SEND_WR = 4096;
 //#define NORMALGET 1
 #define TWOSIDED 1
 //#define SBLOOMFILTER 1
-//#define CBLOOMFILTER 1
+#define CBLOOMFILTER 1
 
 static uint32_t bit_mask(int num, int msg_num, int type, int state, int qid){
 	uint32_t target = (((uint32_t)num << 28) | ((uint32_t)msg_num << 16) | ((uint32_t)type << 12) | ((uint32_t)state << 8) | ((uint32_t)qid & 0x000000ff));
@@ -2076,7 +2076,20 @@ static int __init rdma_connection_init_module(void)
 	unsigned int i, j;
 
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
-	pr_info("[ INFO ] * RDMA BACKEND *");
+	pr_info("[ INFO ] * RDMA BACKEND *\n");
+#ifdef TWOSIDED
+	pr_info("\t  +-- Method  \t: TWOSIDED \n");
+#endif
+#ifdef CBLOOMFILTER 
+	pr_info("\t  +-- filter   \t: CBLOOMFILTER\n");
+	pr_info("\t  +-- BF_SIZE  \t: %d\n", BF_SIZE);
+	pr_info("\t  +-- NUM_HASHES\t: %d\n", NUM_HASHES);
+#endif
+#ifdef SBLOOMFILTER 
+	pr_info("\t  +-- filter   \t: SBLOOMFILTER\n");
+#endif
+	pr_info("\t  +-- BATCH_SIZE\t: %d\n", BATCH_SIZE);
+	pr_info("\t  +-- NUM_QUEUES\t: %d\n", NUM_QUEUES);
 
 	numcpus = num_online_cpus();
 //	numqueues = numcpus * 2; // read, write
