@@ -2,8 +2,8 @@
 # Use is subject to license terms.
 #
 
-set $dir=/tmp
-set $nfiles=100000
+set $dir=/nfs
+set $nfiles=80000
 set $meandirwidth=20
 set $filesize=cvar(type=cvar-gamma,parameters=mean:163840;gamma:1.5)
 set $nthreads=100

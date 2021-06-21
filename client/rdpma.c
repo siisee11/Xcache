@@ -1131,6 +1131,8 @@ out:
 	kmem_cache_free(req_cache, req[0]);
 	kmem_cache_free(req_cache, req[1]);
 
+	kfree(meta);
+
 	if ( tx_state == TX_READ_ABORTED ) {
 		ret = -1;
 	} else {
