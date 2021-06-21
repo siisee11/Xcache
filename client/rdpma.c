@@ -2080,15 +2080,15 @@ static int __init rdma_connection_init_module(void)
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 	pr_info("[ INFO ] * RDMA BACKEND *\n");
 #ifdef TWOSIDED
-	pr_info("\t  +-- Method  \t: TWOSIDED \n");
+	pr_info("\t  +-- Method     \t: TWOSIDED \n");
 #endif
 #ifdef CBLOOMFILTER 
-	pr_info("\t  +-- filter   \t: CBLOOMFILTER\n");
-	pr_info("\t  +-- BF_SIZE  \t: %d\n", BF_SIZE);
+	pr_info("\t  +-- Filter     \t: CBLOOMFILTER\n");
+	pr_info("\t  +-- BF_SIZE    \t: %d\n", BF_SIZE);
 	pr_info("\t  +-- NUM_HASHES\t: %d\n", NUM_HASHES);
 #endif
 #ifdef SBLOOMFILTER 
-	pr_info("\t  +-- filter   \t: SBLOOMFILTER\n");
+	pr_info("\t  +-- Filter   \t: SBLOOMFILTER\n");
 #endif
 	pr_info("\t  +-- BATCH_SIZE\t: %d\n", BATCH_SIZE);
 	pr_info("\t  +-- NUM_QUEUES\t: %d\n", NUM_QUEUES);
