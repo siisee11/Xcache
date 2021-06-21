@@ -20,7 +20,7 @@
 #include "rdma_svr.h"
 #include "variables.h"
 
-//#define CBLOOMFILTER 1
+#define CBLOOMFILTER 1
 
 /* option values */
 int tcp_port = -1;
@@ -1213,7 +1213,7 @@ int main(int argc, char **argv)
 	if (human) {
 		printf("[ INFO ] Configurations \n");
 		printf("\t  +-- Bloomfilter \t: %s \n", bf_flag ? "on" : "off");
-		if (bf_flag) printf("BF_SIZE \t: %d \n", BF_SIZE);
+		if (bf_flag) printf("\t  +-- BF_SIZE     \t: %d \n", BF_SIZE);
 #ifdef CBLOOMFILTER 
 		printf("\t  +-- CBLOOMFILTER \t: on \n");
 #endif
