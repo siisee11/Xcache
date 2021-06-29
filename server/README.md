@@ -35,6 +35,13 @@ rdma_svr.h : BUFFER_SIZE   (Buffer Size)
 ## Requirement
 ~~C++ Boost library and include neeeded.~~
 
+## How to Compile
+```cd build && cmake .. && make```
+
+or ```cd build && cmake .. -G Ninja && ninja``` to use ninja as builder
+
+or simply use Makefile ```make```
+
 ## How to run
 
 ```make LinearProbing``` to compile.
@@ -55,7 +62,8 @@ g++ bftest.cpp -lssl -lcrypto -I./ -g
 ```
 
 ## Todos
-- [ ] increase hash_func size
+- [ ] Support CMAKE
+- [ ] increase hash_func size (util.h)
 - [x] Big Bloomfilter
 - [x] statistic
 - [ ] Free space management

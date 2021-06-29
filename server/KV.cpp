@@ -206,8 +206,8 @@ void KV::PrintStats(void) {
 //	printf("Failed Search = %d\n", failedSearch.load());
 	printf("Total put = %d, get = %d\n", kv_putcnt.load(), kv_getcnt.load());
 	printf("Util =%.3f\t Capa =%lu\n", util, cap);
-	printf("InsertTime = \t%.3f (usec)\n", insertTime/1000.0);
-	printf("GetTime= \t%.3f (usec)\n", getTime/1000.0);
+	printf("InsertTime = \t%.3f (usec/req)\n", insertTime/1000.0/(kv_putcnt.load() + 1));
+	printf("GetTime= \t%.3f (usec/req)\n", getTime/1000.0/(kv_getcnt.load() + 1));
 	printf("Key deleted %d\n", deletecnt.load());
 
 //	printf("%.3f, %lu, %d, %d, %d, %d, %zu, %zu, %.3f, %.3f, %.3f, %.3f, %.3f\n", util, cap, freqs[0], freqs[1], miss_cnt[0].load(), miss_cnt[1].load(), segs[0], segs[1], metrics[0], metrics[1], 
