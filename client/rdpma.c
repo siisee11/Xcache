@@ -25,7 +25,7 @@ module_param_named(nq, numqueues, int, 0644);
 module_param_string(sip, serverip, INET_ADDRSTRLEN, 0644);
 module_param_string(cip, clientip, INET_ADDRSTRLEN, 0644);
 
-#define CONNECTION_TIMEOUT_MS 600000 /* XXX: 60000 -> 600000 */
+#define CONNECTION_TIMEOUT_MS 1000000 /* XXX: 60000 -> 600000 */
 #define QP_QUEUE_DEPTH 256
 /* we don't really use recv wrs, so any small number should do */
 #define QP_MAX_RECV_WR 4096
@@ -320,6 +320,10 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	memset(sge, 0, sizeof(struct ib_sge) * 2);
 
 	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	if (!meta) {
+		pr_err("[ FAIL ] kzalloc(meta) rdpma_put failed\n");
+		return -ENOMEM;
+	}
 	meta->key = key;
 
 	/* DMA PAGE */
@@ -977,6 +981,11 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	// Bloom filter 
 	{
 		indexes = kzalloc(NUM_HASHES, GFP_ATOMIC);
+		if (!indexes) {
+			pr_err("[ FAIL ] kzalloc(indexes) rdpma_get failed\n");
+			return -ENOMEM;
+		}
+
 		ret = get_req_for_buf(&req[0], dev, indexes, NUM_HASHES , DMA_TO_DEVICE);
 		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
 			bf_sge[i].addr = req[0]->dma + i;
@@ -1016,16 +1025,17 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 			goto out;
 		}
 
-		ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, NUM_HASHES, DMA_TO_DEVICE); /* XXX Needed? reuse it */
-		kmem_cache_free(req_cache, req[0]);
-
 		for ( i = 0 ; i < NUM_HASHES ; i++ ) {
 			if (indexes[i] == 0) {
-				pr_info("[ INFO ] Key not exist, skip get\n");
-//				if (indexes) kfree(indexes); 	// kfree error why??
+//				pr_info("[ INFO ] Key not exist, skip get\n");
+				kfree(indexes); 	// kfree error why??
 				return -1;
 			}
 		}
+
+		ib_dma_unmap_page(q->ctrl->rdev->dev, req[0]->dma, NUM_HASHES, DMA_TO_DEVICE); /* XXX Needed? reuse it */
+		kmem_cache_free(req_cache, req[0]);
+		kfree(indexes);
 	}
 #endif
 
@@ -1047,6 +1057,10 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 	BUG_ON(req[0]->dma == 0);
 
 	meta = kzalloc(sizeof(struct rdpma_metadata), GFP_ATOMIC);
+	if (meta == NULL) {
+		pr_err("[ FAIL ] kzalloc(meta) failed\n");
+		return -ENOMEM;
+	}
 	meta->key = key;
 	meta->batch = batch;
 	meta->raddr = req[0]->dma;
@@ -1131,7 +1145,7 @@ out:
 	kmem_cache_free(req_cache, req[0]);
 	kmem_cache_free(req_cache, req[1]);
 
-	kfree(meta);
+	if(meta) kfree(meta);
 
 	if ( tx_state == TX_READ_ABORTED ) {
 		ret = -1;
@@ -2088,7 +2102,7 @@ static int __init rdma_connection_init_module(void)
 	pr_info("\t  +-- NUM_HASHES\t: %d\n", NUM_HASHES);
 #endif
 #ifdef SBLOOMFILTER 
-	pr_info("\t  +-- Filter   \t: SBLOOMFILTER\n");
+	pr_info("\t  +-- Filter     \t: SBLOOMFILTER\n");
 #endif
 	pr_info("\t  +-- BATCH_SIZE\t: %d\n", BATCH_SIZE);
 	pr_info("\t  +-- NUM_QUEUES\t: %d\n", NUM_QUEUES);
