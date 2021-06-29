@@ -14,12 +14,12 @@
 constexpr size_t kSegmentBits = 8;
 constexpr size_t kMask = (1 << kSegmentBits)-1;
 constexpr size_t kShift = kSegmentBits;
-constexpr size_t kSegmentSize = (1 << kSegmentBits) * 16 * 4;
+constexpr size_t kSegmentSize = (1 << kSegmentBits) * 16 * 4; // 2**kSegmentBits * Pair * Bucket Size
 constexpr size_t kNumPairPerCacheLine = 4;
 constexpr size_t kNumCacheLine = 8;
 
 struct Segment {
-  static const size_t kNumSlot = kSegmentSize/sizeof(Pair);
+  static const size_t kNumSlot = kSegmentSize/sizeof(Pair);  // 2**kSegmentBits * Bucket Size  per Segment
 
   Segment(void)
   : local_depth{0}

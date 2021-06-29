@@ -9,28 +9,12 @@ LIBS := -lrdmacm -libverbs -lpthread -lpmemobj -lnuma  -lpmem  -lssl -lcrypto
 CXX := g++
 INCLUDES=-I./
 
-APPS := rdma_svr rdma_svr_odp rdma_svr_bigmr rdma_svr_mix rdma_svr_mix_srq rdma_svr_onesided rdma_svr_twosided kv_cuckoo kv_linear kv_ext kv_level kv_path kv
+APPS := rdma_svr rdma_svr_onesided kv_cuckoo kv_linear kv_ext kv_level kv_path replay_cuckoop replay_linear replay_cceh
 
 all:
 	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
 	$(CXX) $(CFLAGS) -c -o KV.o KV.cpp $(INCLUDES) $(LIBS) 
 	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
-
-mix:
-	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
-	$(CXX) $(CFLAGS) -c -o NuMA_KV.o NuMA_KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
-	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
-	$(CXX) $(CFLAGS) -o rdma_svr_mix rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DNORMALPUT -DBIGMRGET
-
-bigmr:
-	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
-	$(CXX) $(CFLAGS) -c -o NuMA_KV.o NuMA_KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
-	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
-	$(CXX) $(CFLAGS) -o rdma_svr_bigmr rdma_svr.cpp lfcq.o CCEH.o NuMA_KV.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DBIGMRPUT -DBIGMRGET
-
-twosided:
-	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
-	$(CXX) $(CFLAGS) -o rdma_svr_twosided rdma_svr.cpp lfcq.o src/cuckoo_hash.o KV_cuckoo.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 oneside:
 	$(CXX) $(CFLAGS) -c -o CCEH.o CCEH_hybrid.cpp $(INCLUDES) $(LIBS) -DINLINE
@@ -49,14 +33,16 @@ LinearProbing: src/linear_probing.cpp src/linear_probing.h
 	$(CXX) $(CFLAGS) -c -o Logger.o Logger.cpp $(INCLUDES) $(LIBS)
 	$(CXX) $(CFLAGS) -c -o KV_linear.o KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
 	$(CXX) $(CFLAGS) -o kv_linear test_KV.cpp src/linear_probing.o KV_linear.o Logger.o $(LIBS) $(INCLUDES)
+	$(CXX) $(CFLAGS) -o replay_linear replay_KV.cpp src/linear_probing.o KV_linear.o Logger.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/linear_probing.o KV_linear.o Logger.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 CuckooProbing: src/cuckoo_probing.cpp src/cuckoo_probing.h
 	$(CXX) $(CFLAGS) -c src/cuckoo_probing.cpp -o src/cuckoo_probing.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -c -o Logger.o Logger.cpp $(INCLUDES) $(LIBS)
-	$(CXX) $(CFLAGS) -c -o KV_cuckoop.o KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG
+	$(CXX) $(CFLAGS) -c -o KV_cuckoop.o KV.cpp $(INCLUDES) $(LIBS) -DKV_DEBUG -DCCP
 	$(CXX) $(CFLAGS) -c -o lfcq.o circular_queue.cpp $(LIBS)
 	$(CXX) $(CFLAGS) -o kv_cuckoop test_KV.cpp src/cuckoo_probing.o KV_cuckoop.o Logger.o $(LIBS) $(INCLUDES)
+	$(CXX) $(CFLAGS) -o replay_cuckoop replay_KV.cpp src/cuckoo_probing.o KV_cuckoop.o Logger.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/cuckoo_probing.o KV_cuckoop.o Logger.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 Extendible: src/extendible_hash.cpp src/extendible_hash.h
@@ -76,8 +62,10 @@ Path: src/path_hashing.cpp src/path_hashing.hpp
 
 CCEH: src/cceh.cpp src/cceh.h
 	$(CXX) $(CFLAGS) -c src/cceh.cpp -o src/cceh.o $(LIBS) $(INCLUDES)
-	$(CXX) $(CFLAGS) -c -o KV_cceh.o KV.cpp $(INCLUDES) $(LIBS) -DDCCEH
+	$(CXX) $(CFLAGS) -c -o KV_cceh.o KV.cpp $(INCLUDES) $(LIBS) -DDCCEH  -DKV_DEBUG
+	$(CXX) $(CFLAGS) -c -o Logger.o Logger.cpp $(INCLUDES) $(LIBS)
 	$(CXX) $(CFLAGS) -o kv_cceh test_KV.cpp src/cceh.o KV_cceh.o $(LIBS) $(INCLUDES)
+	$(CXX) $(CFLAGS) -o replay_cceh replay_KV.cpp src/cceh.o KV_cceh.o Logger.o $(LIBS) $(INCLUDES)
 	$(CXX) $(CFLAGS) -o rdma_svr rdma_svr.cpp  src/cceh.o KV_cceh.o $(INCLUDES) $(LIBS) -DTIME_CHECK -DTWOSIDED
 
 rdma_dram:

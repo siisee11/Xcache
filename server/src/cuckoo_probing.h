@@ -7,14 +7,14 @@
 #include "util/pair.h"
 #include "IHash.h"
 
-class LinearProbingHash : public IHash {
+class CuckooProbingHash : public IHash {
 	const float kResizingFactor = 2;
 	const float kResizingThreshold = 0.95;
 	const uint64_t cuckooBit = (uint64_t)1 << 63;
 	public:
-	LinearProbingHash(void);
-	LinearProbingHash(size_t);
-	~LinearProbingHash(void);
+	CuckooProbingHash(void);
+	CuckooProbingHash(size_t);
+	~CuckooProbingHash(void);
 	Key_t Insert(Key_t&, Value_t);
 	bool InsertOnly(Key_t&, Value_t);
 	bool Delete(Key_t&);

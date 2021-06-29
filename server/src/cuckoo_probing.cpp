@@ -7,10 +7,10 @@
 #include "util/hash.h"
 #include "cuckoo_probing.h"
 
-LinearProbingHash::LinearProbingHash(void)
+CuckooProbingHash::CuckooProbingHash(void)
 	: capacity{0}, dict{nullptr} { }
 
-LinearProbingHash::LinearProbingHash(size_t _capacity)
+CuckooProbingHash::CuckooProbingHash(size_t _capacity)
 	: capacity{_capacity}, dict{new Pair[capacity]}
 {
 	locksize = 16;
@@ -18,7 +18,7 @@ LinearProbingHash::LinearProbingHash(size_t _capacity)
 	mutex = new std::shared_mutex[nlocks];
 }
 
-LinearProbingHash::~LinearProbingHash(void) {
+CuckooProbingHash::~CuckooProbingHash(void) {
 	if (dict != nullptr) delete[] dict;
 }
 
@@ -31,7 +31,7 @@ LinearProbingHash::~LinearProbingHash(void) {
  *
  * return deleted key
  */
-Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
+Key_t CuckooProbingHash::Insert(Key_t& key, Value_t value) {
 	using namespace std;
 	auto key_hash = h(&key, sizeof(key));
 
@@ -43,7 +43,7 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 		slot = firstIndex + j;
 
 		// if there is available slot, insert and return
-		if (dict[slot].key == INVALID) {
+		if (dict[slot].key == INVALID || dict[slot].key == key) {
 			dict[slot].value = value;
 			mfence();
 			dict[slot].key = key;
@@ -72,6 +72,7 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 		clflush((char*)&dict[firstIndex].key, sizeof(Pair) * locksize);
 		return deleteKey;
 	}
+
 	
 	// Cuckoo (Delete oldest one in first hash cluster, and move it to next hash cluster)
 	// Delete first element and shift.
@@ -95,7 +96,7 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 		slot = firstIndex + j;
 
 		// +-----------------------+    +-----------------------+
-		// | a | b | c | INV | ... | -> | new | a | b | c | ... |
+		// | a | b | c | INV | ... | -> | cuc | a | b | c | ... |
 		// +-----------------------+    +-----------------------+
 		// if there is available slot, shift left element to the right.
 
@@ -124,11 +125,11 @@ Key_t LinearProbingHash::Insert(Key_t& key, Value_t value) {
 	dict[firstIndex].key = cuckooPair.key;
 	dict[firstIndex].value = (Value_t)((uint64_t)cuckooPair.value | cuckooBit);
 	clflush((char*)&dict[firstIndex].key, sizeof(Pair));
-	
+
 	return deleteKey;
 }
 
-bool LinearProbingHash::InsertOnly(Key_t& key, Value_t value) {
+bool CuckooProbingHash::InsertOnly(Key_t& key, Value_t value) {
 	auto key_hash = h(&key, sizeof(key)) % capacity;
 	auto loc = getLocation(key_hash, capacity, dict);
 	if (loc == INVALID) {
@@ -143,11 +144,11 @@ bool LinearProbingHash::InsertOnly(Key_t& key, Value_t value) {
 	}
 }
 
-bool LinearProbingHash::Delete(Key_t& key) {
+bool CuckooProbingHash::Delete(Key_t& key) {
 	return false;
 }
 
-Value_t LinearProbingHash::Get(Key_t& key) {
+Value_t CuckooProbingHash::Get(Key_t& key) {
 	auto key_hash = h(&key, sizeof(key)) % capacity;
 	auto loc = key_hash % capacity; // target location of key
 	auto off = loc % locksize;
@@ -178,18 +179,18 @@ Value_t LinearProbingHash::Get(Key_t& key) {
 	return NONE;
 }
 
-void LinearProbingHash::Insert_extent(Key_t, uint64_t, uint64_t, Value_t) {
+void CuckooProbingHash::Insert_extent(Key_t, uint64_t, uint64_t, Value_t) {
 	return ;
 }
-Value_t LinearProbingHash::Get_extent(Key_t&, uint64_t) {
+Value_t CuckooProbingHash::Get_extent(Key_t&, uint64_t) {
 	return NONE;
 }
 
-Value_t LinearProbingHash::FindAnyway(Key_t&) {
+Value_t CuckooProbingHash::FindAnyway(Key_t&) {
 	return NONE;
 }
 
-double LinearProbingHash::Utilization(void) {
+double CuckooProbingHash::Utilization(void) {
 	size_t size = 0;
 	for (size_t i = 0; i < capacity; ++i) {
 		if (dict[i].key != INVALID) {
@@ -199,7 +200,7 @@ double LinearProbingHash::Utilization(void) {
 	return ((double)size)/((double)capacity)*100;
 }
 
-size_t LinearProbingHash::getLocation(size_t hash_value, size_t _capacity, Pair* _dict) {
+size_t CuckooProbingHash::getLocation(size_t hash_value, size_t _capacity, Pair* _dict) {
 	Key_t LOCK = INVALID;
 	size_t cur = hash_value;
 	size_t i = 0;
@@ -218,7 +219,7 @@ FAILED:
 	}
 }
 
-void LinearProbingHash::resize(size_t _capacity) {
+void CuckooProbingHash::resize(size_t _capacity) {
 	std::unique_lock<std::shared_mutex> *lock[nlocks];
 	for(int i=0; i<nlocks; i++){
 		lock[i] = new std::unique_lock<std::shared_mutex>(mutex[i]);

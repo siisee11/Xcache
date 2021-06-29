@@ -5,6 +5,11 @@ It communicate with clients kernel module (Xcache client).
 
 PM server use CCEH and hotring as page content storage.
 
+## Directory Structure
+- src/ : various hashtables (CuckCoo, CCEH, LinearProbing, etc.)
+
+- util/ : Type definition, filter, hash fucntions, etc.)
+
 ## Defines
 NORMALPUT : PUT requires only one RTT, but memcpy overhead engaged.
 
@@ -59,6 +64,9 @@ g++ bftest.cpp -lssl -lcrypto -I./ -g
 ### Q. Local protection error (err 4) occurs when many pages processed.
 A. Increase BUFFER_SIZE.
 
+### Q. Client rdmatest reports failed Search.
+A. It is not error. Increasing server buffer size would make it correct.
+
 ## Timeline
 
 2020/5/21: can communicate with pmdfc_client (HOLA, HOLASI).
@@ -81,4 +89,5 @@ A. Increase BUFFER_SIZE.
 ## reference
 
 hotring (https://www.usenix.org/conference/fast20/presentation/chen-jiqiang)
+
 CCEH (https://github.com/DICL/CCEH)

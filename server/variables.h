@@ -12,8 +12,7 @@ extern bool numa_on;
 extern bool verbose_flag;
 extern bool bf_flag;
 extern struct bitmask *netcpubuf;
-extern struct bitmask *kvcpubuf;
-extern struct bitmask *pollcpubuf;
+extern size_t BUFFER_SIZE;
 
 extern int putcnt;
 extern int getcnt;

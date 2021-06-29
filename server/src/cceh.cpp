@@ -76,11 +76,14 @@ CCEH::CCEH(void)
 
 }
 
+// initCap = Number of elements
 CCEH::CCEH(size_t initCap)
-	: dir{new Directory(static_cast<size_t>(log2(initCap)))}
+//	: dir{new Directory(static_cast<size_t>(log2(initCap)))}
+	: dir{new Directory(static_cast<size_t>(log2(initCap/Segment::kNumSlot)))}
 {
 	for (unsigned i = 0; i < dir->capacity; ++i) {
-		dir->_[i] = new Segment(static_cast<size_t>(log2(initCap)));
+//		dir->_[i] = new Segment(static_cast<size_t>(log2(initCap)));
+		dir->_[i] = new Segment(static_cast<size_t>(log2(initCap/Segment::kNumSlot)));
 	}
 }
 

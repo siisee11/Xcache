@@ -28,13 +28,13 @@ struct Pair {
 
   void* operator new(size_t size) {
     void *ret;
-    posix_memalign(&ret, 64, size);
+	if (posix_memalign(&ret, 64, size) ) ret=NULL;
     return ret;
   }
 
   void* operator new[](size_t size) {
     void *ret;
-    posix_memalign(&ret, 64, size);
+	if (posix_memalign(&ret, 64, size) ) ret=NULL;
     return ret;
   }
 };

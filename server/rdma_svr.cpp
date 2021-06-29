@@ -24,12 +24,8 @@
 
 /* option values */
 int tcp_port = -1;
-int ib_port = 1;
 char *path;
-char *data_path;
-char *pm_path;
-size_t initialTableSize = 32*1024;
-size_t numData = 0;
+size_t initialTableSize = 0;
 size_t numKVThreads = 0;
 size_t numNetworkThreads = 0;
 size_t numPollThreads = 0;
@@ -38,8 +34,7 @@ bool verbose_flag = false;
 bool bf_flag = false;
 bool human = false;
 struct bitmask *netcpubuf;
-struct bitmask *kvcpubuf;
-struct bitmask *pollcpubuf;
+size_t BUFFER_SIZE = ((1UL << 30) * 10); // 10GB
 
 /*  Global values */
 static struct ctrl **gctrl = NULL;
@@ -76,7 +71,6 @@ uint64_t rdpma_handle_read_poll_found_elapsed=0;
 uint64_t rdpma_handle_read_poll_found_memcpy_elapsed=0;
 
 #ifdef APP_DIRECT
-static char pm_path[32] = "/mnt/pmem0/pmdfc/pm_mr";
 #endif
 
 static void dprintf( const char* format, ... ) {
@@ -1126,6 +1120,20 @@ int alloc_control()
 	return 0;
 }
 
+void printUsage() {
+  std::cerr
+    << "usage: rdma_svr -<option> <args>\n\n"
+    << "The options supported by rdma_svr are:\n\n"
+    << "  verbose(v)                print debug messages\n"
+    << "  help(h)                   print this messages\n"
+    << "  human(H)                  print human readable output\n"
+    << "  bloomfilter(b)            turn bloomfilter on\n"
+    << "  tcp_port(t) <port>        listen clients on <port>\n"
+    << "  tablesize(s) <size>       set table bucket size to <size>\n"
+    << "  buffersize(S) <size>      set memory buffer size to <size>\n"
+    << "  netcpubind(W) <set>       set worker threads as <set>\n"
+    << std::endl;
+} 
 
 /* MAIN FUNCTION HERE */
 int main(int argc, char **argv)
@@ -1136,46 +1144,29 @@ int main(int argc, char **argv)
 	struct rdma_cm_id *listener = NULL;
 	uint16_t port = 0;
 
-	const char *short_options = "vbs:t:i:n:d:z:hK:P:W:";
+	const char *short_options = "vhbs:S:t:i:n:d:z:HK:P:W:";
 	static struct option long_options[] =
 	{
 		{"verbose", 0, NULL, 'v'},
+		{"help", 0, NULL, 'h'},
 		{"bloomfilter", 0, NULL, 'b'},
+		{"human", 0, NULL, 'H'},
 		{"tcp_port", 1, NULL, 't'},
-		{"ib_port", 1, NULL, 'i'},
 		{"tablesize", 1, NULL, 's'},
-		{"dataset", 1, NULL, 'd'},
-		{"pm_path", 1, NULL, 'z'},
-		{"nr_data", 1, NULL, 'n'},
+		{"buffersize", 1, NULL, 'S'},
 		{"netcpubind", 1, NULL, 'W'},
-		{"kvcpubind", 1, NULL, 'K'},
-		{"pollcpubind", 1, NULL, 'P'},
 		{0, 0, 0, 0} 
 	};
-
 
 	while(1){
 		int c = getopt_long(argc, argv, short_options, long_options, NULL);
 		if(c == -1) break;
 		switch(c){
-			case 'i':
-				ib_port = strtol(optarg, NULL, 0);
-				if(ib_port <= 0){
-					printf ("<%s> is invalid\n", optarg);
-					return 0;
-				}
-				break;
 			case 't':
 				tcp_port = strtol(optarg, NULL, 0);
 				if(tcp_port <= 0){
 					printf ("<%s> is invalid\n", optarg);
-					return 0;
-				}
-				break;
-			case 'n':
-				numData = strtol(optarg, NULL, 0);
-				if(numData <= 0){
-					printf ("<%s> is invalid\n", optarg);
+					printUsage();
 					return 0;
 				}
 				break;
@@ -1183,16 +1174,23 @@ int main(int argc, char **argv)
 				initialTableSize = strtol(optarg, NULL, 0);
 				if(initialTableSize <= 0){
 					printf ("<%s> is invalid\n", optarg);
+					printUsage();
 					return 0;
 				}
 				break;
-			case 'd':
-				data_path = strdup(optarg);
-				break;
-			case 'z':
-				pm_path= strdup(optarg);
+			case 'S':
+				BUFFER_SIZE = ((1UL << 20) * strtol(optarg, NULL, 0));
+				if(BUFFER_SIZE <= 0){
+					printf ("<%s> is invalid\n", optarg);
+					printUsage();
+					return 0;
+				}
 				break;
 			case 'h':
+				printUsage();
+				return 0;
+				break;
+			case 'H':
 				human = true;
 				break;
 			case 'v':
@@ -1203,29 +1201,34 @@ int main(int argc, char **argv)
 				break;
 			default:
 				printf ("%c, <%s> is invalid\n", (char)c,optarg);
+				printUsage();
 				return 0;
 		}
 	}
 
 	nr_cpus = std::thread::hardware_concurrency();
 
+	// if initialTableSize is not set, use default value
+	if (initialTableSize == 0) initialTableSize = BUFFER_SIZE / 4096;
+
 	// Server configuration display (when human flag is true)
 	if (human) {
 		printf("[ INFO ] Configurations \n");
+		printf("\t  +-- BUFFER_SIZE \t: %lu = %lu MB \n", BUFFER_SIZE, BUFFER_SIZE/1024/1024);
+		printf("\t  +-- HT SIZE     \t: %lu buckets\n", initialTableSize);
 		printf("\t  +-- Bloomfilter \t: %s \n", bf_flag ? "on" : "off");
-		if (bf_flag) printf("\t  +-- BF_SIZE     \t: %d \n", BF_SIZE);
+		if (bf_flag) printf("\t        +-- BF_SIZE     \t: %d \n", BF_SIZE);
+		if (bf_flag) printf("\t        +-- NUM_HASHES  \t: %d \n", NUM_HASHES);
 #ifdef CBLOOMFILTER 
-		printf("\t  +-- CBLOOMFILTER \t: on \n");
+		printf("\t        +-- CBLOOMFILTER \t: on \n");
+#else
+		if (bf_flag) printf("\t        +-- SBLOOMFILTER \t: on \n");
 #endif
-		printf("\t  +-- BUFFER_SIZE \t: %d MB \n", BUFFER_SIZE/1024/1024);
-		printf("\t  +-- BATCH_SIZE \t: %d \n", BATCH_SIZE);
-		printf("\t  +-- NUM_CLIENT \t: %d \n", NUM_CLIENT);
-		printf("\t  +-- NUM_QUEUES \t: %d \n", NUM_QUEUES);
+		printf("\t  +-- BATCH_SIZE  \t: %d \n", BATCH_SIZE);
+		printf("\t  +-- NUM_QUEUES  \t: %d \n", NUM_QUEUES);
+		printf("\t  +-- NUM_CLIENT  \t: %d \n", NUM_CLIENT);
 		printf("\n");
-
 	}
-
-
 
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(tcp_port);

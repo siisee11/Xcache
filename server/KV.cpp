@@ -8,6 +8,8 @@
 #include "src/extendible_hash.h"
 #elif defined LEVEL
 #include "src/Level_hashing.h"
+#elif defined CCP
+#include "src/cuckoo_probing.h"
 #else
 #include "src/linear_probing.h"
 #endif
@@ -36,7 +38,9 @@ extern struct bitmask *netcpubuf;
 extern struct bitmask *kvcpubuf;
 extern struct bitmask *pollcpubuf;
 
-int deletecnt = 0;
+atomic<int> deletecnt = 0;
+atomic<int> kv_putcnt = 0;
+atomic<int> kv_getcnt = 0;
 
 using namespace std;
 
@@ -68,6 +72,8 @@ KV::KV(size_t size, CountingBloomFilter<Key_t>* _bf)
 	hash = new ExtendibleHash(static_cast<size_t>(size));
 #elif defined LEVEL
 	hash = new LevelHashing(static_cast<size_t>(size));
+#elif defined CCP
+	hash = new CuckooProbingHash(static_cast<size_t>(size));
 #else
 	hash = new LinearProbingHash(static_cast<size_t>(size));
 #endif
@@ -79,8 +85,8 @@ KV::KV(size_t size, CountingBloomFilter<Key_t>* _bf)
 	getTime = 0;
 #endif
 
-	logger = new Logger(LOG_LEVEL_FATAL);
-	logger->info("Logger Init", 0);
+//	logger = new Logger(LOG_LEVEL_FATAL);
+//	logger->info("Logger Init", 0);
 
 	dprintf("[  OK  ] KV init\n");
 }
@@ -92,12 +98,16 @@ KV::~KV(void)
 
 // return deleted or not
 bool KV::Insert(Key_t& key, Value_t value) {
+	kv_putcnt++;
 #ifdef KV_DEBUG
 	struct timespec i_start;
 	struct timespec i_end;
 	clock_gettime(CLOCK_MONOTONIC, &i_start);
 #endif
 	auto deletedKey = hash->Insert(key, value);
+	if (deletedKey != (uint64_t)-1) {
+		deletecnt++;
+	}
 //	logger->info("Insert, Key=%lu", key);
 //	std::cout << "Insert, "<< key << endl;
 	if (bf) {
@@ -105,7 +115,6 @@ bool KV::Insert(Key_t& key, Value_t value) {
 		if (deletedKey != (uint64_t)-1) {
 //			logger->info("Delete, Key=%lu", key);
 //			std::cout << "Delete, "<< key << endl;
-			deletecnt++;
 			bf->Delete(deletedKey);
 //			printf("Key %lu deleted and query %s\n", deletedKey, bf->Query(deletedKey) ? "found":"not found");
 		}
@@ -134,6 +143,7 @@ void KV::InsertExtent(Key_t& key, Value_t value, uint64_t len) {
 }
 
 Value_t KV::Get(Key_t& key) {
+	kv_getcnt++;
 #ifdef KV_DEBUG
 	struct timespec g_start;
 	clock_gettime(CLOCK_MONOTONIC, &g_start);
@@ -194,10 +204,11 @@ void KV::PrintStats(void) {
 	auto cap = hash->Capacity();
 
 //	printf("Failed Search = %d\n", failedSearch.load());
+	printf("Total put = %d, get = %d\n", kv_putcnt.load(), kv_getcnt.load());
 	printf("Util =%.3f\t Capa =%lu\n", util, cap);
 	printf("InsertTime = \t%.3f (usec)\n", insertTime/1000.0);
 	printf("GetTime= \t%.3f (usec)\n", getTime/1000.0);
-	printf("Key deleted %d\n", deletecnt);
+	printf("Key deleted %d\n", deletecnt.load());
 
 //	printf("%.3f, %lu, %d, %d, %d, %d, %zu, %zu, %.3f, %.3f, %.3f, %.3f, %.3f\n", util, cap, freqs[0], freqs[1], miss_cnt[0].load(), miss_cnt[1].load(), segs[0], segs[1], metrics[0], metrics[1], 
 //			perNodeQueueTime/1000.0/numData/2, insertTime/1000.0/numData, getTime/1000.0/numData);

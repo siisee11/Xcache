@@ -42,7 +42,6 @@ POBJ_LAYOUT_END(PM_MR);
 #define TEST_Z(x)  do { if (!(x)) die("error: " #x " failed (returned zero/null)."); } while (0)
 
 //const size_t BUFFER_SIZE = ((1UL << 30) * 50); // N GB
-const size_t BUFFER_SIZE = ((1UL << 30) * 100); // 100GB
 
 enum{
 	MSG_WRITE_REQUEST,
