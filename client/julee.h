@@ -1,5 +1,5 @@
-#ifndef _PMDFC_H_
-#define _PMDFC_H_
+#ifndef _JULEE_H_
+#define _JULEE_H_
 
 #include <linux/hashtable.h>
 #include <linux/atomic.h>

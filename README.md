@@ -1,18 +1,11 @@
-# PMDFC
-Persistent Memory Distributed File Cache
-
-## history
-
-6/8/2020 	migrated from jeopardy
-27/10/2020 	Merge RDMA and TCP code
+# JULEE
+Dynamic Memory Management for Disaggregated Transcendent Memory
 
 ## description
 
-client: pmdfc client kernel module
-server: pmdfc server userspace program
+client: JULEE client kernel module
 
-This module implemented under linux kernel 5.3
-Please update kernel over 5.3
+server: JULEE server userspace program
 
 ## script.sh
 

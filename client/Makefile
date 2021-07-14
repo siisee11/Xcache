@@ -1,9 +1,9 @@
 CONFIG_MODULE_SIG=n
-obj-m := pmdfc_client.o pmdfc_rdma_core.o rdma_testing.o cuckooswap_client.o
+obj-m := julee_client.o julee_rdma_core.o rdma_testing.o juleeswap_client.o
 
-pmdfc_client-objs := pmdfc.o
-cuckooswap_client-objs := cuckooswap.o
-pmdfc_rdma_core-objs := rdpma.o bloom_filter.o
+julee_client-objs := julee.o
+juleeswap_client-objs := juleeswap.o
+julee_rdma_core-objs := rdpma.o bloom_filter.o
 rdma_testing-objs := rdpma_page_test.o
 
 KDIR	:= "/lib/modules/$(shell uname -r)/build"
@@ -27,24 +27,24 @@ clean:
 	make -C $(KDIR) M=$(PWD) clean
 
 rdma_conn:
-	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
+	insmod ./julee_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
 
-pmdfc_client:
-	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
-	insmod ./pmdfc_client.ko 
-#	insmod ./cuckooswap_client.ko 
+julee_client:
+	insmod ./julee_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
+	insmod ./julee_client.ko 
+#	insmod ./juleeswap_client.ko 
 
-pmdfc_client_onesided:
-	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
-	insmod ./pmdfc_client.ko onesided=1
+julee_client_onesided:
+	insmod ./julee_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
+	insmod ./julee_client.ko onesided=1
 
 tcptest:
 	insmod ./pmnet_testing.ko
 
 rdmatest:
-	insmod ./pmdfc_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
+	insmod ./julee_rdma_core.ko sport=$(SVR_PORT) sip=$(SVR_IP) cip=$(CIP) nq=$(NQ)
 	insmod ./rdma_testing.ko
 
-unload_pmdfc_rdma_core:
-	rmmod ./pmdfc_rdma_core.ko
-	#rmmod ./pmdfc_client.ko
+unload_julee_rdma_core:
+	rmmod ./julee_rdma_core.ko
+	#rmmod ./julee_client.ko

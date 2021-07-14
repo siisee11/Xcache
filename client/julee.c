@@ -14,23 +14,23 @@
 #include <asm/delay.h>
 
 #include "tmem.h"
-#include "pmdfc.h"
+#include "julee.h"
 #include "timeperf.h"
 
 #include "rdpma.h"
 
-#define PMDFC_PUT 1
-#define PMDFC_GET 1
-//#define PMDFC_TIME_CHECK 1
-//#define PMDFC_HASHTABLE 1
+#define julee_PUT 1
+#define julee_GET 1
+//#define julee_TIME_CHECK 1
+//#define julee_HASHTABLE 1
 
-//#define PMDFC_DEBUG 1
+//#define julee_DEBUG 1
 
 #ifdef CONFIG_DEBUG_FS
-struct dentry *pmdfc_dentry; 
+struct dentry *julee_dentry; 
 #endif
 
-#ifdef PMDFC_HASHTABLE
+#ifdef julee_HASHTABLE
 #define BITS 22 // 16GB=4KBx4x2^20
 #define NUM_PAGES (1UL << BITS)
 #define REMOTE_BUF_SIZE (PAGE_SIZE * NUM_PAGES)
@@ -50,16 +50,16 @@ static long put_cnt, get_cnt;
 static LIST_HEAD(page_list_head);
 
 /*
- * Counters available via /sys/kernel/debug/pmdfc (if debugfs is
+ * Counters available via /sys/kernel/debug/julee (if debugfs is
  * properly configured.  These are for information only so are not protected
  * against increment races.
  * HEY, is BF works?
  */
-static u64 pmdfc_total_gets;
-static u64 pmdfc_actual_gets;
-static u64 pmdfc_miss_gets;
-static u64 pmdfc_hit_gets;
-static u64 pmdfc_drop_puts;
+static u64 julee_total_gets;
+static u64 julee_actual_gets;
+static u64 julee_miss_gets;
+static u64 julee_hit_gets;
+static u64 julee_drop_puts;
 
 static long get_longkey(long key, long index)
 {
@@ -70,11 +70,11 @@ static long get_longkey(long key, long index)
 }
 
 /*  Clean cache operations implementation */
-static void pmdfc_cleancache_put_page(int pool_id,
+static void julee_cleancache_put_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
-#if defined(PMDFC_PUT)
+#if defined(julee_PUT)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	struct ht_data *tmp;
     struct ht_data *cur;
@@ -82,15 +82,15 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	int ret = -1;
 	uint64_t longkey;
 
-#ifdef PMDFC_TIME_CHECK
+#ifdef julee_TIME_CHECK
 	ktime_t start = ktime_get();
 #endif
 
 
 
-#if defined(PMDFC_DEBUG)
+#if defined(julee_DEBUG)
 	/* Send page to server */
-	printk(KERN_INFO "pmdfc: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
+	printk(KERN_INFO "julee: PUT PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
 		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 
 	pr_info("CLIENT-->SERVER: PMNET_MSG_PUTPAGE\n");
@@ -100,7 +100,7 @@ static void pmdfc_cleancache_put_page(int pool_id,
 	longkey = get_longkey((long)oid.oid[0], index);
 
 
-#ifdef PMDFC_HASHTABLE
+#ifdef julee_HASHTABLE
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
         if (cur->longkey == longkey) {
 			goto exists;
@@ -120,51 +120,51 @@ static void pmdfc_cleancache_put_page(int pool_id,
 		ret = rdpma_put(page, longkey, 1);
 
     if (put_cnt % SAMPLE_RATE == 0) {
-        pr_info("pmdfc: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
+        pr_info("julee: PUT PAGE: inode=%lx, index=%lx, longkey=%llx\n",
                 (long)oid.oid[0], index, longkey);
-#ifdef PMDFC_TIME_CHECK
+#ifdef julee_TIME_CHECK
 		fperf_print("put_page");
 #endif
     }
     put_cnt++;
 
-#if defined(PMDFC_DEBUG)
-	printk(KERN_INFO "pmdfc: PUT PAGE success\n");
+#if defined(julee_DEBUG)
+	printk(KERN_INFO "julee: PUT PAGE success\n");
 #endif
 
-#ifdef PMDFC_TIME_CHECK
+#ifdef julee_TIME_CHECK
 	fperf_save("put_page", ktime_to_ns(ktime_sub(ktime_get(), start)));
 #endif
 
-#endif /* PMDFC_PUT */
+#endif /* julee_PUT */
 exists:
 	return;
 }
 
-static int pmdfc_cleancache_get_page(int pool_id,
+static int julee_cleancache_get_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index, struct page *page)
 {
-#if defined(PMDFC_GET)
+#if defined(julee_GET)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
 	int ret;
     struct ht_data *cur;
 
     long longkey = 0, roffset = 0;
 
-#ifdef PMDFC_TIME_CHECK
+#ifdef julee_TIME_CHECK
 	ktime_t start = ktime_get();
 #endif
 
-#if defined(PMDFC_DEBUG)
+#if defined(julee_DEBUG)
 	/* Send get request and receive page */
-	printk(KERN_INFO "pmdfc: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
+	printk(KERN_INFO "julee: GET PAGE pool_id=%d key=%llx,%llx,%llx index=%lx page=%p\n", pool_id, 
 		(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index, page);
 #endif
     
     longkey = get_longkey((long)oid.oid[0], index);
 
-#ifdef PMDFC_HASHTABLE
+#ifdef julee_HASHTABLE
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
         if (cur->longkey == longkey) {
 			if (onesided)
@@ -176,12 +176,12 @@ static int pmdfc_cleancache_get_page(int pool_id,
 	goto not_exists;
 
 exists:
-#endif /* PMDFC_HASHTABLE */
+#endif /* julee_HASHTABLE */
 
 	if (get_cnt % SAMPLE_RATE == 0) {
-		pr_info("pmdfc: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
+		pr_info("julee: GET PAGE: inode=%lx, index=%lx, longkey=%ld\n",
 				(long)oid.oid[0], index, longkey);
-#ifdef PMDFC_TIME_CHECK
+#ifdef julee_TIME_CHECK
 		fperf_print("get_page");
 #endif
 	}
@@ -197,30 +197,30 @@ exists:
 	if (ret == -1)
 		goto not_exists;
 
-#ifdef PMDFC_TIME_CHECK
+#ifdef julee_TIME_CHECK
 	fperf_save("get_page", ktime_to_ns(ktime_sub(ktime_get(), start)));
 #endif
 
 	return 0;
 
 not_exists:
-#endif  /* defined(PMDFC_GET) */
+#endif  /* defined(julee_GET) */
 
 	return -1;
 }
 
-static void pmdfc_cleancache_flush_page(int pool_id,
+static void julee_cleancache_flush_page(int pool_id,
 		struct cleancache_filekey key,
 		pgoff_t index)
 {
-#if defined(PMDFC_FLUSH)
+#if defined(julee_FLUSH)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
     struct ht_data *cur;
 	int status;
 
 	bool isIn = false;
 
-#ifdef PMDFC_HASHTABLE
+#ifdef julee_HASHTABLE
     hash_for_each_possible(hash_head, cur, h_node, longkey) {
         if (cur->longkey == longkey) {
 			isIn = true;
@@ -238,8 +238,8 @@ static void pmdfc_cleancache_flush_page(int pool_id,
 	pmnet_send_message(PMNET_MSG_INVALIDATE, (long)oid.oid[0], index, 0, 0,
 		   0, &status);
 
-#if defined(PMDFC_DEBUG)
-	printk(KERN_INFO "pmdfc: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
+#if defined(julee_DEBUG)
+	printk(KERN_INFO "julee: FLUSH PAGE pool_id=%d key=%llu,%llu,%llu index=%ld \n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2], index);
 #endif
 
@@ -249,107 +249,107 @@ out:
 #endif
 }
 
-static void pmdfc_cleancache_flush_inode(int pool_id,
+static void julee_cleancache_flush_inode(int pool_id,
 		struct cleancache_filekey key)
 {
-#if defined(PMDFC_FLUSH)
-#if defined(PMDFC_DEBUG)
+#if defined(julee_FLUSH)
+#if defined(julee_DEBUG)
 	struct tmem_oid oid = *(struct tmem_oid *)&key;
  
-	printk(KERN_INFO "pmdfc: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
+	printk(KERN_INFO "julee: FLUSH INODE pool_id=%d key=%llu,%llu,%llu \n", pool_id, 
 			(long long)oid.oid[0], (long long)oid.oid[1], (long long)oid.oid[2]);
 #endif
 #endif
 }
 
-static void pmdfc_cleancache_flush_fs(int pool_id)
+static void julee_cleancache_flush_fs(int pool_id)
 {
-#if defined(PMDFC_FLUSH)
-#if defined(PMDFC_DEBUG)
-	printk(KERN_INFO "pmdfc: FLUSH FS\n");
+#if defined(julee_FLUSH)
+#if defined(julee_DEBUG)
+	printk(KERN_INFO "julee: FLUSH FS\n");
 #endif
 #endif
 }
 
-static int pmdfc_cleancache_init_fs(size_t pagesize)
+static int julee_cleancache_init_fs(size_t pagesize)
 {
 	static atomic_t pool_id = ATOMIC_INIT(0);
 
 	atomic_inc(&pool_id);
-	printk(KERN_INFO "[ INFO ] pmdfc: INIT FS (pool_id=%d)\n", atomic_read(&pool_id));
+	printk(KERN_INFO "[ INFO ] julee: INIT FS (pool_id=%d)\n", atomic_read(&pool_id));
 
 	return atomic_read(&pool_id);
 }
 
-static int pmdfc_cleancache_init_shared_fs(uuid_t *uuid, size_t pagesize)
+static int julee_cleancache_init_shared_fs(uuid_t *uuid, size_t pagesize)
 {
-	printk(KERN_INFO "pmdfc: FLUSH INIT SHARED\n");
+	printk(KERN_INFO "julee: FLUSH INIT SHARED\n");
 	return -1;
 }
 
-static const struct cleancache_ops pmdfc_cleancache_ops = {
-	.put_page = pmdfc_cleancache_put_page,
-	.get_page = pmdfc_cleancache_get_page,
-	.invalidate_page = pmdfc_cleancache_flush_page,
-	.invalidate_inode = pmdfc_cleancache_flush_inode,
-	.invalidate_fs = pmdfc_cleancache_flush_fs,
-	.init_shared_fs = pmdfc_cleancache_init_shared_fs,
-	.init_fs = pmdfc_cleancache_init_fs
+static const struct cleancache_ops julee_cleancache_ops = {
+	.put_page = julee_cleancache_put_page,
+	.get_page = julee_cleancache_get_page,
+	.invalidate_page = julee_cleancache_flush_page,
+	.invalidate_inode = julee_cleancache_flush_inode,
+	.invalidate_fs = julee_cleancache_flush_fs,
+	.init_shared_fs = julee_cleancache_init_shared_fs,
+	.init_fs = julee_cleancache_init_fs
 };
 
-static int pmdfc_cleancache_register_ops(void)
+static int julee_cleancache_register_ops(void)
 {
 	int ret;
 
-	ret = cleancache_register_ops(&pmdfc_cleancache_ops);
+	ret = cleancache_register_ops(&julee_cleancache_ops);
 
 	return ret;
 }
 
-void pmdfc_debugfs_exit(void)
+void julee_debugfs_exit(void)
 {
-	debugfs_remove_recursive(pmdfc_dentry);
+	debugfs_remove_recursive(julee_dentry);
 }
 
-void pmdfc_debugfs_init(void)
+void julee_debugfs_init(void)
 {
-	pmdfc_dentry = debugfs_create_dir("pmdfc", NULL);
-	debugfs_create_u64("total_gets", 0444, pmdfc_dentry, &pmdfc_total_gets);
-	debugfs_create_u64("actual_gets", 0444, pmdfc_dentry, &pmdfc_actual_gets);
-	debugfs_create_u64("miss_gets", 0444, pmdfc_dentry, &pmdfc_miss_gets);
-	debugfs_create_u64("hit_gets", 0444, pmdfc_dentry, &pmdfc_hit_gets);
-	debugfs_create_u64("drop_puts", 0444, pmdfc_dentry, &pmdfc_drop_puts);
+	julee_dentry = debugfs_create_dir("julee", NULL);
+	debugfs_create_u64("total_gets", 0444, julee_dentry, &julee_total_gets);
+	debugfs_create_u64("actual_gets", 0444, julee_dentry, &julee_actual_gets);
+	debugfs_create_u64("miss_gets", 0444, julee_dentry, &julee_miss_gets);
+	debugfs_create_u64("hit_gets", 0444, julee_dentry, &julee_hit_gets);
+	debugfs_create_u64("drop_puts", 0444, julee_dentry, &julee_drop_puts);
 }
 
-static int __init pmdfc_init(void)
+static int __init julee_init(void)
 {
 	int ret;
 	//unsigned int cpu;
 
 #ifdef CONFIG_DEBUG_FS
-	pmdfc_debugfs_init();
+	julee_debugfs_init();
 #endif
 
 	pr_info("[ INFO ] * CKCache BACKEND *\n");
 	pr_info("\t  +-- Hostname\t: apache1\n");
 	pr_info("\t  +-- Method  \t: %s\n", onesided? "onesided" : "twosided");
-#ifdef PMDFC_HASHTABLE
-	pr_info("\t  +-- PMDFC_HASHTABLE on\n");
+#ifdef julee_HASHTABLE
+	pr_info("\t  +-- julee_HASHTABLE on\n");
 #endif
-#ifdef PMDFC_GET
-	pr_info("\t  +-- PMDFC_GET on\n");
+#ifdef julee_GET
+	pr_info("\t  +-- julee_GET on\n");
 #endif
-#ifdef PMDFC_PUT  
-	pr_info("\t  +-- PMDFC_PUT on\n");
+#ifdef julee_PUT  
+	pr_info("\t  +-- julee_PUT on\n");
 #endif
 
-#ifdef PMDFC_HASHTABLE
+#ifdef julee_HASHTABLE
     hash_init(hash_head);
     pr_info("[  OK  ] hashtable initialized BITS: %d, NUM_PAGES: %lu\n", 
             BITS, NUM_PAGES);
 #endif
 
-	ret = pmdfc_cleancache_register_ops();
+	ret = julee_cleancache_register_ops();
 
 	if (!ret) {
 		printk(KERN_INFO "[  OK  ] cleancache_register_ops success\n");
@@ -372,17 +372,17 @@ static int __init pmdfc_init(void)
  * -> We cannot. No exit for cleancache.
  * Just make operations do nothing.
  */
-static void pmdfc_exit(void)
+static void julee_exit(void)
 {
-#if defined(PMDFC_DEBUG_FS)
-	pmdfc_debugfs_exit();
+#if defined(julee_DEBUG_FS)
+	julee_debugfs_exit();
 #endif
 }
 
 module_param(onesided, int, 0);
 
-module_init(pmdfc_init);
-module_exit(pmdfc_exit);
+module_init(julee_init);
+module_exit(julee_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("NAM JAEYOUN & Daegyu");

@@ -8,7 +8,7 @@
 #include <linux/random.h>
 #include <linux/kthread.h>
 
-#include "pmdfc.h"
+#include "julee.h"
 #include "rdpma.h"
 #include "timeperf.h"
 
@@ -53,7 +53,7 @@ struct task_struct** read_threads;
 atomic_long_t mr_free_start;
 extern long mr_free_end;
 
-/* code from pmdfc.c */
+/* code from julee.c */
 static long get_longkey(long key, long index)
 {
 	long longkey;
@@ -372,7 +372,7 @@ int main(void){
 		pr_info("[ PASS ] Throughput: %lld (MB/usec)\n", (TOTAL_CAPACITY/1024/1024)/(elapsed/1000));
 #endif
 
-	pmdfc_rdma_print_stat();
+	julee_rdma_print_stat();
 
 	ssleep(1);
 
@@ -462,7 +462,7 @@ int init_pages(void){
 
 	atomic_set(&failedSearch, 0);
 
-	printk(KERN_INFO "[ PASS ] pmdfc initialization");
+	printk(KERN_INFO "[ PASS ] julee initialization");
 	return 0;
 
 
@@ -491,7 +491,7 @@ ALLOC_ERR:
 
 void show_test_info(void){
 
-	pr_info("+------------ PMDFC SERVER TEST INFO ------------+\n");
+	pr_info("+------------ JULEE SERVER TEST INFO ------------+\n");
 	pr_info("| NUMBER OF THREAD: %20d  \t|\n", THREAD_NUM);
 	pr_info("| TOTAL CAPACITY  : %20ld \t|\n", TOTAL_CAPACITY);
 	pr_info("| ITERATIONS      : %20ld \t|\n", ITERATIONS);

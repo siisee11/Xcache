@@ -40,7 +40,7 @@ rdma_svr.h : BUFFER_SIZE   (Buffer Size)
 
 or ```cd build && cmake .. -G Ninja && ninja``` to use ninja as builder
 
-or simply use Makefile ```make```
+~or simply use Makefile~ ```make``` (deprecated, only for reference)
 
 ## How to run
 

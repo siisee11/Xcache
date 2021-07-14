@@ -3,12 +3,12 @@
 #include <linux/slab.h>
 #include <linux/cpumask.h>
 #include "rdpma.h"
-#include "pmdfc.h"
+#include "julee.h"
 #include "timeperf.h"
 #include "hash.h"
 #include "bloom_filter.h"
 
-struct pmdfc_rdma_ctrl *gctrl;
+struct julee_rdma_ctrl *gctrl;
 static int serverport;
 unsigned int numqueues;
 unsigned int numcpus;
@@ -57,17 +57,17 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 }
 
 #ifdef KTIME_CHECK
-void pmdfc_rdma_print_stat() {
+void julee_rdma_print_stat() {
 	fperf_print("meta_write");
 	fperf_print("poll_recv");
 	fperf_print("page_write");
 }
-EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
+EXPORT_SYMBOL_GPL(julee_rdma_print_stat);
 #else
-void pmdfc_rdma_print_stat() {
+void julee_rdma_print_stat() {
 	return;
 }
-EXPORT_SYMBOL_GPL(pmdfc_rdma_print_stat);
+EXPORT_SYMBOL_GPL(julee_rdma_print_stat);
 #endif
 
 int post_recv(struct rdma_queue *q);
@@ -80,7 +80,7 @@ static void rdpma_rdma_write_done(struct ib_cq *cq, struct ib_wc *wc)
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
 
 	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("[ FAIL ] pmdfc_rdma_write_done status is not success, it is=%d\n", wc->status);
+		pr_err("[ FAIL ] julee_rdma_write_done status is not success, it is=%d\n", wc->status);
 		//q->write_error = wc->status;
 	}
 	ib_dma_unmap_page(ibdev, req->dma, PAGE_SIZE * BATCH_SIZE, DMA_TO_DEVICE);
@@ -142,7 +142,7 @@ static inline int rdpma_post_rdma(struct rdma_queue *q, struct rdma_req *qe,
 }
 
 
-/* allocates a pmdfc rdma request, creates a dma mapping for it in
+/* allocates a julee rdma request, creates a dma mapping for it in
  * req->dma, and synchronizes the dma mapping in the direction of
  * the dma map.
  * Don't touch the page with cpu after creating the request for it!
@@ -1402,27 +1402,27 @@ inline int rdpma_get_queue_id(unsigned int cpuid,
 
 /* -------------------------------------- RDMA_CONN.C ----------------------------------------------*/
 
-static void pmdfc_rdma_addone(struct ib_device *dev)
+static void julee_rdma_addone(struct ib_device *dev)
 {
-	//  pr_info("[ INFO ] pmdfc_rdma_addone() = %s\n", dev->name);
+	//  pr_info("[ INFO ] julee_rdma_addone() = %s\n", dev->name);
 	return;
 }
 
-static void pmdfc_rdma_removeone(struct ib_device *ib_device, void *client_data)
+static void julee_rdma_removeone(struct ib_device *ib_device, void *client_data)
 {
-	//	pr_info("[ INFO ] pmdfc_rdma_removeone()\n");
+	//	pr_info("[ INFO ] julee_rdma_removeone()\n");
 	return;
 }
 
-static struct ib_client pmdfc_rdma_ib_client = {
-	.name   = "pmdfc_rdma",
-	.add    = pmdfc_rdma_addone,
-	.remove = pmdfc_rdma_removeone
+static struct ib_client julee_rdma_ib_client = {
+	.name   = "julee_rdma",
+	.add    = julee_rdma_addone,
+	.remove = julee_rdma_removeone
 };
 
-static struct pmdfc_rdma_dev *pmdfc_rdma_get_device(struct rdma_queue *q)
+static struct julee_rdma_dev *julee_rdma_get_device(struct rdma_queue *q)
 {
-	struct pmdfc_rdma_dev *rdev = NULL;
+	struct julee_rdma_dev *rdev = NULL;
 	int err;
 
 	if (!q->ctrl->rdev) {
@@ -1518,22 +1518,22 @@ out_err:
 	return NULL;
 }
 
-static void pmdfc_rdma_qp_event(struct ib_event *e, void *c)
+static void julee_rdma_qp_event(struct ib_event *e, void *c)
 {
-	//	pr_info("pmdfc_rdma_qp_event\n");
+	//	pr_info("julee_rdma_qp_event\n");
 	return ;
 }
 
-static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
+static int julee_rdma_create_qp(struct rdma_queue *queue)
 {
-	struct pmdfc_rdma_dev *rdev = queue->ctrl->rdev;
+	struct julee_rdma_dev *rdev = queue->ctrl->rdev;
 	struct ib_qp_init_attr init_attr;
 	int ret;
 
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
 	memset(&init_attr, 0, sizeof(init_attr));
-	init_attr.event_handler = pmdfc_rdma_qp_event;
+	init_attr.event_handler = julee_rdma_qp_event;
 	init_attr.cap.max_send_wr = QP_MAX_SEND_WR;
 	init_attr.cap.max_recv_wr = QP_MAX_RECV_WR;
 	init_attr.cap.max_recv_sge = 2; /* XXX */
@@ -1555,9 +1555,9 @@ static int pmdfc_rdma_create_qp(struct rdma_queue *queue)
 	return ret;
 }
 
-static void pmdfc_rdma_destroy_queue_ib(struct rdma_queue *q)
+static void julee_rdma_destroy_queue_ib(struct rdma_queue *q)
 {
-	struct pmdfc_rdma_dev *rdev;
+	struct julee_rdma_dev *rdev;
 	struct ib_device *ibdev;
 
 	//  pr_info("start: %s\n", __FUNCTION__);
@@ -1569,7 +1569,7 @@ static void pmdfc_rdma_destroy_queue_ib(struct rdma_queue *q)
 	ib_free_cq(q->recv_cq);
 }
 
-static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
+static int julee_rdma_create_queue_ib(struct rdma_queue *q)
 {
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
 	int ret;
@@ -1588,7 +1588,7 @@ static int pmdfc_rdma_create_queue_ib(struct rdma_queue *q)
 		goto out_err;
 	}
 
-	ret = pmdfc_rdma_create_qp(q);
+	ret = julee_rdma_create_qp(q);
 	if (ret)
 		goto out_destroy_ib_cq;
 
@@ -1601,20 +1601,20 @@ out_err:
 	return ret;
 }
 
-static int pmdfc_rdma_addr_resolved(struct rdma_queue *q)
+static int julee_rdma_addr_resolved(struct rdma_queue *q)
 {
-	struct pmdfc_rdma_dev *rdev = NULL;
+	struct julee_rdma_dev *rdev = NULL;
 	int ret;
 
 	//  pr_info("[ INFO ] start: %s\n", __FUNCTION__);
 
-	rdev = pmdfc_rdma_get_device(q);
+	rdev = julee_rdma_get_device(q);
 	if (!rdev) {
 		pr_err("[ FAIL ] no device found\n");
 		return -ENODEV;
 	}
 
-	ret = pmdfc_rdma_create_queue_ib(q);
+	ret = julee_rdma_create_queue_ib(q);
 	if (ret) {
 		return ret;
 	}
@@ -1622,13 +1622,13 @@ static int pmdfc_rdma_addr_resolved(struct rdma_queue *q)
 	ret = rdma_resolve_route(q->cm_id, CONNECTION_TIMEOUT_MS);
 	if (ret) {
 		pr_err("[ FAIL ] rdma_resolve_route failed\n");
-		pmdfc_rdma_destroy_queue_ib(q);
+		julee_rdma_destroy_queue_ib(q);
 	}
 
 	return 0;
 }
 
-static int pmdfc_rdma_route_resolved(struct rdma_queue *q,
+static int julee_rdma_route_resolved(struct rdma_queue *q,
 		struct rdma_conn_param *conn_params)
 {
 	struct rdma_conn_param param = {};
@@ -1648,19 +1648,19 @@ static int pmdfc_rdma_route_resolved(struct rdma_queue *q,
 	ret = rdma_connect(q->cm_id, &param);
 	if (ret) {
 		pr_err("[ FAILED ] rdma_connect failed (%d)\n", ret);
-		pmdfc_rdma_destroy_queue_ib(q);
+		julee_rdma_destroy_queue_ib(q);
 	}
 
 	return 0;
 }
 
-static int pmdfc_rdma_conn_established(struct rdma_queue *q)
+static int julee_rdma_conn_established(struct rdma_queue *q)
 {
 	//  pr_info("[ INFO ] connection established\n");
 	return 0;
 }
 
-static int pmdfc_rdma_cm_handler(struct rdma_cm_id *cm_id,
+static int julee_rdma_cm_handler(struct rdma_cm_id *cm_id,
 		struct rdma_cm_event *ev)
 {
 	struct rdma_queue *queue = cm_id->context;
@@ -1670,13 +1670,13 @@ static int pmdfc_rdma_cm_handler(struct rdma_cm_id *cm_id,
 
 	switch (ev->event) {
 		case RDMA_CM_EVENT_ADDR_RESOLVED:
-			cm_error = pmdfc_rdma_addr_resolved(queue);
+			cm_error = julee_rdma_addr_resolved(queue);
 			break;
 		case RDMA_CM_EVENT_ROUTE_RESOLVED:
-			cm_error = pmdfc_rdma_route_resolved(queue, &ev->param.conn);
+			cm_error = julee_rdma_route_resolved(queue, &ev->param.conn);
 			break;
 		case RDMA_CM_EVENT_ESTABLISHED:
-			queue->cm_error = pmdfc_rdma_conn_established(queue);
+			queue->cm_error = julee_rdma_conn_established(queue);
 			/* complete cm_done regardless of success/failure */
 			complete(&queue->cm_done);
 			return 0;
@@ -1711,14 +1711,14 @@ static int pmdfc_rdma_cm_handler(struct rdma_cm_id *cm_id,
 	return 0;
 }
 
-inline static int pmdfc_rdma_wait_for_cm(struct rdma_queue *queue)
+inline static int julee_rdma_wait_for_cm(struct rdma_queue *queue)
 {
 	wait_for_completion_interruptible_timeout(&queue->cm_done,
 			msecs_to_jiffies(CONNECTION_TIMEOUT_MS) + 1);
 	return queue->cm_error;
 }
 
-static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
+static int julee_rdma_init_queue(struct julee_rdma_ctrl *ctrl,
 		int idx)
 {
 	struct rdma_queue *queue;
@@ -1743,7 +1743,7 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 	spin_lock_init(&queue->global_lock);
 	queue->qp_type = get_queue_type(idx);
 
-	queue->cm_id = rdma_create_id(&init_net, pmdfc_rdma_cm_handler, queue,
+	queue->cm_id = rdma_create_id(&init_net, julee_rdma_cm_handler, queue,
 			RDMA_PS_TCP, IB_QPT_RC); // start rdma_cm XXX
 	if (IS_ERR(queue->cm_id)) {
 		pr_err("[ FAIL ] failed to create cm id: %ld\n", PTR_ERR(queue->cm_id));
@@ -1759,9 +1759,9 @@ static int pmdfc_rdma_init_queue(struct pmdfc_rdma_ctrl *ctrl,
 		goto out_destroy_cm_id;
 	}
 
-	ret = pmdfc_rdma_wait_for_cm(queue);
+	ret = julee_rdma_wait_for_cm(queue);
 	if (ret) {
-		pr_err("[ FAIL ] pmdfc_rdma_wait_for_cm failed\n");
+		pr_err("[ FAIL ] julee_rdma_wait_for_cm failed\n");
 		goto out_destroy_cm_id;
 	}
 
@@ -1772,12 +1772,12 @@ out_destroy_cm_id:
 	return ret;
 }
 
-static void pmdfc_rdma_stop_queue(struct rdma_queue *q)
+static void julee_rdma_stop_queue(struct rdma_queue *q)
 {
 	rdma_disconnect(q->cm_id);
 }
 
-static void pmdfc_rdma_free_queue(struct rdma_queue *q)
+static void julee_rdma_free_queue(struct rdma_queue *q)
 {
 	rdma_destroy_qp(q->cm_id);
 	ib_free_cq(q->send_cq);
@@ -1785,13 +1785,13 @@ static void pmdfc_rdma_free_queue(struct rdma_queue *q)
 	rdma_destroy_id(q->cm_id);
 }
 
-static int pmdfc_rdma_init_queues(struct pmdfc_rdma_ctrl *ctrl)
+static int julee_rdma_init_queues(struct julee_rdma_ctrl *ctrl)
 {
 	int ret, i;
 
 	/* numqueues specified in Makefile as NQ */
 	for (i = 0; i < numqueues; ++i) {
-		ret = pmdfc_rdma_init_queue(ctrl, i);
+		ret = julee_rdma_init_queue(ctrl, i);
 		if (ret) {
 			pr_err("[ FAIL ] failed to initialized queue: %d\n", i);
 			goto out_free_queues;
@@ -1802,23 +1802,23 @@ static int pmdfc_rdma_init_queues(struct pmdfc_rdma_ctrl *ctrl)
 
 out_free_queues:
 	for (i--; i >= 0; i--) {
-		pmdfc_rdma_stop_queue(&ctrl->queues[i]);
-		pmdfc_rdma_free_queue(&ctrl->queues[i]);
+		julee_rdma_stop_queue(&ctrl->queues[i]);
+		julee_rdma_free_queue(&ctrl->queues[i]);
 	}
 
 	return ret;
 }
 
-static void pmdfc_rdma_stopandfree_queues(struct pmdfc_rdma_ctrl *ctrl)
+static void julee_rdma_stopandfree_queues(struct julee_rdma_ctrl *ctrl)
 {
 	int i;
 	for (i = 0; i < numqueues; ++i) {
-		pmdfc_rdma_stop_queue(&ctrl->queues[i]);
-		pmdfc_rdma_free_queue(&ctrl->queues[i]);
+		julee_rdma_stop_queue(&ctrl->queues[i]);
+		julee_rdma_free_queue(&ctrl->queues[i]);
 	}
 }
 
-static int pmdfc_rdma_parse_ipaddr(struct sockaddr_in *saddr, char *ip)
+static int julee_rdma_parse_ipaddr(struct sockaddr_in *saddr, char *ip)
 {
 	u8 *addr = (u8 *)&saddr->sin_addr.s_addr;
 	size_t buflen = strlen(ip);
@@ -1833,13 +1833,13 @@ static int pmdfc_rdma_parse_ipaddr(struct sockaddr_in *saddr, char *ip)
 	return 0;
 }
 
-static int pmdfc_rdma_create_ctrl(struct pmdfc_rdma_ctrl **c)
+static int julee_rdma_create_ctrl(struct julee_rdma_ctrl **c)
 {
 	int ret;
-	struct pmdfc_rdma_ctrl *ctrl;
+	struct julee_rdma_ctrl *ctrl;
 	//  pr_info("[ INFO ] will try to connect to %s:%d\n", serverip, serverport); // from module parm
 
-	*c = kzalloc(sizeof(struct pmdfc_rdma_ctrl), GFP_KERNEL); // global ctrl
+	*c = kzalloc(sizeof(struct julee_rdma_ctrl), GFP_KERNEL); // global ctrl
 	if (!*c) {
 		pr_err("[ FAIL ] no mem for ctrl\n");
 		return -ENOMEM;
@@ -1847,28 +1847,28 @@ static int pmdfc_rdma_create_ctrl(struct pmdfc_rdma_ctrl **c)
 	ctrl = *c;
 
 	ctrl->queues = kzalloc(sizeof(struct rdma_queue) * numqueues, GFP_KERNEL);
-	ret = pmdfc_rdma_parse_ipaddr(&(ctrl->addr_in), serverip);
+	ret = julee_rdma_parse_ipaddr(&(ctrl->addr_in), serverip);
 	if (ret) {
-		pr_err("[ FAIL ] pmdfc_rdma_parse_ipaddr, serverip failed: %d\n", ret);
+		pr_err("[ FAIL ] julee_rdma_parse_ipaddr, serverip failed: %d\n", ret);
 		return -EINVAL;
 	}
 	ctrl->addr_in.sin_port = cpu_to_be16(serverport);
 
-	ret = pmdfc_rdma_parse_ipaddr(&(ctrl->srcaddr_in), clientip);
+	ret = julee_rdma_parse_ipaddr(&(ctrl->srcaddr_in), clientip);
 	if (ret) {
-		pr_err("[ FAIL ] pmdfc_rdma_parse_ipaddr, clinetip failed: %d\n", ret);
+		pr_err("[ FAIL ] julee_rdma_parse_ipaddr, clinetip failed: %d\n", ret);
 		return -EINVAL;
 	}
 	/* no need to set the port on the srcaddr */
 
 
-	return pmdfc_rdma_init_queues(ctrl);
+	return julee_rdma_init_queues(ctrl);
 }
 
 static void __exit rdma_connection_cleanup_module(void)
 {
-	pmdfc_rdma_stopandfree_queues(gctrl);
-	ib_unregister_client(&pmdfc_rdma_ib_client);
+	julee_rdma_stopandfree_queues(gctrl);
+	ib_unregister_client(&julee_rdma_ib_client);
 	kfree(gctrl);
 	gctrl = NULL;
 	if (req_cache) {
@@ -1876,38 +1876,38 @@ static void __exit rdma_connection_cleanup_module(void)
 	}
 }
 
-static void pmdfc_rdma_recv_remotemr_done(struct ib_cq *cq, struct ib_wc *wc)
+static void julee_rdma_recv_remotemr_done(struct ib_cq *cq, struct ib_wc *wc)
 {
 	struct rdma_req *qe =
 		container_of(wc->wr_cqe, struct rdma_req, cqe);
 	struct rdma_queue *q = cq->cq_context;
-	struct pmdfc_rdma_ctrl *ctrl = q->ctrl;
+	struct julee_rdma_ctrl *ctrl = q->ctrl;
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
 
 	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("[ FAIL ] pmdfc_rdma_recv_done status is not success\n");
+		pr_err("[ FAIL ] julee_rdma_recv_done status is not success\n");
 		return;
 	}
-	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct pmdfc_rdma_memregion),
+	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct julee_rdma_memregion),
 			DMA_FROM_DEVICE); 
 	mr_free_end = ctrl->servermr.mr_size;
 
 	complete_all(&qe->done);
 }
 
-static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
+static void julee_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
 {
 	struct rdma_req *qe =
 		container_of(wc->wr_cqe, struct rdma_req, cqe);
 	struct rdma_queue *q = cq->cq_context;
-	struct pmdfc_rdma_ctrl *ctrl = q->ctrl;
+	struct julee_rdma_ctrl *ctrl = q->ctrl;
 	struct ib_device *ibdev = q->ctrl->rdev->dev;
 
 	if (unlikely(wc->status != IB_WC_SUCCESS)) {
-		pr_err("[ FAIL ] pmdfc_rdma_recv_done status is not success\n");
+		pr_err("[ FAIL ] julee_rdma_recv_done status is not success\n");
 		return;
 	}
-	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct pmdfc_rdma_memregion),
+	ib_dma_unmap_single(ibdev, qe->dma, sizeof(struct julee_rdma_memregion),
 			DMA_FROM_DEVICE); 
 
 	pr_info("[ INFO ] localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
@@ -1915,7 +1915,7 @@ static void pmdfc_rdma_send_localmr_done(struct ib_cq *cq, struct ib_wc *wc)
 	complete_all(&qe->done);
 }
 
-static int pmdfc_rdma_post_recv(struct rdma_queue *q, struct rdma_req *qe,
+static int julee_rdma_post_recv(struct rdma_queue *q, struct rdma_req *qe,
 		size_t bufsize)
 {
 	const struct ib_recv_wr *bad_wr;
@@ -1940,7 +1940,7 @@ static int pmdfc_rdma_post_recv(struct rdma_queue *q, struct rdma_req *qe,
 }
 
 /* XXX */
-static int pmdfc_rdma_post_send(struct rdma_queue *q, struct rdma_req *qe,
+static int julee_rdma_post_send(struct rdma_queue *q, struct rdma_req *qe,
 		size_t bufsize)
 {
 	const struct ib_send_wr *bad_wr;
@@ -1966,7 +1966,7 @@ static int pmdfc_rdma_post_send(struct rdma_queue *q, struct rdma_req *qe,
 	return ret;
 }
 
-inline static void pmdfc_rdma_wait_completion(struct ib_cq *cq,
+inline static void julee_rdma_wait_completion(struct ib_cq *cq,
 		struct rdma_req *qe, int delay)
 {
 	ndelay(delay);
@@ -1976,7 +1976,7 @@ inline static void pmdfc_rdma_wait_completion(struct ib_cq *cq,
 	}
 }
 
-static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
+static int julee_rdma_recv_remotemr(struct julee_rdma_ctrl *ctrl)
 {
 	struct rdma_req *qe[2];
 	int ret;
@@ -1995,18 +1995,18 @@ static int pmdfc_rdma_recv_remotemr(struct pmdfc_rdma_ctrl *ctrl)
 	if (unlikely(ret))
 		goto out;
 
-	qe[0]->cqe.done = pmdfc_rdma_recv_remotemr_done;
-	qe[1]->cqe.done = pmdfc_rdma_recv_remotemr_done;
+	qe[0]->cqe.done = julee_rdma_recv_remotemr_done;
+	qe[1]->cqe.done = julee_rdma_recv_remotemr_done;
 
-	ret = pmdfc_rdma_post_recv(&(ctrl->queues[0]), qe[0], sizeof(struct pmdfc_rdma_memregion));
-	ret = pmdfc_rdma_post_recv(&(ctrl->queues[0]), qe[1], sizeof(struct pmdfc_rdma_memregion));
+	ret = julee_rdma_post_recv(&(ctrl->queues[0]), qe[0], sizeof(struct julee_rdma_memregion));
+	ret = julee_rdma_post_recv(&(ctrl->queues[0]), qe[1], sizeof(struct julee_rdma_memregion));
 
 	if (unlikely(ret))
 		goto out_free_qe;
 
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[0], 1000);
-	pmdfc_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[1], 1000);
+	julee_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[0], 1000);
+	julee_rdma_wait_completion(ctrl->queues[0].recv_cq, qe[1], 1000);
 
 	pr_info("[ INFO ] | Server -> Client | servermr baseaddr=%llx, key=%u, mr_size=%lld (KB)", ctrl->servermr.baseaddr,
 			ctrl->servermr.key, ctrl->servermr.mr_size/1024);
@@ -2021,7 +2021,7 @@ out:
 	return ret;
 }
 
-static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
+static int julee_rdma_send_localmr(struct julee_rdma_ctrl *ctrl)
 {
 	struct rdma_req *qe[2];
 	int ret;
@@ -2034,13 +2034,13 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 			DMA_TO_DEVICE);
 	if (unlikely(ret))
 		goto out;
-	qe[0]->cqe.done = pmdfc_rdma_send_localmr_done;
+	qe[0]->cqe.done = julee_rdma_send_localmr_done;
 
-	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[0], sizeof(struct pmdfc_rdma_memregion));
+	ret = julee_rdma_post_send(&(ctrl->queues[0]), qe[0], sizeof(struct julee_rdma_memregion));
 	if (unlikely(ret))
 		goto out_free_qe;
 	/* this delay doesn't really matter, only happens once */
-	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[0], 1000);
+	julee_rdma_wait_completion(ctrl->queues[0].send_cq, qe[0], 1000);
 
 	pr_info("[ INFO ] | Client -> Server | localmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->clientmr.baseaddr,
 			ctrl->clientmr.key, ctrl->clientmr.mr_size/1024);
@@ -2051,13 +2051,13 @@ static int pmdfc_rdma_send_localmr(struct pmdfc_rdma_ctrl *ctrl)
 	if (unlikely(ret))
 		goto out;
 
-	qe[1]->cqe.done = pmdfc_rdma_send_localmr_done;
+	qe[1]->cqe.done = julee_rdma_send_localmr_done;
 
-	ret = pmdfc_rdma_post_send(&(ctrl->queues[0]), qe[1], sizeof(struct pmdfc_rdma_memregion));
+	ret = julee_rdma_post_send(&(ctrl->queues[0]), qe[1], sizeof(struct julee_rdma_memregion));
 	if (unlikely(ret))
 		goto out_free_qe;
 
-	pmdfc_rdma_wait_completion(ctrl->queues[0].send_cq, qe[1], 1000);
+	julee_rdma_wait_completion(ctrl->queues[0].send_cq, qe[1], 1000);
 
 	pr_info("[ INFO ] | Client -> Server | cbfmr baseaddr=%llx, key=%u, mr_size=%lld (KB)\n", ctrl->cbfmr.baseaddr,
 			ctrl->cbfmr.key, ctrl->cbfmr.mr_size/1024);
@@ -2111,7 +2111,7 @@ static int __init rdma_connection_init_module(void)
 //	numqueues = numcpus * 2; // read, write
 	cpuperqueue = numcpus / (numqueues / 2);   // 40 cpu / (8 queues / 2 type of queue)
 
-	req_cache = kmem_cache_create("pmdfc_req_cache", sizeof(struct rdma_req), 0,
+	req_cache = kmem_cache_create("julee_req_cache", sizeof(struct rdma_req), 0,
 			SLAB_TEMPORARY | SLAB_HWCACHE_ALIGN, NULL);
 
 	if (!req_cache) {
@@ -2119,25 +2119,25 @@ static int __init rdma_connection_init_module(void)
 		return -ENOMEM;
 	}
 
-	ib_register_client(&pmdfc_rdma_ib_client);
-	ret = pmdfc_rdma_create_ctrl(&gctrl);
+	ib_register_client(&julee_rdma_ib_client);
+	ret = julee_rdma_create_ctrl(&gctrl);
 	if (ret) {
 		pr_err("[ FAIL ] could not create ctrl\n");
-		ib_unregister_client(&pmdfc_rdma_ib_client);
+		ib_unregister_client(&julee_rdma_ib_client);
 		return -ENODEV;
 	}
 
-	ret = pmdfc_rdma_recv_remotemr(gctrl);
+	ret = julee_rdma_recv_remotemr(gctrl);
 	if (ret) {
 		pr_err("[ FAIL ] could not setup remote memory region\n");
-		ib_unregister_client(&pmdfc_rdma_ib_client);
+		ib_unregister_client(&julee_rdma_ib_client);
 		return -ENODEV;
 	}
 
-	ret = pmdfc_rdma_send_localmr(gctrl);
+	ret = julee_rdma_send_localmr(gctrl);
 	if (ret) {
 		pr_err("[ FAIL ] could not send local memory region\n");
-		ib_unregister_client(&pmdfc_rdma_ib_client);
+		ib_unregister_client(&julee_rdma_ib_client);
 		return -ENODEV;
 	}
 
@@ -2157,5 +2157,5 @@ module_init(rdma_connection_init_module);
 module_exit(rdma_connection_cleanup_module);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("RDMA for PMDFC");
+MODULE_DESCRIPTION("RDMA for julee");
 MODULE_AUTHOR("Daegyu & Jaeyoun");

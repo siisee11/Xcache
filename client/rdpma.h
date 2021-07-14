@@ -48,7 +48,7 @@ struct rdpma_metadata {
 	uint64_t raddr;
 };
 
-struct pmdfc_rdma_dev {
+struct julee_rdma_dev {
 	struct ib_device *dev;
 	struct ib_pd *pd;
 
@@ -70,7 +70,7 @@ struct rdma_req {
 	struct page *page;
 };
 
-struct pmdfc_rdma_ctrl;
+struct julee_rdma_ctrl;
 
 struct combined_buffer {
 	char buffer[PAGE_SIZE * 4];
@@ -84,7 +84,7 @@ struct rdma_queue {
 	spinlock_t cq_lock;
 	enum qp_type qp_type;
 
-	struct pmdfc_rdma_ctrl *ctrl;
+	struct julee_rdma_ctrl *ctrl;
 
 	struct rdma_cm_id *cm_id;
 	int cm_error;
@@ -104,19 +104,19 @@ struct rdma_queue {
 	spinlock_t		global_lock;
 };
 
-struct pmdfc_rdma_memregion {
+struct julee_rdma_memregion {
 	u64 baseaddr;
 	u32 key;
 	u64 mr_size;
 };
 
-struct pmdfc_rdma_ctrl {
-	struct pmdfc_rdma_dev *rdev; // TODO: move this to queue
+struct julee_rdma_ctrl {
+	struct julee_rdma_dev *rdev; // TODO: move this to queue
 	struct rdma_queue *queues;
-	struct pmdfc_rdma_memregion servermr;
-	struct pmdfc_rdma_memregion bfmr;
-	struct pmdfc_rdma_memregion cbfmr;
-	struct pmdfc_rdma_memregion clientmr;
+	struct julee_rdma_memregion servermr;
+	struct julee_rdma_memregion bfmr;
+	struct julee_rdma_memregion cbfmr;
+	struct julee_rdma_memregion clientmr;
 	struct bloom_filter *bf;
 
 	union {
@@ -137,8 +137,8 @@ int rdpma_get(struct page *page, uint64_t, int);
 int rdpma_get_onesided(struct page *page, uint64_t, int);
 int rdpma_put(struct page *page, uint64_t, int);
 int rdpma_put_onesided(struct page *page, uint64_t, int);
-int pmdfc_rdma_poll_load(int cpu);
-void pmdfc_rdma_print_stat(void);
+int julee_rdma_poll_load(int cpu);
+void julee_rdma_print_stat(void);
 enum qp_type get_queue_type(unsigned int idx);
 
 #endif // _RDPMA_H_
