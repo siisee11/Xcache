@@ -42,18 +42,19 @@ or ```cd build && cmake .. -G Ninja && ninja``` to use ninja as builder
 
 ~or simply use Makefile~ ```make``` (deprecated, only for reference)
 
-## How to run
+## How to run JULEE server
+After compile you can find executable files in build/bin directory.
 
-```make LinearProbing``` to compile.
+```bin/xxx_server -t 7777``` to run server on port 7777
 
-```./rdma_svr -t 7777``` to run server on port 7777
+```bin/xxx_server -t 7777 -b``` to use bloomfilter 
 
-```./rdma_svr -t 7777 -b``` to use bloomfilter 
+```bin/xxx_server -t 7777 -h``` to show usage
 
 ## KV testing
-```make LinearProbing``` to compile.
+Build first.
 
-```./kv_linear -W 10-19 -d /dataset/input_sort.txt -n 10000000 -v -h -b```
+```bin/cuckoo_kv -W 10-19 -d /dataset/input_sort.txt -n 10000000 -v -h -b```
 
 ## BF testing
 ```
@@ -61,8 +62,15 @@ g++ bftest.cpp -lssl -lcrypto -I./ -g
 ./a.out
 ```
 
+## Generating Inputs
+To Create microbenchmark input (e.g. input_sort.txt), refer to ```gen_input.cpp`` code.
+
+```
+g++ -std=c++17 -o input gen_input.cpp -O3 -lrt
+```
+
 ## Todos
-- [ ] Support CMAKE
+- [x] Support CMAKE
 - [ ] increase hash_func size (util.h)
 - [x] Big Bloomfilter
 - [x] statistic
