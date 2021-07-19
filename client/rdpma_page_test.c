@@ -15,7 +15,7 @@
 #define THREAD_NUM 4
 #define PAGE_ORDER 0
 #define ORDER_SIZE (1 << PAGE_ORDER)
-#define NUMPAGES 1000000
+#define NUMPAGES 10000000
 
 #define PUTTEST 1
 #define GETTEST 1
@@ -33,7 +33,7 @@
 DEFINE_HASHTABLE(hash_head, BITS);
 #endif
 
-#define KTIME_CHECK 1
+//#define KTIME_CHECK 1
 
 struct page*** vpages;
 atomic_t failedSearch;

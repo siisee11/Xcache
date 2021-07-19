@@ -58,9 +58,11 @@ static void bit_unmask(uint32_t target, int* num, int* msg_num, int* type, int* 
 
 #ifdef KTIME_CHECK
 void julee_rdma_print_stat() {
-	fperf_print("meta_write");
-	fperf_print("poll_recv");
-	fperf_print("page_write");
+//	fperf_print("meta_write");
+//	fperf_print("poll_recv");
+//	fperf_print("page_write");
+	fperf_print("bf_add");
+	fperf_print("bf_check");
 }
 EXPORT_SYMBOL_GPL(julee_rdma_print_stat);
 #else
@@ -293,7 +295,13 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 #ifdef CBLOOMFILTER
 	// Client side bloom filter enabled.
 	struct bloom_filter *filter = gctrl->bf;
+#ifdef KTIME_CHECK
+	fperf_end("bf_add");
+#endif
 	bloom_filter_add(filter, (char *)&key, sizeof(key));	
+#ifdef KTIME_CHECK
+	fperf_end("bf_check");
+#endif
 #endif
 
 #if BATCH_SIZE >= 2
@@ -519,7 +527,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[1].rkey = q->ctrl->servermr.key;
 
 #ifdef KTIME_CHECK
-	fperf_start("meta_write");
+//	fperf_start("meta_write");
 #endif
 	spin_lock(&q->global_lock); /** LOCK HERE */
 	ret = ib_post_send(q->qp, &rdma_wr[1].wr, &bad_wr);
@@ -544,11 +552,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	}
 
 #ifdef KTIME_CHECK
-	fperf_end("meta_write");
+//	fperf_end("meta_write");
 #endif
 
 #ifdef KTIME_CHECK
-	fperf_start("poll_recv");
+//	fperf_start("poll_recv");
 #endif
 
 	/* Polling recv cq here */
@@ -566,7 +574,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	}
 
 #ifdef KTIME_CHECK
-	fperf_end("poll_recv");
+//	fperf_end("poll_recv");
 #endif
 
 	/* WRITE PAGE directly to given address */
@@ -583,7 +591,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	rdma_wr[0].rkey = q->ctrl->servermr.key;
 
 #ifdef KTIME_CHECK
-	fperf_start("page_write");
+//	fperf_start("page_write");
 #endif
 
 	ret = ib_post_send(q->qp, &rdma_wr[0].wr, &bad_wr);
@@ -609,7 +617,7 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	}
 
 #ifdef KTIME_CHECK
-	fperf_end("page_write");
+//	fperf_end("page_write");
 #endif
 
 out:
@@ -1041,7 +1049,13 @@ int rdpma_get(struct page *page, uint64_t key, int batch)
 
 #ifdef CBLOOMFILTER
 	// Client side bloom filter enabled.
+#ifdef KTIME_CHECK
+	fperf_start("bf_check");
+#endif
 	bloom_filter_check(gctrl->bf, (void *)&key, sizeof(key), &isIn);
+#ifdef KTIME_CHECK
+	fperf_end("bf_check");
+#endif
 	if (!isIn)
 		return -1;
 #endif
