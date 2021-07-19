@@ -57,6 +57,7 @@ int putcnt = 0;
 int getcnt = 0;
 int found_cnt = 0;
 int notfound_cnt = 0;
+int bfsendcnt= 0;
 
 /* performance timer */
 uint64_t rdpma_handle_write_elapsed=0;
@@ -69,6 +70,8 @@ uint64_t rdpma_handle_read_poll_elapsed=0;
 uint64_t rdpma_handle_read_poll_notfound_elapsed=0;
 uint64_t rdpma_handle_read_poll_found_elapsed=0;
 uint64_t rdpma_handle_read_poll_found_memcpy_elapsed=0;
+
+uint64_t rdpma_bf_send_elapsed=0;
 
 #ifdef APP_DIRECT
 #endif
@@ -125,6 +128,9 @@ static void rdpma_print_stats() {
 			rdpma_handle_read_poll_notfound_elapsed/notfound_cnt/1000.0,
 			rdpma_handle_recv_poll_elapsed/getcnt/1000.0);
 
+	printf("BF send: %.3f (us)\n",
+			rdpma_bf_send_elapsed/bfsendcnt/1000.0);
+
 	gctrl[0]->kv->PrintStats();
 
 	printf("--------------------FIN------------------------\n");
@@ -172,6 +178,9 @@ void send_bf(struct queue *q, int cid) {
 		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
 	}
 
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &start);
+#endif
 	do{
 		ne = ibv_poll_cq(q->qp->send_cq, 1, &wc);
 		if(ne < 0){
@@ -184,6 +193,11 @@ void send_bf(struct queue *q, int cid) {
 		fprintf(stderr, "[%s] sending rdma_write failed status %s (%d)\n", __func__, ibv_wc_status_str(wc.status), wc.status);
 		return;
 	}
+
+#if defined(TIME_CHECK)
+		clock_gettime(CLOCK_MONOTONIC, &end);
+		rdpma_bf_send_elapsed += end.tv_nsec - start.tv_nsec + 1000000000 * (end.tv_sec - start.tv_sec);
+#endif
 	q->m.unlock();
 
 	return;
@@ -199,6 +213,7 @@ void rdpma_bf_sender(int c) {
 			global_bf->ToOrdinaryBloomFilter();
 			send_bf(&gctrl[c]->queues[0], c);
 			printf("[ INFO ] Send bloomfilter to client\n");
+			bfsendcnt++;
 		}
 	}
 }

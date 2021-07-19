@@ -34,8 +34,8 @@ POBJ_LAYOUT_END(PM_MR);
 #define GET_FREE_PAGE_REGION(addr)  (addr + LOCAL_META_REGION_SIZE)
 
 #define NUM_HASHES 4
-#define BF_SIZE 200000000
-//#define BF_SIZE 1000000000
+//#define BF_SIZE 200000000
+#define BF_SIZE 1000000000
 //#define BF_SIZE 1969760731
 
 #define TEST_NZ(x) do { if ( (x)) die("error: " #x " failed (returned non-zero)." ); } while (0)
