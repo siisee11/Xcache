@@ -49,7 +49,8 @@ inline void fperf_end(const char * str) {
 	}
 	now = ktime_get();
 	if(fpp != NULL) {
-		fpp->elapsed += ktime_to_us(ktime_sub(now, fpp->start));
+//		fpp->elapsed += ktime_to_us(ktime_sub(now, fpp->start));
+		fpp->elapsed += ktime_sub(now, fpp->start);
 	}
 }
 
@@ -83,7 +84,7 @@ inline void fperf_print(const char *str) {
 		}
 	}
 	if(fpp != NULL) {
-		pr_info("[ %s ]: average %lld usec \n", str, fpp->elapsed/fpp->count);
+		pr_info("[ %s ]: average %lld nsec \n", str, fpp->elapsed/fpp->count);
 	}
 }
 #endif

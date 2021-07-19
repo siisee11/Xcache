@@ -34,7 +34,7 @@ int QP_MAX_SEND_WR = 4096;
 #define CQ_NUM_CQES	(QP_MAX_SEND_WR)
 #define POLL_BATCH_HIGH (QP_MAX_SEND_WR / 4)
 
-//#define KTIME_CHECK 1 	/* Detail time check */
+#define KTIME_CHECK 1 	/* Detail time check */
 //#define BIGMRPUT 1
 //#define BIGMRGET 1
 //#define NORMALPUT 1
@@ -296,11 +296,11 @@ int rdpma_put(struct page *page, uint64_t key, int batch)
 	// Client side bloom filter enabled.
 	struct bloom_filter *filter = gctrl->bf;
 #ifdef KTIME_CHECK
-	fperf_end("bf_add");
+	fperf_start("bf_add");
 #endif
 	bloom_filter_add(filter, (char *)&key, sizeof(key));	
 #ifdef KTIME_CHECK
-	fperf_end("bf_check");
+	fperf_end("bf_add");
 #endif
 #endif
 

@@ -30,8 +30,6 @@ rdma_svr.h : NUM_HASH
 
 rdma_svr.h : BF_SIZE   (Bloom Filter Size)
 
-rdma_svr.h : BUFFER_SIZE   (Buffer Size)
-
 ## Requirement
 ~~C++ Boost library and include neeeded.~~
 

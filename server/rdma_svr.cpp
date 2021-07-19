@@ -1130,7 +1130,7 @@ void printUsage() {
     << "  bloomfilter(b)            turn bloomfilter on\n"
     << "  tcp_port(t) <port>        listen clients on <port>\n"
     << "  tablesize(s) <size>       set table bucket size to <size>\n"
-    << "  buffersize(S) <size>      set memory buffer size to <size>\n"
+    << "  buffersize(S) <size>      set memory buffer size to <size>MByte\n"
     << "  netcpubind(W) <set>       set worker threads as <set>\n"
     << std::endl;
 } 
