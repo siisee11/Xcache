@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <thread>
+#include <set>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -21,6 +22,7 @@
 #include "variables.h"
 
 #define CBLOOMFILTER 1
+#define TIME_CHECK 1
 
 /* option values */
 int tcp_port = -1;
@@ -112,6 +114,7 @@ static void rdpma_print_stats() {
 	if (getcnt == 0) getcnt++;
 	if (found_cnt == 0) found_cnt++;
 	if (notfound_cnt == 0) notfound_cnt++;
+	if (bfsendcnt == 0) bfsendcnt++;
 
 	printf("\n--------------------SUMMARY--------------------\n");
 	printf("Average (divided by number of ops)\n");
@@ -146,33 +149,72 @@ void rdpma_indicator() {
 	}
 }
 
+/*
+ * send_bf - Send bloomfilter of server to client.
+ * It uses onesided RDMA and overwrite client side bloomfilter,
+ * so it don't involve client side CPUs.
+ */
 void send_bf(struct queue *q, int cid) {
 	struct ibv_sge sge;
+	struct ibv_sge *sges;
 	struct ibv_send_wr wr = {}; 
 	struct ibv_send_wr *bad_wr = NULL; 
 	struct ibv_wc wc;
 	int ne;
 	int ret;
+	int i = 0;
+#if defined(TIME_CHECK)
+	struct timespec start, end;
+#endif
 
-	uint64_t bitAddr = global_bf->GetBoolBitArray();
-	size_t size = global_bf->GetNumLongs() * sizeof(long);
+	// TODO:
+	// Only updated part of bloomfilter
+	// ibv_post_send returns errno 12 (ENOMEM)
+	// Maybe related to max_send_wr
+	if (false)
+	{
+		std::set updatedBlocks = global_bf->GetUpdatedBlocks();
+		size_t sge_size = updatedBlocks.size();
+		cout << "BF send for " << sge_size << " blocks\n";
 
-//	printf("First bits of bf = %lu\n", global_bf->GetLong(0)); :: PASS
-//	printf("Existence of Key 0 = %s \n", global_bf->QueryBitBloom(0)?"true":"false");
-//	printf("Existence of Key 300 = %s \n", global_bf->Query(0)?"true":"false");
+		if (sge_size == 0) return;
 
-	sge.addr = bitAddr;
-	sge.length = size;
-	sge.lkey = gctrl[cid]->bf_mr_bits_buffer->lkey;
+		sges = (struct ibv_sge *)malloc(sge_size * sizeof(struct ibv_sge));
+
+		for(auto it = updatedBlocks.begin(); it != updatedBlocks.end(); it++){
+			uint64_t bitAddr = global_bf->GetBoolBitArray() + SENDINGBLOCKSIZE * *it;
+
+			sges[i].addr = bitAddr;
+			sges[i].length = SENDINGBLOCKSIZE;
+			sges[i].lkey = gctrl[cid]->bf_mr_bits_buffer->lkey;
+
+			i++;
+		}
+		global_bf->ResetUpdatedBlocks();
+	}
+	else
+	{
+		uint64_t bitAddr = global_bf->GetBoolBitArray();
+		size_t size = global_bf->GetNumLongs() * sizeof(long);
+
+//		printf("First bits of bf = %lu\n", global_bf->GetLong(0)); :: PASS
+//		printf("Existence of Key 0 = %s \n", global_bf->QueryBitBloom(0)?"true":"false");
+//		printf("Existence of Key 300 = %s \n", global_bf->Query(0)?"true":"false");
+
+		sge.addr = bitAddr;
+		sge.length = size;
+		sge.lkey = gctrl[cid]->bf_mr_bits_buffer->lkey;
+	}
 
 	wr.opcode = IBV_WR_RDMA_WRITE; /* IBV_WR_SEND_WITH_IMM same */
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
+//	wr.sg_list = sges;
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.wr.rdma.remote_addr = gctrl[cid]->bfmr.baseaddr;
 	wr.wr.rdma.rkey        = gctrl[cid]->bfmr.key;
 
-	q->m.lock();
+	q->m.lock(); // TODO: should we need a lock?
 	ret = ibv_post_send(q->qp, &wr, &bad_wr);
 	if(ret){
 		fprintf(stderr, "[%s] ibv_post_send to node failed with %d\n", __func__, ret);
@@ -200,6 +242,11 @@ void send_bf(struct queue *q, int cid) {
 #endif
 	q->m.unlock();
 
+//	free(sges);
+
+	printf("[ INFO ] Send bloomfilter to client\n");
+	bfsendcnt++;
+
 	return;
 }
 
@@ -210,10 +257,8 @@ void rdpma_bf_sender(int c) {
 	while (!done) {
 		sleep(10);
 		if (global_bf) {
-			global_bf->ToOrdinaryBloomFilter();
+			global_bf->ToOrdinaryBloomFilter();  // Zip counting bloomfilter to normal bloomfilter.
 			send_bf(&gctrl[c]->queues[0], c);
-			printf("[ INFO ] Send bloomfilter to client\n");
-			bfsendcnt++;
 		}
 	}
 }

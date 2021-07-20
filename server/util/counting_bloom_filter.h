@@ -7,10 +7,13 @@
 #include <iostream>
 #include <functional>
 #include <bitset>
+#include <set>
 #include <string.h>
 #include <mutex>
 #include <openssl/sha.h>
 #include "util/hash.h"
+
+#define SENDINGBLOCKSIZE 		1024 * 8
 
 #define BITS_PER_BYTE           8
 #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
@@ -95,6 +98,14 @@ class CountingBloomFilter {
 			return m_boolbitarray[idx];
 		}
 
+		std::set<uint64_t> GetUpdatedBlocks() const {
+			return modified_blocks;
+		}
+
+		void ResetUpdatedBlocks() {
+			modified_blocks.clear();
+		}
+
 		void Insert(T const& o) {
 			for(uint8_t i = 0; i < GetNumHashes(); i++){
 				auto idx = ComputeHash(o, i);
@@ -109,7 +120,10 @@ class CountingBloomFilter {
 		bool Delete(T const& o) {
 			if(Query(o)){
 				for(uint8_t i = 0; i < GetNumHashes(); i++){
-					m_bitarray[ComputeHash(o, i)] -= 1;
+					auto idx = ComputeHash(o, i);
+					m_bitarray[idx] -= 1;
+					if (m_bitarray[idx] == 0)
+						modified_blocks.insert(idx/SENDINGBLOCKSIZE);
 				}
 				return true;
 			}
@@ -250,11 +264,10 @@ class CountingBloomFilter {
 		uint64_t m_numBits;
 		uint64_t m_numLongs;
 
-//		std::vector<uint8_t> m_bitarray;
 		uint8_t *m_bitarray;
-
 		uint64_t *m_boolbitarray;
 
+		std::set<uint64_t> modified_blocks;
 
 }; // class CountingBloomFilter
 

@@ -290,7 +290,7 @@ int main(void){
 		pr_info("[ PASS ] IOPS: %lld (Operation/sec)\n", NUMPAGES/(elapsed/1000/1000));
 	} 
 	
-	ssleep(1);
+	ssleep(10);
 #ifdef GETTEST
 	ret = 0;
 	for(i=0; i<THREAD_NUM; i++){
