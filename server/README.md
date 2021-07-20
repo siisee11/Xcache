@@ -36,23 +36,21 @@ rdma_svr.h : BF_SIZE   (Bloom Filter Size)
 ## How to Compile
 ```cd build && cmake .. && make```
 
-or ```cd build && cmake .. -G Ninja && ninja``` to use ninja as builder
+or ```cd build && cmake .. -G Ninja && ninja && cd ..``` to use ninja as builder
 
-~or simply use Makefile~ ```make``` (deprecated, only for reference)
+~or simply use Makefile~ ```make``` (deprecated, only for reference for deferent backend store)
 
 ## How to run JULEE server
 After compile you can find executable files in build/bin directory.
 
-```bin/xxx_server -t 7777``` to run server on port 7777
+```build/bin/julee_server -t 7777 -Hb -S 50000``` to run server.
 
-```bin/xxx_server -t 7777 -b``` to use bloomfilter 
-
-```bin/xxx_server -t 7777 -h``` to show usage
+```build/bin/julee_server -h``` to see usage.
 
 ## KV testing
 Build first.
 
-```bin/cuckoo_kv -W 10-19 -d /dataset/input_sort.txt -n 10000000 -v -h -b```
+```build/bin/julee_kv -W 10-19 -d /dataset/input_sort.txt -n 10000000 -v -h -b```
 
 ## BF testing
 ```
